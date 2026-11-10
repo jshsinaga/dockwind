@@ -16,6 +16,7 @@ The version has one source: `version` in `Cargo.toml`.
 - A release tag is `v` followed by the exact package version, for example
   `v0.2.0`.
 - The release workflow rejects a tag that does not match `Cargo.toml`.
+- Keep [CHANGELOG.md](../CHANGELOG.md) current with user-facing changes.
 
 Update the version and refresh `Cargo.lock`:
 

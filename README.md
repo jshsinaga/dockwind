@@ -24,6 +24,7 @@ See [docs/HANDOFF.md](docs/HANDOFF.md) for dated evidence.
 | [DESIGN.md](DESIGN.md) | UI and window patterns |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Every config field, validation, reload, and save behavior |
 | [docs/RELEASE.md](docs/RELEASE.md) | Versioning, installer, and GitHub Actions |
+| [CHANGELOG.md](CHANGELOG.md) | User-facing changes by release |
 | [docs/HANDOFF.md](docs/HANDOFF.md) | Current state, pending work, and evidence |
 | [docs/decisions.md](docs/decisions.md) | Accepted decisions and trade-offs |
 

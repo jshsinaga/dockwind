@@ -318,6 +318,7 @@ section 9. The short version:
 | [DESIGN.md](../DESIGN.md) | UI and window patterns |
 | [docs/CONFIGURATION.md](CONFIGURATION.md) | Config schema, validation, reload, save contract |
 | [docs/RELEASE.md](RELEASE.md) | Versioning, installer, and GitHub Actions |
+| [CHANGELOG.md](../CHANGELOG.md) | User-facing changes by release |
 | [docs/engineering.spec.md](engineering.spec.md) | Rust and verification conventions |
 | [docs/decisions.md](decisions.md) | D001 onward, including the organization decisions |
 | [docs/HANDOFF.md](HANDOFF.md) | This handoff: state, pending work, dated evidence |
