@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Context as _, Result, anyhow};
+use anyhow::{Result, anyhow};
 use futures::channel::mpsc::UnboundedReceiver;
 use gpui::{AppContext, Application, Entity};
 use tracing::{error, info, warn};
@@ -17,7 +17,7 @@ use crate::win::{
     events::EventWorker,
     hotkey::HotkeyWorker,
     single_instance::SingleInstanceGuard,
-    taskbar::{TaskbarGuard, TaskbarWatcher},
+    taskbar::TaskbarRuntime,
     tray::{TrayEvent, TrayIcon},
 };
 
@@ -42,8 +42,7 @@ struct Runtime {
     events: Option<EventWorker>,
     hotkey: Option<HotkeyWorker>,
     tray: Option<TrayIcon>,
-    taskbar_watcher: Option<TaskbarWatcher>,
-    taskbar: Option<TaskbarGuard>,
+    taskbar: Rc<RefCell<TaskbarRuntime>>,
     // Declared last so it is dropped last: fields drop in declaration order, and
     // cleanup diagnostics must reach the log writer.
     _logging: WorkerGuard,
@@ -83,18 +82,9 @@ impl Runtime {
 
         let (events, window_events) = win::events::spawn()?;
 
-        let mut taskbar_watcher = None;
-        let mut taskbar = None;
+        let taskbar = Rc::new(RefCell::new(TaskbarRuntime::default()));
         if hide_taskbar {
-            win::taskbar::install_panic_hook();
-            // The console handler is a required recovery path; hiding the taskbar
-            // without it would leave Ctrl+C unable to restore the desktop.
-            win::taskbar::install_console_handler()
-                .context("failed to install the console shutdown handler")?;
-            // The watcher must exist before the taskbar is hidden so TaskbarCreated
-            // and session-end are handled for the whole hidden period.
-            taskbar_watcher = Some(win::taskbar::install_watch()?);
-            taskbar = Some(TaskbarGuard::new()?);
+            taskbar.borrow_mut().enable()?;
         }
 
         let (config_watcher, config_updates) = config::watch(&config_path, loaded.config.clone())?;
@@ -122,7 +112,6 @@ impl Runtime {
             events: Some(events),
             hotkey,
             tray,
-            taskbar_watcher,
             taskbar,
         })
     }
@@ -143,6 +132,7 @@ impl Runtime {
         let config_path = self.config_path.clone();
         let hotkey_events = self.hotkey_events.take();
         let tray_events = self.tray_events.take();
+        let taskbar = Rc::clone(&self.taskbar);
         let startup_error: Arc<Mutex<Option<anyhow::Error>>> = Arc::new(Mutex::new(None));
         let error_slot = Arc::clone(&startup_error);
         // Holds a strong controller reference for the whole event loop, independent of
@@ -161,6 +151,7 @@ impl Runtime {
                     window_events,
                     hotkey_events,
                     tray_events,
+                    taskbar,
                 )
             });
             *retained_controller.borrow_mut() = Some(controller.clone());
@@ -188,17 +179,7 @@ impl Runtime {
     fn shutdown(&mut self) -> Vec<anyhow::Error> {
         let mut errors = Vec::new();
 
-        if let Some(mut taskbar) = self.taskbar.take()
-            && let Err(error) = taskbar.restore()
-        {
-            errors.push(error);
-        }
-
-        if let Some(watcher) = self.taskbar_watcher.as_mut()
-            && let Err(error) = watcher.shutdown()
-        {
-            errors.push(error.context("taskbar watcher shutdown failed"));
-        }
+        errors.extend(self.taskbar.borrow_mut().shutdown());
 
         if let Some(mut watcher) = self.config_watcher.take()
             && let Err(error) = watcher.shutdown()

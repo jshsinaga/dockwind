@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::time::Duration;
 
 pub mod runtime;
@@ -11,6 +13,7 @@ use tracing::{debug, error, info, warn};
 use crate::config::Config;
 use crate::dock::{self, DockItem};
 use crate::win;
+use crate::win::taskbar::TaskbarRuntime;
 use crate::win::tray::TrayEvent;
 
 /// Owns the active configuration, the app list, and the application-level commands.
@@ -19,9 +22,14 @@ pub struct AppController {
     config: Config,
     items: Vec<DockItem>,
     config_path: PathBuf,
+    taskbar: Rc<RefCell<TaskbarRuntime>>,
 }
 
 impl AppController {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the constructor wires independent receivers and handles at the process boundary"
+    )]
     pub fn new(
         cx: &mut Context<Self>,
         config: Config,
@@ -30,11 +38,13 @@ impl AppController {
         mut window_events: UnboundedReceiver<()>,
         hotkey_events: Option<UnboundedReceiver<()>>,
         tray_events: Option<UnboundedReceiver<TrayEvent>>,
+        taskbar: Rc<RefCell<TaskbarRuntime>>,
     ) -> Self {
         let mut this = Self {
             config,
             items: Vec::new(),
             config_path,
+            taskbar,
         };
         this.refresh();
 
@@ -146,7 +156,23 @@ impl AppController {
             corner_radius = config.appearance.corner_radius,
             "config applied"
         );
+        let taskbar_changed =
+            self.config.behavior.hide_native_taskbar != config.behavior.hide_native_taskbar;
         self.config = config;
+
+        if taskbar_changed {
+            let enabled = self.config.behavior.hide_native_taskbar;
+            let result = if enabled {
+                self.taskbar.borrow_mut().enable()
+            } else {
+                self.taskbar.borrow_mut().disable()
+            };
+            match result {
+                Ok(()) => info!(enabled, "taskbar mode updated"),
+                Err(error) => error!(%error, enabled, "failed to update the taskbar mode"),
+            }
+        }
+
         self.refresh();
         cx.notify();
     }
@@ -250,6 +276,7 @@ mod tests {
             config: config.clone(),
             items,
             config_path: PathBuf::from("config.toml"),
+            taskbar: Rc::new(RefCell::new(TaskbarRuntime::default())),
         };
         assert_eq!(controller.config(), &config);
         assert!(controller.items().is_empty());

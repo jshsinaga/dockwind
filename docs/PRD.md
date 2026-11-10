@@ -60,7 +60,7 @@ A behavior is not Verified only because a code path exists. Evidence lives in
 | R05 | Create a default config on first run | Verified | `%APPDATA%\Dockwind\config.toml` is created with every field. A partial file parses with defaults |
 | R06 | Validate configuration values | Verified | Invalid color, icon size, radius, clock format, and padding overflow are replaced with safe values and logged. The app does not crash |
 | R07 | Reload live configuration | Implemented | Saving the file applies appearance, clock, pinned apps, auto-hide settings, fullscreen hiding, and blur after the debounce. A corrupt reload keeps the last valid config. Baseline live behavior was verified at `482bd7a`. The integrated watcher has automated reload and shutdown tests, but no new live UI check |
-| R08 | Keep startup-only settings explicit | Verified | `hide_native_taskbar`, `quit_hotkey`, and `margin_bottom` apply only at startup. The docs state it. A future settings UI must show a restart notice |
+| R08 | Keep startup-only settings explicit | Verified | `quit_hotkey` applies only at startup. `hide_native_taskbar` and `offset` are live. The docs state it. The settings window shows a restart notice for the hotkey |
 | R09 | Keep existing TOML keys compatible | Verified | Existing keys, sections, and defaults remain valid. Unknown keys are ignored on load |
 
 ### 4.3 Apps and Clock
@@ -116,6 +116,7 @@ A behavior is not Verified only because a code path exists. Evidence lives in
 | R36 | Manage displayed apps | Implemented | The settings window adds, removes, and reorders pinned apps. `show_running_apps = false` hides running-only apps |
 | R37 | Package a release | Implemented | An Inno Setup script builds a per-user installer with Start Menu and optional desktop shortcuts. Uninstall restores the taskbar and disables autostart. Built and smoke-tested on 2026-11-11. A clean profile and upgrade are not checked |
 | R38 | Provide hosted CI and release automation | Implemented | GitHub Actions runs the local gate on Windows for pushes and pull requests. The gate and installer artifact job passed on 2026-11-11. A `vX.Y.Z` tag checks the version, builds the installer, and publishes a GitHub release; the tag path has not run yet |
+| R39 | Toggle the native taskbar without restart | Verified | A live config change from false to true hides `Shell_TrayWnd` and from true to false restores it. The panic hook, console handler, and watcher start before hiding. Manual check on 2026-11-11 with a watchdog |
 
 ## 5. Accepted Unfinished Dock Features
 
@@ -147,7 +148,7 @@ verified.
 | P01 | Provide a settings window | Implemented | A separate, focusable native Win32 window edits the shared config. The dock remains a non-activating tool window. This deliberately deviates from the original GPUI wording, see D031 |
 | P02 | Use draft, Apply, and Close | Implemented | Controls hold the draft. Apply validates and saves. Close discards unsaved edits |
 | P03 | Show validation and errors | Implemented | Invalid fields show a message box naming the failure. A failed save leaves the previous file intact and reports the failure. Inline field errors are not implemented |
-| P04 | Show restart notices | Implemented | Changing `hide_native_taskbar` or `quit_hotkey` shows a restart-required notice. `offset` is live, so it no longer needs a restart |
+| P04 | Show restart notices | Implemented | Changing `quit_hotkey` shows a restart-required notice. `hide_native_taskbar` and `offset` are live |
 | P05 | Share one config owner | Implemented with limitation | One settings window per process. The dock never writes the file. A `--settings` process can coexist with the dock and the watcher reloads its save. Multiple settings processes are not coordinated |
 | P06 | Save safely | Implemented with limitation | Saves use atomic replacement in the same directory. External edits are detected and prompt before overwrite. Comments and unknown keys are not preserved |
 | P07 | Avoid new CLI behavior | Superseded | `--settings` was added so the window can open without the dock. Existing commands keep their behavior |

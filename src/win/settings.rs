@@ -406,14 +406,7 @@ fn create_controls(parent: HWND, config: &Config) -> Result<Controls> {
         260,
     )?;
     let show_running = checkbox(parent, ID_SHOW_RUNNING, "Show running apps", 24, 366, 260)?;
-    let hide_taskbar = checkbox(
-        parent,
-        ID_HIDE_TASKBAR,
-        "Hide native taskbar (restart required)",
-        24,
-        392,
-        360,
-    )?;
+    let hide_taskbar = checkbox(parent, ID_HIDE_TASKBAR, "Hide native taskbar", 24, 392, 360)?;
     let reserve_space = checkbox(
         parent,
         ID_RESERVE_SPACE,
@@ -549,9 +542,7 @@ fn refresh_pinned(
 
 fn apply(hwnd: HWND, state: &mut SettingsState) -> Result<()> {
     let config = read_config(state)?;
-    let startup_only_changed = config.behavior.hide_native_taskbar
-        != state.original.behavior.hide_native_taskbar
-        || config.behavior.quit_hotkey != state.original.behavior.quit_hotkey;
+    let startup_only_changed = config.behavior.quit_hotkey != state.original.behavior.quit_hotkey;
 
     match std::fs::read_to_string(&state.path) {
         Ok(contents) if contents != state.original_contents => {
@@ -609,8 +600,7 @@ fn apply(hwnd: HWND, state: &mut SettingsState) -> Result<()> {
 
     let mut notes = Vec::new();
     if startup_only_changed {
-        notes
-            .push("Restart Dockwind to apply: hide native taskbar and/or quit hotkey.".to_string());
+        notes.push("Restart Dockwind to apply the new quit hotkey.".to_string());
     }
     if !loaded.warnings.is_empty() {
         notes.push(format!(

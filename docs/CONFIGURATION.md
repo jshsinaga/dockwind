@@ -115,7 +115,7 @@ transparent surface. This is an explicit, logged degradation.
 | `hide_delay_ms` | integer | 400 | None | Live |
 | `animation_ms` | integer | 180 | None. Zero means an instant step | Live |
 | `reserve_space` | bool | false | None | No effect |
-| `hide_native_taskbar` | bool | false | None | Startup only |
+| `hide_native_taskbar` | bool | false | None | Live |
 | `hide_in_fullscreen` | bool | true | None | Live |
 | `show_running_apps` | bool | true | None | Live |
 | `quit_hotkey` | string | `Ctrl+Alt+Shift+Q` | Parsed at startup and by the settings window | Startup only |
@@ -130,9 +130,11 @@ still show whether they are running.
 registration, space reservation, or `ABM_REMOVE` exists. The field has no runtime
 effect and the settings window disables it.
 
-`hide_native_taskbar` is read at startup. Changing it in the settings window saves
-the value and shows a restart notice. When it is true, an invalid or unavailable
-`quit_hotkey` fails startup because the user would lose the safe quit path.
+`hide_native_taskbar` is applied live. Enabling it installs the panic hook,
+console handler, and taskbar watcher before hiding. Disabling it restores the
+taskbar before stopping the watcher. When it is true at startup, an invalid or
+unavailable `quit_hotkey` fails startup because the user would lose the safe quit
+path.
 
 `quit_hotkey` is read at startup. Changing it saves the value, validates it, and
 shows a restart notice.
@@ -224,11 +226,11 @@ The following changes apply live:
 - `behavior.animation_ms`
 - `behavior.hide_in_fullscreen`
 - `behavior.show_running_apps`
+- `behavior.hide_native_taskbar`
 - `[[pinned]]`
 
 The following changes need a restart or have no effect:
 
-- `behavior.hide_native_taskbar` (restart)
 - `behavior.quit_hotkey` (restart)
 - `behavior.reserve_space` (no effect)
 - `clock.locale` (no effect)
@@ -287,11 +289,12 @@ Editing the file by hand preserves them until the settings window saves.
 
 The settings window shows a restart notice after saving a change to:
 
-- `behavior.hide_native_taskbar`
 - `behavior.quit_hotkey`
 
-`behavior.reserve_space` is disabled and shown as not implemented. `clock.locale`
-has no control. `appearance.offset` is live, so it does not need a restart.
+`behavior.hide_native_taskbar` is live, so it does not need a restart.
+`behavior.reserve_space` is disabled and shown as not implemented.
+`clock.locale` has no control. `appearance.offset` is live, so it does not need a
+restart.
 
 ## 7. Compatibility Rules
 

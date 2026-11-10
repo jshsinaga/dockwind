@@ -761,3 +761,27 @@ resolution, and DPI changes with one code path and no new window.
 Trade-off: A change can take up to one second to apply. The check calls
 `GetMonitorInfoW` and `GetDpiForMonitor` every second, even when nothing changed.
 A real multi-DPI or resolution change is not manually exercised yet.
+
+## D038: Taskbar hiding is live through a shared TaskbarRuntime
+
+Date: 2026-11-11
+
+`hide_native_taskbar` applies live. The runtime and `AppController` share a
+`Rc<RefCell<TaskbarRuntime>>` on the GPUI main thread. Enable installs the panic
+hook, console handler, and taskbar watcher before hiding. Disable restores the
+taskbar before stopping the watcher. `TaskbarGuard` records a successful explicit
+restore so its drop does not repeat the native effect. The settings window still
+only writes the config file; the existing watcher applies the change.
+
+Reason: A settings toggle that needs a restart is not a real toggle. The shared
+runtime keeps the review-cleared hide and recovery order in one place and covers
+the startup and live paths with the same code.
+
+Trade-off: Taskbar operations now run on the GPUI main thread when a config reload
+changes the field. The console handler and panic hook are installed on the first
+enable instead of only at process startup. The startup hide path and normal-quit
+restore still need manual checks.
+
+Evidence: on 2026-11-11, with a 40-second `--restore-taskbar` watchdog, a config
+reload changed the field from false to true and `IsWindowVisible(Shell_TrayWnd)`
+went from true to false. Changing it back restored visibility.

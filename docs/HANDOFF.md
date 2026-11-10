@@ -28,7 +28,8 @@ work, and dated evidence. It does not repeat the architecture. Read
 | Tray | Icon, menu, settings, reload, autostart, restore, quit, TaskbarCreated recovery |
 | Installer | Inno Setup 6. Built and smoke-tested on 2026-11-11. Clean profile and upgrade are still pending |
 | CI | GitHub Actions gate and installer artifact passed on 2026-11-11. Run 42878351738 on `189ef25` completed the `gate` and `installer` jobs. The tag release workflow has not run |
-| Final status | Full gate passed on 2026-11-11. Settings, tray, live geometry, and the basic installer path manually checked. Taskbar recovery and clean-profile installer checks unverified |
+| Taskbar toggle | Live. Manual hide/restore check passed on 2026-11-11 |
+| Final status | Full gate passed on 2026-11-11. Settings, tray, live geometry, live taskbar toggle, and the basic installer path manually checked. Taskbar recovery and clean-profile installer checks unverified |
 
 The original M0 feasibility spike is closed. Do not repeat it unless the UI stack
 changes. Evidence is in `docs/spike-m0.md`.
@@ -113,7 +114,7 @@ Set `RUST_LOG=dockwind=debug` for refresh, reload, and taskbar diagnostics.
 - Clock and date aligned to the minute or second.
 - Auto-hide with a 2 px trigger, animation, and click-through while hidden.
 - Native taskbar hide and restore with a guard, panic hook, console handler,
-  session-end handling, and `TaskbarCreated` re-hide.
+  session-end handling, `TaskbarCreated` re-hide, and a live config toggle.
 - Standalone `--restore-taskbar` recovery.
 - Global quit hotkey, default `Ctrl+Alt+Shift+Q`.
 - Single-instance mutex.
@@ -138,6 +139,10 @@ check are still pending.
 Read this before changing taskbar or worker code.
 
 - `hide_native_taskbar` defaults to false. Enable it only for a controlled test.
+- A live enable installs the panic hook, console handler, and watcher before
+  hiding. A live disable restores before stopping the watcher.
+- `TaskbarRuntime` is shared on the GPUI main thread. The settings window only
+  writes the config file; the config watcher applies the toggle.
 - `--restore-taskbar` is handled before the single-instance check. Keep it first.
 - Console handler registration is required and must succeed before the taskbar is
   hidden.
@@ -195,6 +200,7 @@ Historical evidence does not automatically verify the integrated code.
 | 2026-11-11 | Live theming and geometry | A config reload changed the width to 700 and the orientation to top. The running dock moved to the top. Restoring 560 and bottom moved it back. Unit tests cover top placement, the top trigger, opacity scaling, and size bounds. 100% DPI |
 | 2026-11-11 | Settings window | Opened from `--settings` and from the tray. Apply saved the new schema through the atomic writer. The external-edit prompt, invalid-field messages, and pinned add/remove/reorder were not exercised |
 | 2026-11-11 | App list and auto geometry | Horizontal scrolling and middle-click launch were added. A one-second monitor poll repositions the dock on work-area, display, or DPI changes. The dock still rendered at a 300 px width. Resolution and DPI changes and the middle-click gesture were not manually exercised |
+| 2026-11-11 | Live taskbar toggle | With a 40-second `--restore-taskbar` watchdog, a config reload changed `hide_native_taskbar` from false to true and `IsWindowVisible(Shell_TrayWnd)` went from true to false. Changing it back restored visibility. The settings checkbox plus Apply repeated the same sequence. The log recorded `taskbar mode updated`, `native taskbar hidden`, and `native taskbar restored` |
 | 2026-11-11 | Hosted CI | GitHub Actions `CI` run 42866275074 on `adb2206` and run 42868103165 on `42421fc` both completed successfully on `windows-latest`. Run 42878351738 on `189ef25` completed both `gate` and `installer` jobs and uploaded the `Dockwind-installer` artifact |
 | 2026-11-11 | Tray | Icon visible in the notification area. Right-click showed Settings, Reload config, Start with Windows, Restore taskbar, and Quit. The Settings item opened the settings window |
 | 2026-11-11 | Full gate | `scripts/check.ps1` passed on the current source: fmt, check, clippy with `-D warnings`, **78 tests**, release build, link parser self-test (16 cases), and 30 Markdown links in 12 files |
@@ -236,9 +242,9 @@ Order is a recommendation, not a commitment.
 3. **Manual desktop checks.** Normal quit, taskbar hide and restore, real Explorer
    restart, panic, console control, and `--restore-taskbar`. Confirm the taskbar is
    visible afterward. See PRD U06.
-4. **Settings follow-up checks.** Toggle `hide_native_taskbar` and confirm the
-   restart notice, exercise the external-edit prompt, invalid field messages, and
-   pinned app add/remove/reorder. See PRD P02 to P06.
+4. **Settings follow-up checks.** Exercise the external-edit prompt, invalid field
+   messages, and pinned app add/remove/reorder. The live taskbar toggle is already
+   manually checked. See PRD P02 to P06.
 5. **Automatic geometry check.** Exercise a resolution change, a DPI change, and a
    taskbar hide or restore. The dock polls the primary monitor every second and
    repositions itself. See PRD U02.
@@ -278,7 +284,7 @@ section 9. The short version:
   Windows profile and upgrade were not tested. The installer is unsigned and the
   release workflow has not run yet.
 - A settings save drops comments and unknown keys. The native window has message
-  box errors, not inline field errors. The taskbar toggle needs a restart.
+  box errors, not inline field errors. The taskbar toggle is live.
 - A missing tray icon is logged and does not block the dock.
 
 ## Documentation Map

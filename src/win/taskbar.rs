@@ -152,24 +152,33 @@ impl TaskbarWindows for NativeTaskbar {
     }
 }
 
-/// Owns the hidden taskbar lifecycle. Restores on drop.
-pub struct TaskbarGuard;
+/// Owns the hidden taskbar lifecycle. Restores on drop unless an explicit restore
+/// already succeeded.
+pub struct TaskbarGuard {
+    restored: bool,
+}
 
 impl TaskbarGuard {
     /// Hides the native taskbar after recording which windows were visible.
     pub fn new() -> Result<Self> {
         hide_native()?;
-        Ok(Self)
+        Ok(Self { restored: false })
     }
 
-    /// Restores the taskbar and reports failures. Dropping the guard retries and logs.
+    /// Restores the taskbar and reports failures. Dropping the guard retries and logs
+    /// only when this explicit restore did not succeed.
     pub fn restore(&mut self) -> Result<()> {
-        restore_native(false)
+        restore_native(false)?;
+        self.restored = true;
+        Ok(())
     }
 }
 
 impl Drop for TaskbarGuard {
     fn drop(&mut self) {
+        if self.restored {
+            return;
+        }
         if let Err(error) = restore_native(false) {
             warn!(%error, "failed to restore the native taskbar on drop");
         }
@@ -194,6 +203,95 @@ impl Drop for TaskbarWatcher {
         if let Err(error) = self.shutdown() {
             worker::finish_failed_shutdown(&mut self.stop, &mut self.thread, &error);
             warn!(%error, "failed to stop the taskbar watcher on drop");
+        }
+    }
+}
+
+/// Owns the live taskbar hide/watch lifecycle. The runtime and the controller share
+/// this on the GPUI main thread. Enabling installs the recovery hooks and the
+/// watcher before hiding; disabling restores before stopping the watcher.
+#[derive(Default)]
+pub struct TaskbarRuntime {
+    watcher: Option<TaskbarWatcher>,
+    guard: Option<TaskbarGuard>,
+    hooks_installed: bool,
+}
+
+impl TaskbarRuntime {
+    pub fn enable(&mut self) -> Result<()> {
+        if self.guard.is_some() {
+            return Ok(());
+        }
+
+        if !self.hooks_installed {
+            install_panic_hook();
+            install_console_handler()?;
+            self.hooks_installed = true;
+        }
+
+        // A failed disable can leave the watcher alive. Stop it before replacing it.
+        if let Some(mut watcher) = self.watcher.take() {
+            watcher.shutdown()?;
+        }
+
+        let watcher = install_watch()?;
+        match TaskbarGuard::new() {
+            Ok(guard) => {
+                self.watcher = Some(watcher);
+                self.guard = Some(guard);
+                info!("native taskbar hidden");
+                Ok(())
+            }
+            Err(error) => {
+                let mut watcher = watcher;
+                if let Err(cleanup_error) = watcher.shutdown() {
+                    warn!(%cleanup_error, "failed to stop the watcher after a hide failure");
+                }
+                Err(error)
+            }
+        }
+    }
+
+    pub fn disable(&mut self) -> Result<()> {
+        if let Some(mut guard) = self.guard.take() {
+            guard.restore()?;
+        }
+        if let Some(mut watcher) = self.watcher.take() {
+            watcher.shutdown()?;
+        }
+        info!("native taskbar restored");
+        Ok(())
+    }
+
+    pub fn shutdown(&mut self) -> Vec<anyhow::Error> {
+        let mut errors = Vec::new();
+        if let Some(mut guard) = self.guard.take()
+            && let Err(error) = guard.restore()
+        {
+            errors.push(error);
+        }
+        if let Some(mut watcher) = self.watcher.take()
+            && let Err(error) = watcher.shutdown()
+        {
+            errors.push(error.context("taskbar watcher shutdown failed"));
+        }
+        errors
+    }
+}
+
+impl Drop for TaskbarRuntime {
+    fn drop(&mut self) {
+        // Explicit shutdown wins. This fallback keeps restore-before-watcher-stop
+        // order even when the runtime is dropped without calling it.
+        if let Some(mut guard) = self.guard.take()
+            && let Err(error) = guard.restore()
+        {
+            warn!(%error, "failed to restore the native taskbar on runtime drop");
+        }
+        if let Some(mut watcher) = self.watcher.take()
+            && let Err(error) = watcher.shutdown()
+        {
+            warn!(%error, "failed to stop the taskbar watcher on runtime drop");
         }
     }
 }

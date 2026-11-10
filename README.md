@@ -89,9 +89,9 @@ The window covers:
 - Clock: time and date formats.
 - Pinned apps: add, remove, and reorder.
 
-`hide_native_taskbar` and `quit_hotkey` need a restart. The window shows a notice
-after saving a change to either. `reserve_space` is disabled until AppBar support
-lands.
+`hide_native_taskbar` applies live, including the taskbar watcher and recovery
+hooks. `quit_hotkey` needs a restart and the window shows a notice after saving
+it. `reserve_space` is disabled until AppBar support lands.
 
 ## Tray
 
@@ -244,8 +244,8 @@ manifest and icon. The embedded resources are checked by the build.
 - `reserve_space` is accepted in config but has no effect. AppBar reservation is
   not implemented.
 - `clock.locale` is accepted but unused. Clock text uses the process locale.
-- `hide_native_taskbar` and `quit_hotkey` are read at startup. The settings window
-  shows a restart notice.
+- `quit_hotkey` is read at startup. The settings window shows a restart notice.
+  `hide_native_taskbar` applies live.
 - Placement updates live for config changes and is polled once per second for
   work-area, display, and DPI changes. A real multi-DPI or resolution change has
   not been manually exercised.

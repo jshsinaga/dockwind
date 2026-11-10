@@ -118,13 +118,18 @@ independent review is cleared, and the final full gate passed on 2026-11-10.
   hide that completes after recovery compensates by force-showing its recorded
   handles. Effective ownership is the hidden flag AND `!recovered`. A late
   `TaskbarCreated` cannot hide. A startup hide after recovery returns an error.
+- `TaskbarRuntime` owns the live toggle. Enable installs the panic hook, console
+  handler, and watcher before hiding. Disable restores before stopping the
+  watcher. The runtime and controller share it on the GPUI main thread.
+- `TaskbarGuard` records a successful explicit restore so its drop does not repeat
+  the native effect. A failed restore leaves the drop retry in place.
 
 Targeted tests use production methods with fake taskbar effects. They cover both
 normal mutex interleavings, a late callback, recovery between hides, and recovery
 during an in-flight effect. A message-only window test covers sent-only wake and
 stop, `WM_QUIT`, and a busy queue. An injected cancellation failure at the signal
-operation verifies ownership retention and retry. The final full gate passed on
-2026-11-10 with 66 tests, clean Clippy, and a release build.
+operation verifies ownership retention and retry. The full gate passed on
+2026-11-11 with 78 tests, clean Clippy, and a release build.
 
 ## 5. Runtime Ownership and Lifetimes
 
@@ -133,9 +138,10 @@ operation verifies ownership retention and retry. The final full gate passed on
 | `main` | Exit code and CLI dispatch | Process exit |
 | Logging guard | Non-blocking log worker. Declared last in `Runtime`, so it drops last | Runtime drop or process exit |
 | `SingleInstanceGuard` | Named mutex | Drop at process exit |
-| `TaskbarGuard` | Normal hidden taskbar lifecycle and restore responsibility. Ownership also includes the irreversible recovered latch | `restore` or drop. Panic, console, and `WM_ENDSESSION` use independent recovery paths |
-| `app::runtime` | Guards, worker handles, channel receivers, config owner, strong `AppController` reference | Shutdown sequence |
-| `AppController` | Active config, app items, config path, event subscriptions | Entity drop after the runtime releases its strong reference |
+| `TaskbarRuntime` | Live hide/restore lifecycle, the watcher, and the one-time recovery-hook installation | `shutdown` on runtime drop |
+| `TaskbarGuard` | One hidden period. Ownership also includes the irreversible recovered latch | Explicit `restore`, or drop when that restore did not succeed. Panic, console, and `WM_ENDSESSION` use independent recovery paths |
+| `app::runtime` | Guards, worker handles, channel receivers, config owner, strong `AppController` reference, shared `TaskbarRuntime` | Shutdown sequence |
+| `AppController` | Active config, app items, config path, event subscriptions, shared `TaskbarRuntime` handle | Entity drop after the runtime releases its strong reference |
 | `ConfigWatcher` | `notify` watcher and config-watch thread | Explicit `shutdown` or drop |
 | `EventWorker` | Two `SetWinEventHook` handles, its stop event, and its message loop | `shutdown`, then unhook |
 | `HotkeyWorker` | Registered hotkey, its stop event, and its message loop | `shutdown`, then unregister |
@@ -175,9 +181,11 @@ The order is part of the safety contract:
 4. Config is loaded and sanitized.
 5. The quit hotkey and window event hook start. A missing hotkey fails startup
    only when the native taskbar will be hidden.
-6. If `hide_native_taskbar` is true, the panic hook, console handler, taskbar
-   watcher, and `TaskbarGuard` are installed in that order. Console handler
-   registration is required and fails startup before the taskbar is hidden.
+6. If `hide_native_taskbar` is true, `TaskbarRuntime::enable` installs the panic
+   hook, console handler, taskbar watcher, and guard in that order. Console
+   handler registration is required and fails startup before the taskbar is
+   hidden. If it is false, the runtime holds an empty `TaskbarRuntime` for a later
+   live enable.
 7. The config watcher starts.
 8. The tray icon worker starts. A failure is logged and does not block the dock.
 9. The GPUI application runs and the runtime retains a strong `AppController`
@@ -185,8 +193,9 @@ The order is part of the safety contract:
 10. The dock window is created hidden. GPUI draws the first frame, then the window
     is shown without activation and its visibility is read back.
 
-`TaskbarGuard` must stay alive through `Application::run`. The taskbar watcher
-must exist before the guard hides the taskbar.
+`TaskbarRuntime` must stay alive through `Application::run`. It is shared by the
+runtime and the controller through `Rc<RefCell<...>>` on the GPUI main thread. The
+taskbar watcher must exist before the guard hides the taskbar.
 
 The settings window is not part of startup. It starts on demand from the dock
 menu, the tray, or `--settings`. It runs on its own thread and owns only its
@@ -196,8 +205,7 @@ window and controls.
 
 1. The GPUI application stops and the runtime releases its strong
    `AppController` reference.
-2. Restore the taskbar through the explicit guard method.
-3. Stop the taskbar watcher.
+2. Restore the taskbar and stop the watcher through `TaskbarRuntime::shutdown`.
 4. Stop the config watcher.
 5. Stop the window event worker and the hotkey worker.
 6. Stop the tray icon worker and remove the icon.
@@ -219,7 +227,7 @@ WinEvent hook --(unbounded channel)--> AppController --(120 ms debounce)--> enum
 cursor timer --> cursor + fullscreen state --> AutoHide --> progress --> UI + click-through
 monitor poll --> primary work area + DPI --> dock rect + trigger --> SetWindowPos
 right click --> DockView --> deferred task --> native menu --> AppController command
-hide_native_taskbar --> TaskbarGuard
+hide_native_taskbar --(config reload)--> AppController --> TaskbarRuntime
 TaskbarCreated --> taskbar watcher --> hide again
 ```
 
@@ -263,9 +271,10 @@ starve cancellation. A sent-only wake leaves no posted message and does not bloc
 ## 8. Invariants
 
 1. `--restore-taskbar` stays first in `main`.
-2. `TaskbarGuard` outlives `Application::run`.
+2. `TaskbarRuntime` outlives `Application::run`.
 3. The taskbar watcher and console handler exist before the guard hides the
    taskbar. Console handler registration failure aborts startup before hiding.
+   A live enable follows the same order.
 4. The same taskbar state mutex guards the ownership flag, the visibility records,
    restore, and the `TaskbarCreated` re-hide. A restore that wins the lock is not
    followed by a hide.
