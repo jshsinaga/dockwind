@@ -231,7 +231,7 @@ Historical evidence does not automatically verify the integrated code.
 | 2026-11-11 | AppBar reservation | With `hide_native_taskbar = true`, `reserve_space = true`, `auto_hide = false`, and a 50-second restore watchdog, the work area became `0,0,1920,976` and the dock was placed at `y=976`. `Shell_TrayWnd` was hidden. After `Ctrl+Alt+Shift+Q`, the process exited, the work area returned to `0,0,1920,1040`, and the taskbar was visible. A maximized Notepad had a visible DWM frame of `0,0,1920,976`; its `GetWindowRect` was `984` because of the 8 px invisible border |
 | 2026-11-11 | Installer upgrade | `Dockwind-0.1.0-setup.exe` installed silently. `Dockwind-0.2.0-setup.exe` installed over it with exit 0. The installed `--settings` window title read `Dockwind Settings 0.2.0`. Silent uninstall removed the install directory and Start Menu shortcut and preserved the config |
 | 2026-11-11 | AppBar with auto-hide | Native auto-hide was 1 and the work area was `0,0,1920,1080`. With `reserve_space = true`, auto-hide became 0, the AppBar work area was `0,0,1920,976`, and `Shell_TrayWnd` was hidden. After quit auto-hide returned to 1, the work area returned to `0,0,1920,1080`, and the taskbar was visible |
-| 2026-11-11 | AppBar forced kill | A forced process kill while reserving space left the work area at `0,0,1920,976`. Running `--restore-taskbar` returned it to `0,0,1920,1040` and showed the taskbar. The recovery command is the tested path |
+| 2026-11-11 | AppBar forced kill | A forced process kill while reserving space left the work area at `0,0,1920,976`. It stayed there through a 35-second poll. Running `--restore-taskbar` returned it to `0,0,1920,1080`, showed the taskbar, and removed the marker. The recovery command is required |
 | 2026-11-11 | Live taskbar toggle | With a 40-second `--restore-taskbar` watchdog, a config reload changed `hide_native_taskbar` from false to true and `IsWindowVisible(Shell_TrayWnd)` went from true to false. Changing it back restored visibility. The settings checkbox plus Apply repeated the same sequence. The log recorded `taskbar mode updated`, `native taskbar hidden`, and `native taskbar restored` |
 | 2026-11-11 | Hosted CI | GitHub Actions `CI` run 42866275074 on `adb2206` and run 42868103165 on `42421fc` both completed successfully on `windows-latest`. Runs 42878351738 on `189ef25`, 42884752869 on `f8ed473`, 42889880818 on `85e4067`, 42892342420 on `c2984b5`, 42902593790 on `fc65aa3`, 42904347913 on `73ebf42`, 42906568724 on `dfd88e8`, 42911029970 on `639f945`, 42913132229 on `5fbc691`, and 42914769400 on `aa9b53d` completed both `gate` and `installer` jobs and uploaded the `Dockwind-installer` artifact |
 | 2026-11-11 | Release dry run | Manual `release.yml` dispatch run 42916491747 on `b252850` resolved `0.2.0` from `Cargo.toml`, built the release binary and installer, and uploaded the `Dockwind-0.2.0-setup` artifact (4,259,448 bytes). No GitHub Release was created. The tag publish path remains |
@@ -269,20 +269,16 @@ Order is a recommendation, not a commitment.
 3. **Automatic geometry check.** Exercise a resolution change, a DPI change, and a
    taskbar hide or restore. The dock polls the primary monitor every second and
    repositions itself. See PRD U02.
-4. **AppBar forced-kill cleanup.** The work area and visible maximized frame
-   passed on 2026-11-11. After a forced kill, `--restore-taskbar` restores the
-   taskbar and work area. Confirm whether the shell eventually clears the
-   reservation without the command. See PRD R40.
-5. **App-list polish.** Add tooltips and a clearer overflow affordance.
+4. **App-list polish.** Add tooltips and a clearer overflow affordance.
    Middle-click launch and horizontal scrolling are implemented. See PRD U03.
-6. **UWP identity.** Map `ApplicationFrameHost.exe` windows to the real app, or
+5. **UWP identity.** Map `ApplicationFrameHost.exe` windows to the real app, or
    document a supported alternative. See PRD U04.
-7. **Windows 11 blur.** Exercise Mica and Acrylic on Windows 11 22H2 or newer.
+6. **Windows 11 blur.** Exercise Mica and Acrylic on Windows 11 22H2 or newer.
    See PRD U05.
-8. **Multi-DPI UI.** Exercise the running UI at 125%, 150%, and 200%. See PRD U07.
-9. **Settings polish.** Inline field validation.
-10. **Code signing.** The installer and binary are unsigned. Add signing only with
-    a certificate and a recorded decision.
+7. **Multi-DPI UI.** Exercise the running UI at 125%, 150%, and 200%. See PRD U07.
+8. **Settings polish.** Inline field validation.
+9. **Code signing.** The installer and binary are unsigned. Add signing only with
+   a certificate and a recorded decision.
 
 ## Known Limitations
 
