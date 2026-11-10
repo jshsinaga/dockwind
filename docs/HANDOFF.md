@@ -27,7 +27,7 @@ work, and dated evidence. It does not repeat the architecture. Read
 | Settings | Native Win32 window on its own thread. Atomic save and external-edit prompt |
 | Tray | Icon, menu, settings, reload, autostart, restore, quit, TaskbarCreated recovery |
 | Installer | Inno Setup 6. Built and smoke-tested on 2026-11-11. Clean profile and upgrade are still pending |
-| CI | GitHub Actions gate and tag release workflows. Not run on GitHub yet |
+| CI | GitHub Actions gate passed on 2026-11-11 for `adb2206` and `42421fc`. The tag release workflow has not run |
 | Final status | Full gate passed on 2026-11-11. Settings, tray, live geometry, and the basic installer path manually checked. Taskbar recovery and clean-profile installer checks unverified |
 
 The original M0 feasibility spike is closed. Do not repeat it unless the UI stack
@@ -195,6 +195,7 @@ Historical evidence does not automatically verify the integrated code.
 | 2026-11-11 | Live theming and geometry | A config reload changed the width to 700 and the orientation to top. The running dock moved to the top. Restoring 560 and bottom moved it back. Unit tests cover top placement, the top trigger, opacity scaling, and size bounds. 100% DPI |
 | 2026-11-11 | Settings window | Opened from `--settings` and from the tray. Apply saved the new schema through the atomic writer. The external-edit prompt, invalid-field messages, and pinned add/remove/reorder were not exercised |
 | 2026-11-11 | App list and auto geometry | Horizontal scrolling and middle-click launch were added. A one-second monitor poll repositions the dock on work-area, display, or DPI changes. The dock still rendered at a 300 px width. Resolution and DPI changes and the middle-click gesture were not manually exercised |
+| 2026-11-11 | Hosted CI | GitHub Actions `CI` run 42866275074 on `adb2206` and run 42868103165 on `42421fc` both completed successfully on `windows-latest` |
 | 2026-11-11 | Tray | Icon visible in the notification area. Right-click showed Settings, Reload config, Start with Windows, Restore taskbar, and Quit. The Settings item opened the settings window |
 | 2026-11-11 | Full gate | `scripts/check.ps1` passed on the current source: fmt, check, clippy with `-D warnings`, **78 tests**, release build, link parser self-test (16 cases), and 30 Markdown links in 12 files |
 | 2026-11-11 | Installer | `installer/dockwind.iss`, `scripts/build-installer.ps1`, and `scripts/bump-version.ps1` produced `dist\Dockwind-0.1.0-setup.exe` with Inno Setup 6.7.3. Silent install exited 0, the installed app started with a tray icon, and silent uninstall exited 0. The install directory was removed and the config was preserved. Not a clean profile; upgrade was not exercised |
@@ -212,7 +213,7 @@ Not verified on the review-cleared integrated code:
 - `--restore-taskbar` recovery CLI.
 - Settings external-edit prompt, invalid-field messages, and pinned app editing.
 - Clean-profile install, upgrade, and Start Menu and desktop shortcut checks.
-- Hosted CI and the tag release workflow.
+- The tag release workflow and the GitHub Release publish step.
 - Windows 11 behavior.
 - Mica or Acrylic.
 - Real multi-DPI desktop.
@@ -229,16 +230,18 @@ Order is a recommendation, not a commitment.
    shortcut, upgrade over the same path, and confirm config preservation. The
    basic install, launch, and uninstall path passed on 2026-11-11. See PRD P08 to
    P13 and `docs/RELEASE.md`.
-2. **Hosted CI.** Push the workflows and confirm the gate and tag release run on
-   GitHub Actions. See PRD P14.
+2. **Tag release workflow.** Push a `vX.Y.Z` tag and confirm the installer build,
+   artifact upload, and GitHub Release publish steps. The CI gate already passes
+   on `windows-latest`. See PRD P14 and `docs/RELEASE.md`.
 3. **Manual desktop checks.** Normal quit, taskbar hide and restore, real Explorer
    restart, panic, console control, and `--restore-taskbar`. Confirm the taskbar is
    visible afterward. See PRD U06.
 4. **Settings follow-up checks.** Toggle `hide_native_taskbar` and confirm the
    restart notice, exercise the external-edit prompt, invalid field messages, and
    pinned app add/remove/reorder. See PRD P02 to P06.
-5. **Automatic geometry.** Recompute placement on DPI change, display change, and
-   taskbar hide or restore. Config geometry is already live. See PRD U02.
+5. **Automatic geometry check.** Exercise a resolution change, a DPI change, and a
+   taskbar hide or restore. The dock polls the primary monitor every second and
+   repositions itself. See PRD U02.
 6. **AppBar `reserve_space`.** Implement `SHAppBarMessage` registration,
    `ABN_POSCHANGED`, `ABN_FULLSCREENAPP`, and `ABM_REMOVE` on shutdown. See PRD
    U01.
@@ -273,7 +276,7 @@ section 9. The short version:
 - Manual desktop recovery cases are unverified.
 - The installer is built and the basic install and uninstall path passed. A clean
   Windows profile and upgrade were not tested. The installer is unsigned and the
-  GitHub workflows have not run yet.
+  release workflow has not run yet.
 - A settings save drops comments and unknown keys. The native window has message
   box errors, not inline field errors. The taskbar toggle needs a restart.
 - A missing tray icon is logged and does not block the dock.

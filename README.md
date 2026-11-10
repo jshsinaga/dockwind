@@ -256,6 +256,7 @@ manifest and icon. The embedded resources are checked by the build.
 - UWP windows hosted by `ApplicationFrameHost.exe` are skipped.
 - Middle-click launch and app tooltips are not implemented yet.
 - The installer is unsigned. Windows SmartScreen may warn on first run.
-- The GitHub Actions workflows have not run in the hosted environment yet.
+- The GitHub Actions CI gate passed on 2026-11-11. The tag release workflow has not
+  run yet.
 - GPUI is pinned to `=0.2.2` because it is pre-1.0 and its API changes between
   releases.

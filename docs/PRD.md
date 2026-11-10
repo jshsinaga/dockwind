@@ -115,7 +115,7 @@ A behavior is not Verified only because a code path exists. Evidence lives in
 | R35 | Provide a tray icon | Implemented | A tray icon exists while the dock runs. Its menu opens settings, reloads config, toggles autostart, restores the taskbar, and quits. Double-click opens settings. The icon returns after `TaskbarCreated` |
 | R36 | Manage displayed apps | Implemented | The settings window adds, removes, and reorders pinned apps. `show_running_apps = false` hides running-only apps |
 | R37 | Package a release | Implemented | An Inno Setup script builds a per-user installer with Start Menu and optional desktop shortcuts. Uninstall restores the taskbar and disables autostart. Built and smoke-tested on 2026-11-11. A clean profile and upgrade are not checked |
-| R38 | Provide hosted CI and release automation | Implemented | GitHub Actions runs the local gate on Windows for pushes and pull requests. A `vX.Y.Z` tag checks the version, builds the installer, and publishes a GitHub release. The workflows have not run in the hosted environment yet |
+| R38 | Provide hosted CI and release automation | Implemented | GitHub Actions runs the local gate on Windows for pushes and pull requests. The gate passed on 2026-11-11. A `vX.Y.Z` tag checks the version, builds the installer, and publishes a GitHub release; the tag path has not run yet |
 
 ## 5. Accepted Unfinished Dock Features
 
@@ -173,7 +173,7 @@ release workflow installs Inno Setup before building.
 
 | ID | Requirement | Status | Acceptance criteria |
 |---|---|---|---|
-| P14 | Add hosted CI | Implemented | GitHub Actions on `windows-latest` runs `scripts/check.ps1` for pushes and pull requests. A tag workflow builds the installer and publishes a release. The workflows have not run in the hosted environment yet |
+| P14 | Add hosted CI | Implemented | GitHub Actions on `windows-latest` runs `scripts/check.ps1` for pushes and pull requests. The gate passed on 2026-11-11. A tag workflow builds the installer and publishes a release; the tag path has not run yet |
 
 ## 7. Release Criteria
 

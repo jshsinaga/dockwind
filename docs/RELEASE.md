@@ -99,6 +99,9 @@ existing tag. It:
 The workflow uses the repository `GITHUB_TOKEN` with `contents: write`. No extra
 secret is required for an unsigned build.
 
+The CI gate passed on `windows-latest` on 2026-11-11 for commits `adb2206` and
+`42421fc`. The tag release workflow has not run yet.
+
 ## 5. Release Checklist
 
 1. The working tree is clean.
