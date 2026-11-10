@@ -785,3 +785,30 @@ restore still need manual checks.
 Evidence: on 2026-11-11, with a 40-second `--restore-taskbar` watchdog, a config
 reload changed the field from false to true and `IsWindowVisible(Shell_TrayWnd)`
 went from true to false. Changing it back restored visibility.
+
+## D039: Reserve space through AppBar only while the taskbar is hidden
+
+Date: 2026-11-11
+
+`reserve_space = true` registers an AppBar on a hidden callback window. The
+reservation uses the dock strip as its rect: for a bottom dock the rect starts at
+the dock window top and ends at the display bottom; for a top dock it starts at
+the display top and ends at the dock window bottom. `ABM_QUERYPOS` runs before
+`ABM_SETPOS`. `ABM_REMOVE` runs on disable, on view drop, and on process exit.
+The feature requires `hide_native_taskbar = true`; the settings window rejects the
+invalid combination and the runtime ignores it with a warning on a manual edit.
+
+Reason: The work area is already reduced by the visible native taskbar. Reserving
+the same strip from a visible taskbar plus the dock would overlap two reservations
+and confuse the dock placement. The taskbar-hidden case is the product's primary
+use case.
+
+Trade-off: A visual maximized-window check and forced-kill shell cleanup are not
+yet exercised. The reservation is attached to the dock view, not the runtime, so
+the view drop is the normal cleanup path. The shell removes the appbar if the
+process exits without a clean view drop.
+
+Evidence: on 2026-11-11, with both fields true and `auto_hide = false`, the work
+area became `0,0,1920,976`, the dock was placed at `y = 976`, and `Shell_TrayWnd`
+was hidden. After `Ctrl+Alt+Shift+Q`, the work area returned to `0,0,1920,1040`
+and the taskbar was visible.

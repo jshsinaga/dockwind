@@ -9,10 +9,11 @@ It has a native settings window, a system tray icon, per-user autostart, a globa
 quit hotkey, a standalone taskbar restore command, and an Inno Setup installer.
 
 Current build status: the full gate passes on the current source. Settings, tray,
-live geometry, live taskbar toggling, startup hide, normal quit restore, and the
-basic installer path were manually checked on 2026-11-11. Explorer restart,
-panic/console recovery, the recovery CLI, a clean-profile install, and the tag
-release are still open. See [docs/HANDOFF.md](docs/HANDOFF.md) for dated evidence.
+live geometry, live taskbar toggling, AppBar reservation, startup hide, normal
+quit restore, and the basic installer path were manually checked on 2026-11-11.
+Explorer restart, panic/console recovery, the recovery CLI, a clean-profile
+install, and the tag release are still open. See
+[docs/HANDOFF.md](docs/HANDOFF.md) for dated evidence.
 
 ## Documentation
 
@@ -92,7 +93,8 @@ The window covers:
 
 `hide_native_taskbar` applies live, including the taskbar watcher and recovery
 hooks. `quit_hotkey` needs a restart and the window shows a notice after saving
-it. `reserve_space` is disabled until AppBar support lands.
+it. `reserve_space` is available when the native taskbar is hidden. The settings
+window rejects the combination without hiding.
 
 ## Tray
 
@@ -133,6 +135,14 @@ opacity = 100
 
 Read [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for every field, its range,
 and its reload behavior.
+
+## Reserve Screen Space
+
+With `hide_native_taskbar = true` and `reserve_space = true`, Dockwind registers
+an AppBar reservation for the dock strip. Maximized windows stop above the dock
+instead of covering it. The reservation is removed when the field is disabled, on
+normal quit, and on process exit. It is not enabled while the native taskbar is
+visible.
 
 ## App Management
 
@@ -242,8 +252,9 @@ manifest and icon. The embedded resources are checked by the build.
 
 - The app list scrolls horizontally. Tooltips and a visible overflow affordance
   are not implemented.
-- `reserve_space` is accepted in config but has no effect. AppBar reservation is
-  not implemented.
+- `reserve_space` requires `hide_native_taskbar = true`. It reserves the dock
+  strip through an AppBar. A visual maximized-window check and forced-kill
+  cleanup are still pending.
 - `clock.locale` is accepted but unused. Clock text uses the process locale.
 - `quit_hotkey` is read at startup. The settings window shows a restart notice.
   `hide_native_taskbar` applies live.

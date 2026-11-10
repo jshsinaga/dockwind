@@ -117,6 +117,7 @@ A behavior is not Verified only because a code path exists. Evidence lives in
 | R37 | Package a release | Implemented | An Inno Setup script builds a per-user installer with Start Menu and optional desktop shortcuts. Uninstall restores the taskbar and disables autostart. Built and smoke-tested on 2026-11-11. A clean profile and upgrade are not checked |
 | R38 | Provide hosted CI and release automation | Implemented | GitHub Actions runs the local gate on Windows for pushes and pull requests. The gate and installer artifact job passed on 2026-11-11. A `vX.Y.Z` tag checks the version, builds the installer, and publishes a GitHub release; the tag path has not run yet |
 | R39 | Toggle the native taskbar without restart | Verified | A live config change from false to true hides `Shell_TrayWnd` and from true to false restores it. The panic hook, console handler, and watcher start before hiding. Manual check on 2026-11-11 with a watchdog |
+| R40 | Reserve screen space with an AppBar | Implemented | With `hide_native_taskbar = true` and `reserve_space = true`, an AppBar reservation shrinks the work area to stop at the dock top. `ABM_REMOVE` restores it on quit. Work area check passed on 2026-11-11; a visual maximized-window check is pending |
 
 ## 5. Accepted Unfinished Dock Features
 
@@ -125,7 +126,6 @@ are not proposed new features.
 
 | ID | Feature | Current state | Acceptance criteria |
 |---|---|---|---|
-| U01 | AppBar `reserve_space` | `reserve_space` exists in config but is unused. `SHAppBarMessage` is not implemented | With `reserve_space = true` and auto-hide off, maximized windows do not cover the dock. `ABM_REMOVE` runs on shutdown |
 | U02 | Live work-area and display changes | Config geometry is live. A one-second poll repositions on work-area, display, and DPI changes. A real multi-DPI or resolution change is not yet exercised | DPI change, display change, and taskbar hide or restore reposition the dock without a restart. The trigger strip is rechecked |
 | U03 | App-list polish | Pinned app management, `show_running_apps`, middle-click launch, and horizontal scrolling exist. Tooltips and a clearer overflow affordance do not | Middle-click launches a second instance for pinned apps. Tooltips show the app name. A long app list remains usable within the configured width |
 | U04 | UWP identity | `ApplicationFrameHost.exe` windows are skipped | A UWP app shows its real identity and icon, or the limitation is documented with a supported alternative |
@@ -185,7 +185,9 @@ The current release is ready when all of these are true:
 2. Existing config keys, file locations, and CLI behavior still work.
 3. Manual checks confirm the native taskbar is restored after normal quit, panic,
    console control, and the recovery command. Normal quit passed on 2026-11-11. A
-   real Explorer restart is checked or explicitly recorded as unverified.
+   real Explorer restart is checked or explicitly recorded as unverified. With
+   `reserve_space` and a hidden taskbar, the work area stops at the dock edge and
+   is restored on quit.
 4. The dock does not take focus from the foreground app.
 5. The settings window opens, saves, rejects invalid values, prompts on an
    external edit, and applies live geometry. The restart-only fields are checked.

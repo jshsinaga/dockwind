@@ -1,3 +1,4 @@
+pub mod appbar;
 pub mod autostart;
 pub mod cursor;
 pub mod dwm;

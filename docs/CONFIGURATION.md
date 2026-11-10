@@ -114,7 +114,7 @@ transparent surface. This is an explicit, logged degradation.
 | `show_delay_ms` | integer | 80 | None | Live |
 | `hide_delay_ms` | integer | 400 | None | Live |
 | `animation_ms` | integer | 180 | None. Zero means an instant step | Live |
-| `reserve_space` | bool | false | None | No effect |
+| `reserve_space` | bool | false | Requires `hide_native_taskbar = true` | Live when hiding is enabled |
 | `hide_native_taskbar` | bool | false | None | Live |
 | `hide_in_fullscreen` | bool | true | None | Live |
 | `show_running_apps` | bool | true | None | Live |
@@ -126,9 +126,11 @@ this as the unchecked "Auto-hide when not used" box.
 `show_running_apps = false` hides running apps that are not pinned. Pinned apps
 still show whether they are running.
 
-`reserve_space` is accepted for compatibility but is not implemented. No AppBar
-registration, space reservation, or `ABM_REMOVE` exists. The field has no runtime
-effect and the settings window disables it.
+`reserve_space = true` registers an AppBar reservation for the dock strip. It
+requires `hide_native_taskbar = true`; the settings window rejects the
+combination. The runtime logs a warning and ignores the reservation if the
+taskbar is visible. The reservation is created and removed live. The reserved
+rect is removed on shutdown, on disabling the field, and on process exit.
 
 `hide_native_taskbar` is applied live. Enabling it installs the panic hook,
 console handler, and taskbar watcher before hiding. Disabling it restores the
@@ -227,12 +229,12 @@ The following changes apply live:
 - `behavior.hide_in_fullscreen`
 - `behavior.show_running_apps`
 - `behavior.hide_native_taskbar`
+- `behavior.reserve_space` (requires hiding the taskbar)
 - `[[pinned]]`
 
 The following changes need a restart or have no effect:
 
 - `behavior.quit_hotkey` (restart)
-- `behavior.reserve_space` (no effect)
 - `clock.locale` (no effect)
 
 A config reload does not rewrite the file. The user's text, ordering, comments,
@@ -292,9 +294,9 @@ The settings window shows a restart notice after saving a change to:
 - `behavior.quit_hotkey`
 
 `behavior.hide_native_taskbar` is live, so it does not need a restart.
-`behavior.reserve_space` is disabled and shown as not implemented.
-`clock.locale` has no control. `appearance.offset` is live, so it does not need a
-restart.
+`behavior.reserve_space` is live when the taskbar is hidden. The settings window
+rejects it while the taskbar is visible. `clock.locale` has no control.
+`appearance.offset` is live, so it does not need a restart.
 
 ## 7. Compatibility Rules
 
@@ -302,8 +304,8 @@ restart.
    accepted as an alias for `offset`.
 2. Missing keys use defaults. A partial file remains valid.
 3. Unknown keys are ignored on load. The writer does not preserve them.
-4. `reserve_space` and `clock.locale` remain accepted even though they have no
-   effect.
+4. `reserve_space` is accepted and effective when `hide_native_taskbar` is true.
+   `clock.locale` remains accepted even though it has no effect.
 5. The config path and log path stay stable.
 6. The CLI supports `--restore-taskbar`, `--enable-autostart`,
    `--disable-autostart`, and `--settings`. The existing commands keep their

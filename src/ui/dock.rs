@@ -5,6 +5,7 @@ use gpui::{
     Window, div, prelude::*, px, rgba,
 };
 use tracing::{debug, error, info, warn};
+use windows::Win32::Foundation::RECT;
 
 use super::app_item::render_app_item;
 use super::clock::ClockView;
@@ -12,6 +13,7 @@ use super::theme::Theme;
 use crate::app::AppController;
 use crate::config::{Config, DockEdge};
 use crate::dock::{AutoHide, AutoHideInput, AutoHideSettings, DockItem};
+use crate::win::appbar::{AppBarEdge, AppBarHandle};
 use crate::win::menu::MenuAction;
 use crate::win::monitors::MonitorInfo;
 use crate::win::{self, icons::IconCache};
@@ -37,6 +39,7 @@ pub struct DockView {
     geometry: DockGeometry,
     auto_hide: AutoHide,
     auto_hide_settings: AutoHideSettings,
+    appbar: Option<AppBarHandle>,
     menu_open: bool,
     progress: f32,
     last_monitor_check: Instant,
@@ -56,7 +59,7 @@ impl DockView {
         let clock = cx.new(|cx| ClockView::new(cx, &config.clock));
         let auto_hide = AutoHide::new(config.behavior.auto_hide);
         let progress = auto_hide.progress();
-        let this = Self {
+        let mut this = Self {
             controller,
             applied_config: config.clone(),
             theme,
@@ -67,11 +70,20 @@ impl DockView {
             geometry,
             auto_hide,
             auto_hide_settings: auto_hide_settings(&config),
+            appbar: None,
             menu_open: false,
             progress,
             last_monitor_check: Instant::now(),
         };
         this.set_click_through(progress <= 0.001);
+        this.appbar = match AppBarHandle::spawn() {
+            Ok(handle) => Some(handle),
+            Err(error) => {
+                warn!(%error, "appbar reservation unavailable");
+                None
+            }
+        };
+        this.sync_appbar(&config);
 
         let controller = this.controller.clone();
         cx.observe(&controller, |this, controller, cx| {
@@ -129,6 +141,8 @@ impl DockView {
             self.applied_config.appearance.height != config.appearance.height,
             self.applied_config.appearance.offset != config.appearance.offset,
             self.applied_config.appearance.orientation != config.appearance.orientation,
+            self.applied_config.behavior.reserve_space != config.behavior.reserve_space,
+            self.applied_config.behavior.hide_native_taskbar != config.behavior.hide_native_taskbar,
         ]
         .into_iter()
         .any(|changed| changed);
@@ -144,6 +158,10 @@ impl DockView {
         }
         if geometry_changed {
             self.apply_geometry(&config);
+            self.sync_appbar(&config);
+        }
+        if config.behavior.reserve_space && !config.behavior.hide_native_taskbar {
+            warn!("reserve_space requires hide_native_taskbar; no space is reserved");
         }
         self.applied_config = config;
 
@@ -175,13 +193,16 @@ impl DockView {
             px(config.appearance.width as f32),
             px(config.appearance.height as f32),
         );
+        let reserve_space = config.behavior.reserve_space && config.behavior.hide_native_taskbar;
         let bounds = win::monitors::dock_rect(
             monitor,
             content_size,
             config.appearance.offset as f32,
             config.appearance.orientation,
+            reserve_space,
         );
-        let trigger = win::monitors::trigger_rect(monitor, config.appearance.orientation);
+        let trigger =
+            win::monitors::trigger_rect(monitor, config.appearance.orientation, reserve_space);
 
         if let Err(error) = win::dwm::set_bounds(self.geometry.hwnd, bounds, monitor.scale_factor) {
             warn!(%error, "failed to apply the dock geometry");
@@ -196,6 +217,66 @@ impl DockView {
         true
     }
 
+    fn sync_appbar(&mut self, config: &Config) {
+        let reserve = config.behavior.reserve_space && config.behavior.hide_native_taskbar;
+        let rect = if reserve {
+            Some(self.appbar_rect(config))
+        } else {
+            None
+        };
+        let edge = match config.appearance.orientation {
+            DockEdge::Bottom => AppBarEdge::Bottom,
+            DockEdge::Top => AppBarEdge::Top,
+        };
+
+        let Some(appbar) = self.appbar.as_mut() else {
+            return;
+        };
+        if !reserve {
+            if let Err(error) = appbar.disable() {
+                warn!(%error, "failed to release appbar space");
+            }
+            return;
+        }
+
+        if let Some(rect) = rect {
+            let result = if appbar.is_active() {
+                appbar.update(rect, edge)
+            } else {
+                appbar.enable(rect, edge)
+            };
+            if let Err(error) = result {
+                warn!(%error, "failed to reserve appbar space");
+            }
+        }
+    }
+
+    fn appbar_rect(&self, config: &Config) -> RECT {
+        let scale = self.geometry.scale_factor;
+        let monitor = self.geometry.monitor;
+        let bounds = self.geometry.bounds;
+        let left = (f32::from(monitor.bounds.origin.x) * scale).round() as i32;
+        let right =
+            (f32::from(monitor.bounds.origin.x + monitor.bounds.size.width) * scale).round() as i32;
+        let top = (f32::from(monitor.bounds.origin.y) * scale).round() as i32;
+        let bottom = (f32::from(monitor.bounds.origin.y + monitor.bounds.size.height) * scale)
+            .round() as i32;
+        match config.appearance.orientation {
+            DockEdge::Bottom => RECT {
+                left,
+                top: (f32::from(bounds.origin.y) * scale).round() as i32,
+                right,
+                bottom,
+            },
+            DockEdge::Top => RECT {
+                left,
+                top,
+                right,
+                bottom: (f32::from(bounds.origin.y + bounds.size.height) * scale).round() as i32,
+            },
+        }
+    }
+
     fn tick(&mut self, now: Duration, cx: &mut Context<Self>) {
         if self.last_monitor_check.elapsed() >= Duration::from_secs(1) {
             self.last_monitor_check = Instant::now();
@@ -203,6 +284,7 @@ impl DockView {
                 Ok(monitor) if monitor != self.geometry.monitor => {
                     let config = self.applied_config.clone();
                     if self.apply_geometry_with_monitor(&config, &monitor) {
+                        self.sync_appbar(&config);
                         cx.notify();
                     }
                 }

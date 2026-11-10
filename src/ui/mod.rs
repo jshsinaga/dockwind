@@ -45,13 +45,16 @@ pub fn open_dock_window(
         px(config.appearance.width as f32),
         px(config.appearance.height as f32),
     );
+    let reserve_space = config.behavior.reserve_space && config.behavior.hide_native_taskbar;
     let bounds = win::monitors::dock_rect(
         &monitor,
         content_size,
         config.appearance.offset as f32,
         config.appearance.orientation,
+        reserve_space,
     );
-    let trigger = win::monitors::trigger_rect(&monitor, config.appearance.orientation);
+    let trigger =
+        win::monitors::trigger_rect(&monitor, config.appearance.orientation, reserve_space);
     let scale_factor = monitor.scale_factor;
     let theme = Theme::from_config(&config.appearance).context("failed to build the dock theme")?;
     let blur = config.appearance.blur;

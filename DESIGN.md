@@ -51,6 +51,11 @@ The tray icon uses the Dockwind icon. Its menu is a standard native popup with t
 same actions as the dock menu plus a Start with Windows check item. The tray does
 not draw custom chrome.
 
+When `reserve_space` is enabled with a hidden taskbar, the dock owns an AppBar
+reservation. The reserved strip includes the dock surface and the configured
+offset. Maximized windows stop at the dock edge instead of covering it. The
+reservation is not drawn; it only changes the work area.
+
 ## Layout
 
 ```text

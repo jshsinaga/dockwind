@@ -410,7 +410,7 @@ fn create_controls(parent: HWND, config: &Config) -> Result<Controls> {
     let reserve_space = checkbox(
         parent,
         ID_RESERVE_SPACE,
-        "Reserve screen space (not implemented)",
+        "Reserve screen space (requires hidden taskbar)",
         24,
         418,
         360,

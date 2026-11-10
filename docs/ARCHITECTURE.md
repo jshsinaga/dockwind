@@ -45,9 +45,10 @@ module exists only when it has code.
 | `src/ui/clock.rs` | Clock and date formatting, boundary timer | Clock entity |
 | `src/ui/theme.rs` | Color, contrast, radius, padding mapping | Derived theme |
 | `src/win/worker.rs` | Manual-reset stop event and `MsgWaitForMultipleObjectsEx` cancellation shared by the event, taskbar, hotkey, and tray workers | Worker cancellation primitive |
+| `src/win/appbar.rs` | AppBar registration, reserved rect, callback window thread, remove on release | AppBar reservation |
 | `src/win/settings.rs` | Native Win32 settings window thread, controls, validation, atomic save, external-edit prompt | Settings window lifetime |
 | `src/win/tray.rs` | Tray icon worker, menu, `TaskbarCreated` recovery | Tray icon and menu |
-| `src/win/*.rs` | Win32 wrappers for windows, DWM, monitors, icons, events, taskbar, hotkey, menu, settings, tray, autostart, single instance, cursor, launch | OS resources |
+| `src/win/*.rs` | Win32 wrappers for windows, DWM, monitors, icons, events, taskbar, appbar, hotkey, menu, settings, tray, autostart, single instance, cursor, launch | OS resources |
 | `src/logging.rs` | Tracing setup and daily log file | Log worker guard |
 
 `src/win/` stays flat. It is a platform boundary, not a feature layer.
@@ -129,7 +130,7 @@ normal mutex interleavings, a late callback, recovery between hides, and recover
 during an in-flight effect. A message-only window test covers sent-only wake and
 stop, `WM_QUIT`, and a busy queue. An injected cancellation failure at the signal
 operation verifies ownership retention and retry. The full gate passed on
-2026-11-11 with 78 tests, clean Clippy, and a release build.
+2026-11-11 with 79 tests, clean Clippy, and a release build.
 
 ## 5. Runtime Ownership and Lifetimes
 
@@ -139,6 +140,7 @@ operation verifies ownership retention and retry. The full gate passed on
 | Logging guard | Non-blocking log worker. Declared last in `Runtime`, so it drops last | Runtime drop or process exit |
 | `SingleInstanceGuard` | Named mutex | Drop at process exit |
 | `TaskbarRuntime` | Live hide/restore lifecycle, the watcher, and the one-time recovery-hook installation | `shutdown` on runtime drop |
+| `AppBarHandle` | Hidden callback window, registration, reserved rect, and the AppBar thread | `disable`/`shutdown`, view drop, or process exit |
 | `TaskbarGuard` | One hidden period. Ownership also includes the irreversible recovered latch | Explicit `restore`, or drop when that restore did not succeed. Panic, console, and `WM_ENDSESSION` use independent recovery paths |
 | `app::runtime` | Guards, worker handles, channel receivers, config owner, strong `AppController` reference, shared `TaskbarRuntime` | Shutdown sequence |
 | `AppController` | Active config, app items, config path, event subscriptions, shared `TaskbarRuntime` handle | Entity drop after the runtime releases its strong reference |
@@ -201,6 +203,11 @@ The settings window is not part of startup. It starts on demand from the dock
 menu, the tray, or `--settings`. It runs on its own thread and owns only its
 window and controls.
 
+The AppBar reservation is created by `DockView` after the dock window opens. It is
+not a runtime startup resource. The handle removes the reservation on drop, on
+disable, and on process exit. `reserve_space` is ignored unless the native
+taskbar is hidden.
+
 ### Shutdown Order
 
 1. The GPUI application stops and the runtime releases its strong
@@ -228,6 +235,7 @@ cursor timer --> cursor + fullscreen state --> AutoHide --> progress --> UI + cl
 monitor poll --> primary work area + DPI --> dock rect + trigger --> SetWindowPos
 right click --> DockView --> deferred task --> native menu --> AppController command
 hide_native_taskbar --(config reload)--> AppController --> TaskbarRuntime
+reserve_space + hidden taskbar --> DockView --> AppBarHandle --> ABM_SETPOS
 TaskbarCreated --> taskbar watcher --> hide again
 ```
 
@@ -256,6 +264,7 @@ TaskbarCreated --> taskbar watcher --> hide again
 | `quit-hotkey` | `RegisterHotKey` and message loop | Owns the hotkey registration. Uses the stop-aware message reader |
 | `dockwind-tray` | Hidden window, tray callback, menu | Owns the tray icon and menu. Uses the stop-aware message reader |
 | `dockwind-settings` | Settings window and controls | Edits the config file on its own thread. It does not touch GPUI state |
+| `dockwind-appbar` | Hidden AppBar callback window and message loop | Owns the callback window. AppBar setpos and remove calls come from the GPUI thread |
 | `config-watch` | `notify` events, debounce, parse | Sends a full config to the UI. Uses its own control channel and join handle |
 
 The native menu is modal. It must be called from a deferred task, not directly
@@ -291,6 +300,11 @@ starve cancellation. A sent-only wake leaves no posted message and does not bloc
 12. A taskbar recovery path never leaves the taskbar hidden after a handled exit.
 13. The dock window is not shown before GPUI has drawn its first frame. An empty
     native surface must never be visible.
+14. An AppBar reservation is enabled only when `hide_native_taskbar` and
+    `reserve_space` are both true. The reserved rect is removed before the
+    process exits or the taskbar is restored.
+15. The AppBar reserved rect starts at the dock top (bottom edge) or ends at the
+    dock bottom (top edge), so maximized windows cannot cover the dock.
 14. The settings window validates before saving and writes through a same-directory
     temporary file plus an atomic rename. A failed save leaves the previous file.
 15. The settings window prompts before overwriting an external edit or recreating a
@@ -319,8 +333,8 @@ These are current limits. Do not describe them as fixed.
 |---|---|
 | Config geometry is live | `width`, `height`, `offset`, and `orientation` update without a restart. A one-second primary-monitor poll repositions on work-area, display, and DPI changes. A real multi-DPI or resolution change is not manually exercised |
 | Hiding the taskbar does not update `rcWork` | The dock stays above the old work-area edge |
-| `reserve_space` is accepted but unused | Maximized windows can cover the dock. No AppBar registration or `ABM_REMOVE` |
-| Content size defaults to `560x92` | Large app lists do not scroll |
+| AppBar reservation requires a hidden taskbar | `reserve_space` is ignored while the native taskbar is visible. A visual maximized-window check is pending |
+| Content size defaults to `560x92` | The app list scrolls horizontally; a large list has no visible overflow affordance |
 | `ApplicationFrameHost.exe` windows are skipped | UWP app identity is not mapped |
 | `clock.locale` is accepted but unused | Clock text uses the process locale |
 | Mica and Acrylic are gated on build 22621 and unverified | Windows 11 visual behavior is not proven on this machine |
