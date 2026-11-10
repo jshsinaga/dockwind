@@ -12,9 +12,8 @@ Current build status: the full gate passes on the current source. Settings, tray
 live geometry, live taskbar toggling, native auto-hide suspension, AppBar
 reservation, startup hide, normal quit restore, Explorer restart recovery, the
 recovery CLI, the basic installer path, and the release dry run were manually
-checked on 2026-11-11. Console-control recovery, a clean-profile install, and the
-tag publish are still open. See [docs/HANDOFF.md](docs/HANDOFF.md) for dated
-evidence.
+checked on 2026-11-11. A clean-profile install and the tag publish are still open.
+See [docs/HANDOFF.md](docs/HANDOFF.md) for dated evidence.
 
 ## Documentation
 
@@ -275,8 +274,8 @@ manifest and icon. The embedded resources are checked by the build.
   not been verified. The current machine is Windows 10 22H2.
 - The running UI was exercised at 100% DPI only. The physical to logical
   conversion and dock rectangle are unit-tested at 100%, 125%, 150%, and 200%.
-- Console-control restore and a fullscreen app check are still pending. Panic
-  restore and a real Explorer restart passed.
+- A fullscreen app check is still pending. Panic restore, console-control
+  restore, and a real Explorer restart passed.
 - UWP windows hosted by `ApplicationFrameHost.exe` are skipped.
 - App tooltips are not implemented yet. Middle-click launch for pinned apps is
   implemented.

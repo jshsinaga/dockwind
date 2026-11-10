@@ -7,8 +7,8 @@ Last updated: 2026-11-11
 Current code: integrated, review-cleared, and extended with settings, tray, theming,
 and release delivery
 Current stage: full gate on 2026-11-11 after the settings, tray, live geometry,
-auto-hide, and Explorer recovery work. Panic/console recovery, a clean-profile
-install, and the tag release remain manual.
+auto-hide, Explorer, panic, and console recovery work. A clean-profile install
+and the tag release remain manual.
 Historical baseline: `482bd7a`
 
 ## 1. Product Definition
@@ -91,7 +91,7 @@ A behavior is not Verified only because a code path exists. Evidence lives in
 |---|---|---|---|
 | R21 | Hide the native taskbar only when configured | Verified | `hide_native_taskbar` defaults to false. The hide path is not entered by default. While hidden, Dockwind suspends native taskbar auto-hide and restores the previous state on normal restore |
 | R22 | Restore the taskbar on normal quit | Verified | The `TaskbarGuard` restores the saved-visible taskbar windows and the recorded auto-hide state. On 2026-11-11 a watchdog-backed startup hide and `Ctrl+Alt+Shift+Q` quit restored `Shell_TrayWnd`; `ABM_GETSTATE` returned from 0 to 1 |
-| R23 | Restore the taskbar on panic and console control events | Implemented | The panic hook and console handler use the lock-free force-show path with the irreversible recovered latch. The auto-hide restore is also attempted. On 2026-11-11 a controlled panic restored the taskbar and auto-hide while the process stayed alive. Console-control restore is still untested |
+| R23 | Restore the taskbar on panic and console control events | Verified | The panic hook and console handler use the lock-free force-show path with the irreversible recovered latch. On 2026-11-11 a controlled panic restored the taskbar and auto-hide while the process stayed alive. A `CTRL_BREAK_EVENT` to a new process group restored auto-hide 1 and showed the taskbar as the target exited |
 | R24 | Restore the taskbar on session end and Explorer restart | Verified | `WM_ENDSESSION` and a real Explorer restart use the ownership path. On 2026-11-11 a replacement taskbar was detected within two seconds, auto-hide was disabled again, and the taskbar was hidden. A late `TaskbarCreated` refreshed without re-hiding. The tray icon returned |
 | R25 | Provide a standalone recovery command | Verified | `dockwind --restore-taskbar` force-shows all taskbar windows and runs before the single-instance check. It restored the taskbar and work area after a forced kill on 2026-11-11. It also restored the native auto-hide state from the marker file and removed the marker |
 | R26 | Prevent two dock instances | Verified | A named mutex rejects a second instance. The restore command bypasses the mutex |
@@ -131,7 +131,7 @@ are not proposed new features.
 | U03 | App-list polish | Pinned app management, `show_running_apps`, middle-click launch, and horizontal scrolling exist. Tooltips and a clearer overflow affordance do not | Middle-click launches a second instance for pinned apps. Tooltips show the app name. A long app list remains usable within the configured width |
 | U04 | UWP identity | `ApplicationFrameHost.exe` windows are skipped | A UWP app shows its real identity and icon, or the limitation is documented with a supported alternative |
 | U05 | Windows 11 blur verification | Mica and Acrylic code exists and is gated on build 22621. It is not verified on Windows 11 | Mica and Acrylic are exercised on Windows 11 22H2 or newer. The radius behavior in those modes is recorded |
-| U06 | Manual robustness coverage | Some Win32 paths are unit-tested or simulated, not exercised for real | A real Explorer restart was tested on 2026-11-11; the replacement taskbar was re-hidden and the tray icon returned. A controlled panic restored the taskbar and auto-hide. Console-control restore and a fullscreen app still need real checks with the taskbar visible afterward |
+| U06 | Manual robustness coverage | Implemented | A real Explorer restart was tested on 2026-11-11; the replacement taskbar was re-hidden and the tray icon returned. Controlled panic and console-control events restored the taskbar and auto-hide. A fullscreen app still needs a real check with the taskbar visible afterward |
 | U07 | Multi-DPI UI coverage | Running UI was exercised at 100% only. Conversions are unit-tested to 200% | The running UI is checked at 125%, 150%, and 200% with correct size and placement |
 | U08 | Shutdown latency | Quit works, but the process can exit several seconds after the request | Shutdown completes in a bounded time. Teardown is profiled if the delay remains |
 
@@ -185,10 +185,9 @@ The current release is ready when all of these are true:
    are intermediate.
 2. Existing config keys, file locations, and CLI behavior still work.
 3. Manual checks confirm the native taskbar is restored after normal quit, panic,
-   console control, and the recovery command. Normal quit passed on 2026-11-11. A
-   real Explorer restart is checked or explicitly recorded as unverified. With
-   `reserve_space` and a hidden taskbar, the work area stops at the dock edge and
-   is restored on quit.
+   console control, and the recovery command; all passed on 2026-11-11. A real
+   Explorer restart was tested. With `reserve_space` and a hidden taskbar, the
+   work area stops at the dock edge and is restored on quit.
 4. The dock does not take focus from the foreground app.
 5. The settings window opens, saves, rejects invalid values, prompts on an
    external edit, and applies live geometry. The restart-only fields are checked.
