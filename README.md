@@ -17,7 +17,8 @@ replacement are not implemented yet.
 | M2: shell window, monitor/DPI placement, live appearance | Implemented. |
 | M3: clock and date | Implemented. |
 | M4: app list, icons, launch, activate/minimize | Implemented. |
-| M5 onward | Not started. |
+| M5: auto-hide, cursor trigger, click-through | Implemented. |
+| M6 onward | Not started. |
 
 ## Requirements
 
@@ -97,20 +98,22 @@ The embedded manifest is verified with `mt.exe` after building.
 
 ## Known Limitations
 
-- The shell window is fixed at 560x92 logical pixels. The app list and clock
-  layout arrive in M3 and M4, and the content size will then follow the config.
+- The dock content is fixed at 560x92 logical pixels. Large app lists do not
+  scroll yet.
 - The Mica and Acrylic backdrop branches need Windows 11 22H2 or newer and have
   not been verified. The current machine is Windows 10 22H2. On Windows 10 the
   dock logs that the backdrop is unavailable and stays transparent.
 - Monitor placement is verified in the running UI at 100% DPI. The physical to
   logical conversion and dock rectangle are unit-tested at 100%, 125%, 150%,
   and 200% DPI; a real 125% to 200% desktop was not available for manual testing.
+- Auto-hide fullscreen suppression is unit-tested, but a real fullscreen game or
+  video was not exercised on this machine.
 - The native taskbar is not hidden yet. `--restore-taskbar` is not implemented;
   do not enable taskbar hiding by hand.
 - UWP windows hosted by `ApplicationFrameHost.exe` are skipped in v1 because
   their real app identity is not mapped yet.
-- Middle-click to launch a second instance, tooltips, and scrolling for large
-  app lists are not implemented yet. The dock content remains fixed at 560x92.
-- Auto-hide and autostart arrive in later milestones.
+- Middle-click to launch a second instance, tooltips, and context menus are not
+  implemented yet.
+- Autostart is not implemented yet.
 - GPUI is pinned to `=0.2.2` because it is pre-1.0 and its API changes between
   releases.

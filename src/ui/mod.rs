@@ -2,7 +2,7 @@ mod app_item;
 mod clock;
 mod dock;
 
-pub use dock::DockView;
+pub use dock::{DockGeometry, DockView};
 
 use anyhow::{Context as _, Result};
 use futures::channel::mpsc::UnboundedReceiver;
@@ -33,6 +33,8 @@ pub fn open_dock_window(
         content_size,
         config.appearance.margin_bottom as f32,
     );
+    let trigger = win::monitors::trigger_rect(&monitor);
+    let scale_factor = monitor.scale_factor;
     let theme = Theme::from_config(&config.appearance).context("failed to build the dock theme")?;
     let blur = config.appearance.blur;
 
@@ -63,11 +65,19 @@ pub fn open_dock_window(
                 warn!(%error, "backdrop configuration failed; keeping transparent");
             }
             let window_handle = window.window_handle();
+            let hwnd = win::dwm::window_hwnd(window).expect("failed to read the dock HWND");
+            let geometry = DockGeometry {
+                bounds,
+                trigger,
+                scale_factor,
+                hwnd,
+            };
             cx.new(|cx| {
                 DockView::new(
                     cx,
                     theme,
                     window_handle,
+                    geometry,
                     config,
                     config_updates,
                     window_events,

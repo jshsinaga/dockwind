@@ -72,6 +72,17 @@ pub fn dock_rect(
     Bounds::new(origin, content_size)
 }
 
+pub fn trigger_rect(monitor: &MonitorInfo) -> Bounds<Pixels> {
+    let height = px(2.0);
+    Bounds::new(
+        point(
+            monitor.work_area.origin.x,
+            monitor.work_area.origin.y + monitor.work_area.size.height - height,
+        ),
+        size(monitor.work_area.size.width, height),
+    )
+}
+
 fn rect_to_bounds(rect: RECT, scale_factor: f32) -> Bounds<Pixels> {
     Bounds::new(
         point(

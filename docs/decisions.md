@@ -215,3 +215,37 @@ foreground lock.
 
 Trade-off: Middle-click launch and per-window selection are not implemented yet.
 UWP apps behind `ApplicationFrameHost.exe` are skipped.
+
+## D014: Auto-hide uses a state machine and click-through
+
+Date: 2026-11-10
+
+`AutoHide` is a pure state machine over injected monotonic time. The dock polls
+the cursor every 100 ms while hidden and every 16 ms while visible or animating.
+Progress drives the bar's opacity and vertical offset. When progress reaches
+zero, Dockwind sets `WS_EX_TRANSPARENT` on the dock so the invisible topmost
+window cannot intercept clicks.
+
+Reason: Keeping the window at the work-area edge avoids a second window position
+model, while click-through makes the hidden state functionally invisible. The
+state machine is testable without GPUI or Win32.
+
+Trade-off: During the fade there is still a live window at the bottom edge. The
+fullscreen check is unit-tested through `force_hidden`, but a real fullscreen
+game was not exercised on this machine. Context menus are not implemented, so
+the `pinned_open` input is always false.
+
+## D015: Auto-hide trigger is the work-area edge
+
+Date: 2026-11-10
+
+The trigger is a 2 px strip at the bottom of the monitor's work area, not the
+screen edge.
+
+Reason: The taskbar is still visible until M6. The work-area edge is the
+bottom-most reachable desktop edge and remains correct when the taskbar is
+hidden later.
+
+Trade-off: With a bottom taskbar, the pointer must be just above the taskbar,
+not on the taskbar itself. M6 will expand the work area when it hides the native
+taskbar.

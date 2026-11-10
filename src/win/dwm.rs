@@ -19,7 +19,7 @@ use windows::{
             GWL_EXSTYLE, GetForegroundWindow, GetWindowLongPtrW, GetWindowThreadProcessId,
             HWND_TOPMOST, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
             SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, WS_EX_APPWINDOW,
-            WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+            WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
         },
     },
 };
@@ -28,6 +28,43 @@ use crate::config::BlurMode;
 
 pub fn foreground_window() -> HWND {
     unsafe { GetForegroundWindow() }
+}
+
+pub fn window_hwnd(window: &Window) -> Result<isize> {
+    raw_hwnd(window).map(|hwnd| hwnd.0 as isize)
+}
+
+pub fn set_click_through(hwnd: isize, enabled: bool) -> Result<()> {
+    let hwnd = HWND(hwnd as *mut c_void);
+
+    unsafe {
+        let mut ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        if enabled {
+            ex_style |= WS_EX_TRANSPARENT.0 as isize;
+        } else {
+            ex_style &= !(WS_EX_TRANSPARENT.0 as isize);
+        }
+
+        let _previous = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style);
+        SetWindowPos(
+            hwnd,
+            None,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        )
+        .context("SetWindowPos(click-through) failed")?;
+
+        let bits = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+        ensure!(
+            (bits & WS_EX_TRANSPARENT.0 != 0) == enabled,
+            "failed to set WS_EX_TRANSPARENT to {enabled}"
+        );
+    }
+
+    Ok(())
 }
 
 pub fn apply_dock_styles(window: &Window, previous_foreground: HWND) -> Result<()> {

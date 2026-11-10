@@ -1,4 +1,5 @@
 mod app_state;
+mod autohide;
 mod config;
 mod logging;
 mod theme;
