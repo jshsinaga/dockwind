@@ -89,12 +89,12 @@ A behavior is not Verified only because a code path exists. Evidence lives in
 | ID | Requirement | Status | Acceptance criteria |
 |---|---|---|---|
 | R21 | Hide the native taskbar only when configured | Verified | `hide_native_taskbar` defaults to false. The hide path is not entered by default |
-| R22 | Restore the taskbar on normal quit | Implemented | The `TaskbarGuard` restores the saved-visible taskbar windows. Historical normal-quit evidence exists at `482bd7a`; the integrated runtime has not been manually quit yet |
+| R22 | Restore the taskbar on normal quit | Verified | The `TaskbarGuard` restores the saved-visible taskbar windows. On 2026-11-11 a watchdog-backed startup hide and `Ctrl+Alt+Shift+Q` quit restored `Shell_TrayWnd` |
 | R23 | Restore the taskbar on panic and console control events | Implemented | The panic hook and console handler use the lock-free force-show path with the irreversible recovered latch. No dated manual panic or console restore test exists for the integrated code |
 | R24 | Restore the taskbar on session end and Explorer restart | Implemented | `WM_ENDSESSION` and a simulated `TaskbarCreated` broadcast exist. A real Explorer restart is not yet exercised |
 | R25 | Provide a standalone recovery command | Implemented | `dockwind --restore-taskbar` force-shows all taskbar windows and runs before the single-instance check. Historical recovery evidence exists at `482bd7a`; the integrated binary has not been re-tested |
 | R26 | Prevent two dock instances | Verified | A named mutex rejects a second instance. The restore command bypasses the mutex |
-| R27 | Provide a global quit hotkey | Implemented | The default `Ctrl+Alt+Shift+Q` registers at startup. Registration is observed in the debug smoke; the quit action has not been manually re-tested on the integrated code |
+| R27 | Provide a global quit hotkey | Verified | The default `Ctrl+Alt+Shift+Q` registers at startup. The 2026-11-11 watchdog check received the hotkey, exited the app, and restored the taskbar |
 
 ### 4.6 Integrations
 
@@ -184,8 +184,8 @@ The current release is ready when all of these are true:
    are intermediate.
 2. Existing config keys, file locations, and CLI behavior still work.
 3. Manual checks confirm the native taskbar is restored after normal quit, panic,
-   console control, and the recovery command. A real Explorer restart is checked
-   or explicitly recorded as unverified.
+   console control, and the recovery command. Normal quit passed on 2026-11-11. A
+   real Explorer restart is checked or explicitly recorded as unverified.
 4. The dock does not take focus from the foreground app.
 5. The settings window opens, saves, rejects invalid values, prompts on an
    external edit, and applies live geometry. The restart-only fields are checked.

@@ -9,9 +9,10 @@ It has a native settings window, a system tray icon, per-user autostart, a globa
 quit hotkey, a standalone taskbar restore command, and an Inno Setup installer.
 
 Current build status: the full gate passes on the current source. Settings, tray,
-live geometry, and the basic installer path were manually checked on 2026-11-11.
-Taskbar recovery, a clean-profile install, and the hosted workflows are still
-open. See [docs/HANDOFF.md](docs/HANDOFF.md) for dated evidence.
+live geometry, live taskbar toggling, startup hide, normal quit restore, and the
+basic installer path were manually checked on 2026-11-11. Explorer restart,
+panic/console recovery, the recovery CLI, a clean-profile install, and the tag
+release are still open. See [docs/HANDOFF.md](docs/HANDOFF.md) for dated evidence.
 
 ## Documentation
 
