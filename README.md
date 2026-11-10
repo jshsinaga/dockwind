@@ -16,7 +16,8 @@ replacement are not implemented yet.
 | M1: scaffold, config, theme, logging | Implemented. |
 | M2: shell window, monitor/DPI placement, live appearance | Implemented. |
 | M3: clock and date | Implemented. |
-| M4 onward | Not started. |
+| M4: app list, icons, launch, activate/minimize | Implemented. |
+| M5 onward | Not started. |
 
 ## Requirements
 
@@ -62,7 +63,14 @@ file triggers hot reload after a 200 ms debounce. If a reload fails to parse,
 Dockwind logs the error and keeps the last valid configuration.
 
 The config sections are `[appearance]`, `[behavior]`, `[clock]`, and
-`[[pinned]]`.
+`[[pinned]]`. Example pinned app:
+
+```toml
+[[pinned]]
+name = "Terminal"
+path = 'C:\Windows\System32\cmd.exe'
+args = []
+```
 
 ## Logs
 
@@ -99,7 +107,10 @@ The embedded manifest is verified with `mt.exe` after building.
   and 200% DPI; a real 125% to 200% desktop was not available for manual testing.
 - The native taskbar is not hidden yet. `--restore-taskbar` is not implemented;
   do not enable taskbar hiding by hand.
-- The dock currently shows a shell label and the clock. App icons, auto-hide, and
-  autostart arrive in later milestones.
+- UWP windows hosted by `ApplicationFrameHost.exe` are skipped in v1 because
+  their real app identity is not mapped yet.
+- Middle-click to launch a second instance, tooltips, and scrolling for large
+  app lists are not implemented yet. The dock content remains fixed at 560x92.
+- Auto-hide and autostart arrive in later milestones.
 - GPUI is pinned to `=0.2.2` because it is pre-1.0 and its API changes between
   releases.

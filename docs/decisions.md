@@ -164,3 +164,54 @@ Invalid time and date formats are rejected during config sanitization using
 Trade-off: A format change that keeps the same precision does not restart the
 timer. The new text is rendered immediately, and the next tick stays aligned to
 the existing boundary.
+
+## D011: App-list refresh is event-triggered full enumeration
+
+Date: 2026-11-10
+
+Install two `SetWinEventHook` ranges on a dedicated message-loop thread. Windows
+events are coalesced with a 120 ms debounce, then the dock re-enumerates all
+top-level windows and rebuilds the app list.
+
+Reason: Full enumeration is simpler and more reliable than an incremental
+`apply_event` while window ownership, cloaking, titles, and process paths all
+affect grouping. Icons are cached by executable path, so repeat enumerations
+are cheap after the first one.
+
+Trade-off: Each refresh walks all top-level windows. The hook filters to window
+show/hide/destroy/name/foreground/minimize events, and the debounce prevents
+event storms. If the app list grows very large, this can move to incremental
+updates.
+
+## D012: Icon extraction order and cache
+
+Date: 2026-11-10
+
+Extract icons in this order: `WM_GETICON(ICON_BIG)`, then
+`GetClassLongPtrW(GCLP_HICON)`, then `SHGetFileInfoW` for the executable. Convert
+`HICON` through `GetIconInfo` and a 32-bit DIB into BGRA `RenderImage` data, and
+cache the result by executable path.
+
+Reason: The first two sources track the live window icon; the executable icon is
+the fallback for pinned apps that are not running. The cache avoids repeating
+the GDI conversion on every window event.
+
+Trade-off: The first icon source wins for a grouped executable, so windows with
+per-document icons share one icon. The cache has no eviction; the number of
+running executables is expected to stay small.
+
+## D013: Click behavior and foreground activation
+
+Date: 2026-11-10
+
+A left click on a running app activates its most recent non-minimized window, or
+minimizes it when that window is already foreground. A click on a pinned app
+that is not running launches it with `ShellExecuteW`. Foreground changes retry
+through `AttachThreadInput` when Windows denies `SetForegroundWindow`.
+
+Reason: The dock has `WS_EX_NOACTIVATE`, so the click does not give Dockwind
+foreground permission. The attach retry is the documented workaround for the
+foreground lock.
+
+Trade-off: Middle-click launch and per-window selection are not implemented yet.
+UWP apps behind `ApplicationFrameHost.exe` are skipped.

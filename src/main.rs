@@ -1,3 +1,4 @@
+mod app_state;
 mod config;
 mod logging;
 mod theme;
@@ -29,9 +30,10 @@ fn run() -> anyhow::Result<()> {
     );
 
     let config_updates = config::watch(&config_path, loaded.config.clone())?;
+    let window_events = win::events::spawn()?;
 
     Application::new().run(move |cx: &mut App| {
-        ui::open_dock_window(cx, loaded.config, config_updates)
+        ui::open_dock_window(cx, loaded.config, config_updates, window_events)
             .expect("failed to open the dock window");
     });
 
