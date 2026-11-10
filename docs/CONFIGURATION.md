@@ -13,6 +13,7 @@ in `docs/HANDOFF.md`.
 |---|---|
 | Config path | `%APPDATA%\Dockwind\config.toml` |
 | Log path | `%LOCALAPPDATA%\Dockwind\logs\dockwind.log.YYYY-MM-DD` |
+| Auto-hide marker | `%LOCALAPPDATA%\Dockwind\taskbar-auto-hide` |
 | Created | On first run, from defaults |
 | Encoding | UTF-8 TOML |
 | Hot reload | `notify` watcher with a 200 ms debounce |
@@ -139,8 +140,9 @@ taskbar before stopping the watcher. The runtime records whether the native
 taskbar used auto-hide, disables it while the taskbar is hidden, and restores it
 on disable, normal quit, and panic/console recovery. A replacement taskbar is
 re-hidden by a two-second watcher check, and an explicitly restored taskbar is not
-re-hidden. A forced kill can leave auto-hide disabled; `--restore-taskbar` shows
-the taskbar but cannot restore the previous setting. When it is true at startup,
+re-hidden. A forced kill leaves the state in
+`%LOCALAPPDATA%\Dockwind\taskbar-auto-hide`; `--restore-taskbar` reads it,
+restores auto-hide, and removes it. When it is true at startup,
 an invalid or unavailable `quit_hotkey` fails startup because the user would lose
 the safe quit path.
 

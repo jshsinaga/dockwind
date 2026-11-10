@@ -1,4 +1,6 @@
 use std::ffi::c_void;
+use std::fs;
+use std::path::PathBuf;
 use std::sync::{
     Mutex,
     atomic::{AtomicBool, Ordering},
@@ -268,6 +270,61 @@ fn set_native_auto_hide(enabled: bool) -> Result<()> {
     Ok(())
 }
 
+const AUTO_HIDE_MARKER_FILE: &str = "taskbar-auto-hide";
+
+fn auto_hide_marker_path() -> Result<PathBuf> {
+    let directory = dirs::data_local_dir().ok_or_else(|| anyhow!("no local app data directory"))?;
+    Ok(directory.join("Dockwind").join(AUTO_HIDE_MARKER_FILE))
+}
+
+fn remember_auto_hide() -> Result<()> {
+    let path = auto_hide_marker_path()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    fs::write(&path, b"1").with_context(|| format!("failed to write {}", path.display()))
+}
+
+fn clear_auto_hide_marker() {
+    let path = match auto_hide_marker_path() {
+        Ok(path) => path,
+        Err(error) => {
+            warn!(%error, "failed to resolve the auto-hide marker path");
+            return;
+        }
+    };
+    match fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            warn!(%error, path = %path.display(), "failed to remove the auto-hide marker")
+        }
+    }
+}
+
+fn restore_auto_hide_marker() -> Result<()> {
+    let path = auto_hide_marker_path()?;
+    let contents = match fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to read {}", path.display()));
+        }
+    };
+    if contents.trim() == "1" {
+        set_native_auto_hide(true)?;
+    }
+    fs::remove_file(&path).with_context(|| format!("failed to remove {}", path.display()))
+}
+
+/// Recovery entry point for `--restore-taskbar`: show the taskbar and restore a
+/// native auto-hide state recorded before a forced process kill.
+pub fn restore_native_recovery() -> Result<()> {
+    restore_native(true)?;
+    restore_auto_hide_marker()
+}
+
 /// Owns the hidden taskbar lifecycle. Restores on drop unless an explicit restore
 /// already succeeded.
 pub struct TaskbarGuard {
@@ -351,6 +408,15 @@ impl TaskbarRuntime {
         }
 
         let watcher = install_watch()?;
+        match native_auto_hide() {
+            Ok(true) => {
+                if let Err(error) = remember_auto_hide() {
+                    warn!(%error, "failed to persist the native auto-hide state");
+                }
+            }
+            Ok(false) => {}
+            Err(error) => warn!(%error, "failed to read the native auto-hide state"),
+        }
         match TaskbarGuard::new() {
             Ok(guard) => {
                 self.watcher = Some(watcher);
@@ -375,21 +441,27 @@ impl TaskbarRuntime {
         if let Some(mut watcher) = self.watcher.take() {
             watcher.shutdown()?;
         }
+        clear_auto_hide_marker();
         info!("native taskbar restored");
         Ok(())
     }
 
     pub fn shutdown(&mut self) -> Vec<anyhow::Error> {
         let mut errors = Vec::new();
+        let mut restored = true;
         if let Some(mut guard) = self.guard.take()
             && let Err(error) = guard.restore()
         {
+            restored = false;
             errors.push(error);
         }
         if let Some(mut watcher) = self.watcher.take()
             && let Err(error) = watcher.shutdown()
         {
             errors.push(error.context("taskbar watcher shutdown failed"));
+        }
+        if restored {
+            clear_auto_hide_marker();
         }
         errors
     }
@@ -399,15 +471,20 @@ impl Drop for TaskbarRuntime {
     fn drop(&mut self) {
         // Explicit shutdown wins. This fallback keeps restore-before-watcher-stop
         // order even when the runtime is dropped without calling it.
+        let mut restored = true;
         if let Some(mut guard) = self.guard.take()
             && let Err(error) = guard.restore()
         {
+            restored = false;
             warn!(%error, "failed to restore the native taskbar on runtime drop");
         }
         if let Some(mut watcher) = self.watcher.take()
             && let Err(error) = watcher.shutdown()
         {
             warn!(%error, "failed to stop the taskbar watcher on runtime drop");
+        }
+        if restored {
+            clear_auto_hide_marker();
         }
     }
 }
@@ -736,8 +813,24 @@ fn restore_records(
 /// Called by the watcher for `TaskbarCreated`. The ownership check and the re-hide
 /// run under the same lock as `restore_native`, so a restore that wins the lock is
 /// never followed by a hide from this callback.
+fn ensure_auto_hide_marker() {
+    if !TASKBAR_OWNERSHIP.auto_hide_restore.load(Ordering::SeqCst) {
+        return;
+    }
+    match native_auto_hide() {
+        Ok(true) => {
+            if let Err(error) = remember_auto_hide() {
+                warn!(%error, "failed to persist the native auto-hide state");
+            }
+        }
+        Ok(false) => {}
+        Err(error) => warn!(%error, "failed to read the native auto-hide state"),
+    }
+}
+
 fn hide_after_taskbar_created() {
     info!("TaskbarCreated received; refreshing the native taskbar");
+    ensure_auto_hide_marker();
     if let Err(error) = TASKBAR_OWNERSHIP.refresh(&NativeTaskbar) {
         warn!(%error, "failed to refresh the restarted taskbar");
     }
@@ -792,6 +885,7 @@ unsafe extern "system" fn taskbar_watch_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     if message == WM_TIMER {
+        ensure_auto_hide_marker();
         if let Err(error) = TASKBAR_OWNERSHIP.refresh(&NativeTaskbar) {
             warn!(%error, "failed to refresh the hidden taskbar");
         }

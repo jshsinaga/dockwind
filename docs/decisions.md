@@ -832,16 +832,21 @@ it with `ShowWindow(SW_HIDE)` is temporary because Explorer restores it. Clearin
 user's setting for restore.
 
 Trade-off: Dockwind changes a shell-wide setting while it hides the taskbar. A
-forced process kill can leave auto-hide disabled. `--restore-taskbar` shows the
-taskbar but does not know the previous auto-hide setting, so the user must
-re-enable it. The watcher and tray checks add a two-second polling cost. A user
-who changes the native auto-hide setting while Dockwind is hiding the taskbar is
-overridden until restore.
+forced process kill can leave auto-hide disabled until `--restore-taskbar` runs.
+The marker file `%LOCALAPPDATA%\Dockwind\taskbar-auto-hide` records the original
+state before the setting is disabled. The recovery command reads and removes it.
+If the marker write failed, the user must re-enable auto-hide manually. The
+watcher and tray checks add a two-second polling cost. A user who changes the
+native auto-hide setting while Dockwind is hiding the taskbar is overridden until
+restore.
 
 Evidence: on 2026-11-11, `ABM_GETSTATE` was `1` before start. With
-`hide_native_taskbar = true`, it became `0` and `Shell_TrayWnd` was hidden. After
-quit it returned to `1`. After a real Explorer restart, the watcher re-hid the
-replacement taskbar with auto-hide `0`; a late `TaskbarCreated` refreshed without
-re-hiding. The tray icon returned and `Shell_NotifyIconGetRect` resolved after the
-taskbar was shown. The AppBar case kept work area `0,0,1920,976` while hidden and
-restored auto-hide `1` and work area `0,0,1920,1080` after quit.
+`hide_native_taskbar = true`, it became `0` and `Shell_TrayWnd` was hidden; the
+marker contained `1`. After quit it returned to `1` and the marker was removed.
+After a forced kill the state stayed `0` and the marker stayed. Running
+`--restore-taskbar` returned the state to `1`, removed the marker, and showed the
+taskbar. After a real Explorer restart, the watcher re-hid the replacement
+taskbar with auto-hide `0`; a late `TaskbarCreated` refreshed without re-hiding.
+The tray icon returned and `Shell_NotifyIconGetRect` resolved after the taskbar
+was shown. The AppBar case kept work area `0,0,1920,976` while hidden and restored
+auto-hide `1` and work area `0,0,1920,1080` after quit.

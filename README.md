@@ -168,7 +168,8 @@ dockwind --restore-taskbar
 
 The default quit hotkey is `Ctrl+Alt+Shift+Q`. Dockwind uses a named mutex to
 prevent multiple dock instances. `--restore-taskbar` runs even when another
-instance is active.
+instance is active. If the native taskbar auto-hide was suspended, the command
+restores it from `%LOCALAPPDATA%\Dockwind\taskbar-auto-hide`.
 
 ## Autostart
 
@@ -259,8 +260,8 @@ manifest and icon. The embedded resources are checked by the build.
   strip through an AppBar. A forced process kill can leave the work area
   reserved until `--restore-taskbar` runs.
 - Dockwind suspends native taskbar auto-hide while the taskbar is hidden. A
-  forced kill can leave auto-hide disabled; `--restore-taskbar` shows the taskbar
-  but does not restore the previous setting.
+  forced kill can leave auto-hide disabled until `--restore-taskbar` runs; that
+  command restores the recorded setting from the marker file.
 - `clock.locale` is accepted but unused. Clock text uses the process locale.
 - `quit_hotkey` is read at startup. The settings window shows a restart notice.
   `hide_native_taskbar` applies live.

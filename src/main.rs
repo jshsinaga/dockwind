@@ -11,7 +11,7 @@ fn main() {
     // The recovery command must stay first and independent of the mutex, the config,
     // and GPUI so a crashed or killed instance can always be recovered.
     if std::env::args().any(|argument| argument == "--restore-taskbar") {
-        if let Err(error) = win::taskbar::restore_native(true) {
+        if let Err(error) = win::taskbar::restore_native_recovery() {
             eprintln!("failed to restore the native taskbar: {error:#}");
             std::process::exit(1);
         }

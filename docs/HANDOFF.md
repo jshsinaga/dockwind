@@ -92,6 +92,7 @@ Runtime paths:
 |---|---|
 | Config | `%APPDATA%\Dockwind\config.toml` |
 | Logs | `%LOCALAPPDATA%\Dockwind\logs\dockwind.log.YYYY-MM-DD` |
+| Auto-hide marker | `%LOCALAPPDATA%\Dockwind\taskbar-auto-hide` |
 | Manifest source | `assets/dockwind.manifest` |
 | Manifest build script | `build.rs` |
 
@@ -149,8 +150,10 @@ Read this before changing taskbar or worker code.
   hiding. A live disable restores before stopping the watcher.
 - Native taskbar auto-hide is recorded once per hide and disabled with
   `ABM_SETSTATE` before the windows are hidden. Normal restore and panic/console
-  recovery re-enable it when it was active. A forced kill cannot restore it;
-  `--restore-taskbar` only shows the taskbar, so re-enable auto-hide manually.
+  recovery re-enable it when it was active. A forced kill leaves the marker at
+  `%LOCALAPPDATA%\Dockwind\taskbar-auto-hide`; `--restore-taskbar` reads it,
+  re-enables auto-hide, and removes it. If the marker write failed, re-enable
+  auto-hide manually.
 - The watcher refreshes every two seconds. It re-hides only when the taskbar
   handle set changed or native auto-hide was re-enabled, so a missed or late
   `TaskbarCreated` is covered without fighting an explicit restore.
@@ -219,6 +222,7 @@ Historical evidence does not automatically verify the integrated code.
 | 2026-11-11 | App list and auto geometry | Horizontal scrolling and middle-click launch were added. A one-second monitor poll repositions the dock on work-area, display, or DPI changes. The dock still rendered at a 300 px width. Resolution and DPI changes and the middle-click gesture were not manually exercised |
 | 2026-11-11 | Taskbar startup and quit | With a 45-second watchdog, startup with `hide_native_taskbar = true` hid `Shell_TrayWnd`. `Ctrl+Alt+Shift+Q` was received, the process exited, and the taskbar was visible again. The log recorded `quit hotkey received` and `native taskbar restored`. `ABM_GETSTATE` went from 1 to 0 while hidden and back to 1 after quit |
 | 2026-11-11 | Native auto-hide | The native taskbar was set to auto-hide (`ABM_GETSTATE = 1`) and `Shell_TrayWnd` was visible. With `hide_native_taskbar = true`, the state became 0 and `Shell_TrayWnd` became hidden. After quit the state returned to 1 and the taskbar was visible |
+| 2026-11-11 | Auto-hide marker recovery | While hiding, `%LOCALAPPDATA%\Dockwind\taskbar-auto-hide` contained `1` and auto-hide was 0. A forced kill left both unchanged. `--restore-taskbar` returned auto-hide to 1, removed the marker, and showed the taskbar. A second run and normal quit also restored auto-hide 1 and removed the marker |
 | 2026-11-11 | Explorer restart | A real `explorer.exe` restart replaced all three taskbar windows. The two-second watcher refresh re-hid the replacement within about six seconds and set auto-hide to 0. The late `TaskbarCreated` broadcast only refreshed the state. The tray icon was re-added and resolved with `Shell_NotifyIconGetRect` after `--restore-taskbar`. Normal quit restored auto-hide 1 and left the taskbar visible without a restore error |
 | 2026-11-11 | AppBar reservation | With `hide_native_taskbar = true`, `reserve_space = true`, `auto_hide = false`, and a 50-second restore watchdog, the work area became `0,0,1920,976` and the dock was placed at `y=976`. `Shell_TrayWnd` was hidden. After `Ctrl+Alt+Shift+Q`, the process exited, the work area returned to `0,0,1920,1040`, and the taskbar was visible. A maximized Notepad had a visible DWM frame of `0,0,1920,976`; its `GetWindowRect` was `984` because of the 8 px invisible border |
 | 2026-11-11 | Installer upgrade | `Dockwind-0.1.0-setup.exe` installed silently. `Dockwind-0.2.0-setup.exe` installed over it with exit 0. The installed `--settings` window title read `Dockwind Settings 0.2.0`. Silent uninstall removed the install directory and Start Menu shortcut and preserved the config |
@@ -292,8 +296,8 @@ section 9. The short version:
 - `reserve_space` requires hiding the native taskbar. A forced process kill can
   leave the reserved work area until `--restore-taskbar` runs.
 - Native taskbar auto-hide is suspended while the taskbar is hidden. A forced
-  process kill can leave it disabled. `--restore-taskbar` shows the taskbar but
-  cannot restore the previous auto-hide setting.
+  process kill leaves it disabled until `--restore-taskbar` runs; that command
+  restores the recorded state from the marker file.
 - The app list scrolls horizontally and supports middle-click launch for pinned
   apps. Tooltips are not implemented.
 - UWP windows are skipped.

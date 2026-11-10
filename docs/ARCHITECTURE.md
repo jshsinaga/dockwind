@@ -324,7 +324,8 @@ starve cancellation. A sent-only wake leaves no posted message and does not bloc
     change the dock's extended styles.
 21. Native taskbar auto-hide is recorded once per hide, disabled before hiding,
     and restored on normal restore and panic/console recovery. A forced kill
-    cannot restore it.
+    leaves `%LOCALAPPDATA%\Dockwind\taskbar-auto-hide`; `--restore-taskbar`
+    consumes it and restores auto-hide.
 22. The taskbar refresh compares current handles with the hidden records. It
     re-hides only a replacement taskbar or a re-enabled auto-hide, so it never
     fights an explicit restore of unchanged handles.
@@ -346,7 +347,7 @@ These are current limits. Do not describe them as fixed.
 | Config geometry is live | `width`, `height`, `offset`, and `orientation` update without a restart. A one-second primary-monitor poll repositions on work-area, display, and DPI changes. A real multi-DPI or resolution change is not manually exercised |
 | Hiding the taskbar does not update `rcWork` | The dock stays above the old work-area edge |
 | AppBar reservation requires a hidden taskbar | `reserve_space` is ignored while the native taskbar is visible. A forced kill leaves the work area reserved until `--restore-taskbar` runs |
-| Native auto-hide is suspended while hidden | A forced kill can leave auto-hide disabled. `--restore-taskbar` shows the taskbar but cannot restore the previous setting. The watcher and tray checks run every two seconds |
+| Native auto-hide is suspended while hidden | A forced kill can leave auto-hide disabled. The marker file lets `--restore-taskbar` restore the previous setting. The watcher and tray checks run every two seconds |
 | Content size defaults to `560x92` | The app list scrolls horizontally; a large list has no visible overflow affordance |
 | `ApplicationFrameHost.exe` windows are skipped | UWP app identity is not mapped |
 | `clock.locale` is accepted but unused | Clock text uses the process locale |
