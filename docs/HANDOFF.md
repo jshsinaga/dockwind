@@ -2,7 +2,7 @@
 
 Last updated: 2026-11-11
 Stage: settings, tray, live theming, installer, and CI integrated. Full gate
-passed on 2026-11-11. Panic/console recovery and a clean-profile installer check
+passed on 2026-11-11. Console-control recovery and a clean-profile installer check
 remain.
 Historical baseline: `482bd7a`
 
@@ -31,7 +31,7 @@ work, and dated evidence. It does not repeat the architecture. Read
 | CI | GitHub Actions gate and installer artifact passed on 2026-11-11. Runs 42878351738 on `189ef25`, 42884752869 on `f8ed473`, 42889880818 on `85e4067`, 42892342420 on `c2984b5`, 42902593790 on `fc65aa3`, 42904347913 on `73ebf42`, 42906568724 on `dfd88e8`, 42911029970 on `639f945`, 42913132229 on `5fbc691`, and 42914769400 on `aa9b53d` completed the `gate` and `installer` jobs. The release workflow dry run 42916491747 on `b252850` built and uploaded the installer without publishing. The tag publish path has not run |
 | Taskbar toggle | Live. Manual hide/restore, native auto-hide suspension, Explorer restart, and late `TaskbarCreated` checks passed on 2026-11-11 |
 | AppBar | `reserve_space` reserves the dock strip when the taskbar is hidden. Work area, visible maximized-frame, and auto-hide interaction checks passed on 2026-11-11. Forced kill needs the recovery command |
-| Final status | Full gate passed on 2026-11-11. Settings, tray, live geometry, live taskbar toggle, native auto-hide, AppBar reservation, the recovery CLI, Explorer restart, the basic installer path, and the release dry run manually checked. Panic/console recovery, tag publish, and clean-profile installer checks are unverified |
+| Final status | Full gate passed on 2026-11-11. Settings, tray, live geometry, live taskbar toggle, native auto-hide, AppBar reservation, the recovery CLI, Explorer restart, the basic installer path, and the release dry run manually checked. Console-control recovery, tag publish, and clean-profile installer checks are unverified |
 
 The original M0 feasibility spike is closed. Do not repeat it unless the UI stack
 changes. Evidence is in `docs/spike-m0.md`.
@@ -134,8 +134,9 @@ Set `RUST_LOG=dockwind=debug` for refresh, reload, and taskbar diagnostics.
   gate and release workflows.
 
 These are current code capabilities. Settings, tray, live geometry, taskbar
-recovery, and a real Explorer restart were manually checked on 2026-11-11.
-Panic/console recovery and a clean-profile installer check are still pending.
+recovery, panic restore, and a real Explorer restart were manually checked on
+2026-11-11.
+Console-control recovery and a clean-profile installer check are still pending.
 
 ## Taskbar Safety
 
@@ -224,6 +225,7 @@ Historical evidence does not automatically verify the integrated code.
 | 2026-11-11 | App list and auto geometry | Horizontal scrolling and middle-click launch were added. A one-second monitor poll repositions the dock on work-area, display, or DPI changes. The dock still rendered at a 300 px width. Resolution and DPI changes and the middle-click gesture were not manually exercised |
 | 2026-11-11 | Taskbar startup and quit | With a 45-second watchdog, startup with `hide_native_taskbar = true` hid `Shell_TrayWnd`. `Ctrl+Alt+Shift+Q` was received, the process exited, and the taskbar was visible again. The log recorded `quit hotkey received` and `native taskbar restored`. `ABM_GETSTATE` went from 1 to 0 while hidden and back to 1 after quit |
 | 2026-11-11 | Native auto-hide | The native taskbar was set to auto-hide (`ABM_GETSTATE = 1`) and `Shell_TrayWnd` was visible. With `hide_native_taskbar = true`, the state became 0 and `Shell_TrayWnd` became hidden. After quit the state returned to 1 and the taskbar was visible |
+| 2026-11-11 | Panic restore | A controlled panic on a debug build with `hide_native_taskbar = true` restored auto-hide to 1 and made `Shell_TrayWnd` visible while the process stayed alive. The marker remained until normal quit, which removed it. The temporary debug test hook was removed from source |
 | 2026-11-11 | Auto-hide marker recovery | While hiding, `%LOCALAPPDATA%\Dockwind\taskbar-auto-hide` contained `1` and auto-hide was 0. A forced kill left both unchanged. `--restore-taskbar` returned auto-hide to 1, removed the marker, and showed the taskbar. A second run and normal quit also restored auto-hide 1 and removed the marker |
 | 2026-11-11 | Explorer restart | A real `explorer.exe` restart replaced all three taskbar windows. The two-second watcher refresh re-hid the replacement within about six seconds and set auto-hide to 0. The late `TaskbarCreated` broadcast only refreshed the state. The tray icon was re-added and resolved with `Shell_NotifyIconGetRect` after `--restore-taskbar`. Normal quit restored auto-hide 1 and left the taskbar visible without a restore error |
 | 2026-11-11 | AppBar reservation | With `hide_native_taskbar = true`, `reserve_space = true`, `auto_hide = false`, and a 50-second restore watchdog, the work area became `0,0,1920,976` and the dock was placed at `y=976`. `Shell_TrayWnd` was hidden. After `Ctrl+Alt+Shift+Q`, the process exited, the work area returned to `0,0,1920,1040`, and the taskbar was visible. A maximized Notepad had a visible DWM frame of `0,0,1920,976`; its `GetWindowRect` was `984` because of the 8 px invisible border |
@@ -242,7 +244,6 @@ Historical evidence does not automatically verify the integrated code.
 
 Not verified on the current integrated code:
 
-- Panic restore.
 - Console-control restore.
 - Clean-profile install and Start Menu shortcut creation. The upgrade, uninstall, and shortcut removal path passed.
 - The tag push publish step. The manual release dry run built and uploaded the installer.
@@ -264,10 +265,9 @@ Order is a recommendation, not a commitment.
 2. **Tag release publish.** Push a `vX.Y.Z` tag and confirm the GitHub Release
    publish step. The manual release dry run already built and uploaded the
    installer without publishing. See PRD P14 and `docs/RELEASE.md`.
-3. **Remaining taskbar recovery checks.** Panic restore and console-control
-   restore. A real Explorer restart, `--restore-taskbar`, startup hide, normal
-   quit, auto-hide restore, and the settings checks passed on 2026-11-11. See PRD
-   U06.
+3. **Remaining taskbar recovery check.** Console-control restore. A real Explorer
+   restart, panic restore, `--restore-taskbar`, startup hide, normal quit,
+   auto-hide restore, and the settings checks passed on 2026-11-11. See PRD U06.
 4. **Automatic geometry check.** Exercise a resolution change, a DPI change, and a
    taskbar hide or restore. The dock polls the primary monitor every second and
    repositions itself. See PRD U02.
@@ -306,8 +306,8 @@ section 9. The short version:
 - `clock.locale` is unused.
 - Mica and Acrylic are unverified on Windows 11.
 - The running UI was exercised at 100% DPI only.
-- Panic and console-control recovery are unverified. Normal quit, live toggles,
-  Explorer restart, auto-hide restore, and `--restore-taskbar` passed.
+- Console-control recovery is unverified. Panic restore, normal quit, live
+  toggles, Explorer restart, auto-hide restore, and `--restore-taskbar` passed.
 - The installer is built and the 0.1.0 to 0.2.0 upgrade, install, and uninstall
   path passed. A clean Windows profile was not tested. The installer is unsigned.
   The release dry run passed; the tag publish path has not run.

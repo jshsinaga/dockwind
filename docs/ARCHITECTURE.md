@@ -358,7 +358,7 @@ These are current limits. Do not describe them as fixed.
 | `clock.locale` is accepted but unused | Clock text uses the process locale |
 | Mica and Acrylic are gated on build 22621 and unverified | Windows 11 visual behavior is not proven on this machine |
 | Running UI was exercised at 100% DPI | 125% to 200% are unit-tested conversions only |
-| Manual desktop cases are unverified | Panic, console, Windows 11, Mica, and real multi-DPI are not verified on the integrated code. Normal quit, taskbar hide and restore, Explorer restart, and the restore CLI passed |
+| Manual desktop cases are unverified | Console-control recovery, Windows 11, Mica, and real multi-DPI are not verified on the integrated code. Panic restore, normal quit, taskbar hide and restore, Explorer restart, and the restore CLI passed |
 
 ## 10. Change Rules
 
