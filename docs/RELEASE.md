@@ -100,7 +100,7 @@ A tag push also validates the tag against `Cargo.toml` and creates or updates th
 GitHub Release.
 
 1. Resolve the version. On a tag push, require `vX.Y.Z` to match `Cargo.toml`.
-2. Build the release binary with locked dependencies.
+2. Run the canonical quality gate, including tests and the release build.
 3. Install Inno Setup.
 4. Build the installer.
 5. Upload the installer artifact.
@@ -117,9 +117,10 @@ The CI gate passed on `windows-latest` on 2026-11-11 for commits `adb2206` and
 `639f945`, 42913132229 on `5fbc691`, and 42914769400 on `aa9b53d` also completed
 the `installer` job and uploaded the `Dockwind-installer` artifact.
 
-Release workflow run 42916491747 on `b252850` was a manual dry run. It completed
-the build job and uploaded `Dockwind-0.2.0-setup` (4,259,448 bytes). It created
-no GitHub Release. The tag push publish path has not run yet.
+Release workflow run 42924851841 on `d61f871` was a manual dry run. It ran the
+full quality gate, built the installer, and uploaded `Dockwind-0.2.0-setup`
+(4,259,713 bytes). It created no GitHub Release. The tag push publish path has
+not run yet.
 
 ## 5. Release Checklist
 
