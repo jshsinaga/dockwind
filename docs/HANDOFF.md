@@ -20,18 +20,18 @@ work, and dated evidence. It does not repeat the architecture. Read
 | Branch | `main` |
 | Source layout | Target layout integrated |
 | Independent review | Cleared on 2026-11-10. No new blockers |
-| Tests | 79 tests passed in the full gate on 2026-11-11 |
+| Tests | 86 tests passed in the full gate on 2026-11-11 |
 | Clippy | `cargo clippy --all-targets --locked -- -D warnings` passed in the final full gate |
 | Intermediate gate | Historical: 59 tests passed before the lifecycle fixes. Superseded by the final gate |
 | Release binary | `target\release\dockwind.exe` |
 | Lints | `unsafe_op_in_unsafe_fn` and `clippy::undocumented_unsafe_blocks` are `deny`. Production-only `unwrap_used` and `expect_used` are denied outside tests |
-| Settings | Native Win32 window on its own thread. Atomic save and external-edit prompt |
-| Tray | Icon, menu, settings, reload, autostart, restore, quit, TaskbarCreated recovery |
-| Installer | Inno Setup 6. Built and smoke-tested on 2026-11-11. Upgrade 0.1.0 to 0.2.0 passed. Clean profile is still pending |
+| Settings | Native Win32 window on its own thread. Atomic save and external-edit prompt. Validation, restart notice, Close discard, and pinned add/remove/reorder passed on 2026-11-11. Comments and unknown keys are not preserved |
+| Tray | Icon, menu, settings, reload, autostart, restore, quit, TaskbarCreated recovery, and a two-second visible-taskbar icon check |
+| Installer | Inno Setup 6. Built and smoke-tested on 2026-11-11. Upgrade 0.1.0 to 0.2.0 passed. The Start Menu shortcut was created and removed. Clean profile is still pending |
 | CI | GitHub Actions gate and installer artifact passed on 2026-11-11. Runs 42878351738 on `189ef25`, 42884752869 on `f8ed473`, 42889880818 on `85e4067`, and 42892342420 on `c2984b5` completed the `gate` and `installer` jobs. The tag release workflow has not run |
-| Taskbar toggle | Live. Manual hide/restore check passed on 2026-11-11 |
-| AppBar | `reserve_space` reserves the dock strip when the taskbar is hidden. Work area and visible maximized-frame checks passed on 2026-11-11. Forced kill needs the recovery command |
-| Final status | Full gate passed on 2026-11-11. Settings, tray, live geometry, live taskbar toggle, AppBar reservation, and the basic installer path manually checked. Explorer restart, panic/console recovery, the recovery CLI, and clean-profile installer checks are unverified |
+| Taskbar toggle | Live. Manual hide/restore, native auto-hide suspension, Explorer restart, and late `TaskbarCreated` checks passed on 2026-11-11 |
+| AppBar | `reserve_space` reserves the dock strip when the taskbar is hidden. Work area, visible maximized-frame, and auto-hide interaction checks passed on 2026-11-11. Forced kill needs the recovery command |
+| Final status | Full gate passed on 2026-11-11. Settings, tray, live geometry, live taskbar toggle, native auto-hide, AppBar reservation, the recovery CLI, Explorer restart, and the basic installer path manually checked. Panic/console recovery, tag release, and clean-profile installer checks are unverified |
 
 The original M0 feasibility spike is closed. Do not repeat it unless the UI stack
 changes. Evidence is in `docs/spike-m0.md`.
@@ -132,9 +132,9 @@ Set `RUST_LOG=dockwind=debug` for refresh, reload, and taskbar diagnostics.
 - Versioned Windows resources, Inno Setup installer script, and GitHub Actions
   gate and release workflows.
 
-These are current code capabilities. Settings, tray, and live geometry were
-manually checked on 2026-11-11. Taskbar recovery and a clean-profile installer
-check are still pending.
+These are current code capabilities. Settings, tray, live geometry, taskbar
+recovery, and a real Explorer restart were manually checked on 2026-11-11.
+Panic/console recovery and a clean-profile installer check are still pending.
 
 ## Taskbar Safety
 
@@ -147,6 +147,15 @@ Read this before changing taskbar or worker code.
   run `--restore-taskbar`; the tested command restores the work area and taskbar.
 - A live enable installs the panic hook, console handler, and watcher before
   hiding. A live disable restores before stopping the watcher.
+- Native taskbar auto-hide is recorded once per hide and disabled with
+  `ABM_SETSTATE` before the windows are hidden. Normal restore and panic/console
+  recovery re-enable it when it was active. A forced kill cannot restore it;
+  `--restore-taskbar` only shows the taskbar, so re-enable auto-hide manually.
+- The watcher refreshes every two seconds. It re-hides only when the taskbar
+  handle set changed or native auto-hide was re-enabled, so a missed or late
+  `TaskbarCreated` is covered without fighting an explicit restore.
+- The tray worker verifies the icon every two seconds while `Shell_TrayWnd` is
+  visible and re-adds a missing icon.
 - `TaskbarRuntime` is shared on the GPUI main thread. The settings window only
   writes the config file; the config watcher applies the toggle.
 - `--restore-taskbar` is handled before the single-instance check. Keep it first.
@@ -204,29 +213,31 @@ Historical evidence does not automatically verify the integrated code.
 | 2026-11-10 | Final full gate | `scripts/check.ps1` passed on the final review-cleared source: fmt, check, clippy with `-D warnings`, **66 tests**, release build, link parser self-test (16 cases), and 27 Markdown links in 11 files |
 | 2026-11-10 | Startup surface fix | Release binary launched with the window hidden and then shown. Log recorded `dock window shown after first frame`. Hidden state was transparent; shown state rendered icons and the clock. The full gate passed after the fix: fmt, check, clippy with `-D warnings`, **66 tests**, release build, link parser, and Markdown links |
 | 2026-11-11 | Live theming and geometry | A config reload changed the width to 700 and the orientation to top. The running dock moved to the top. Restoring 560 and bottom moved it back. Unit tests cover top placement, the top trigger, opacity scaling, and size bounds. 100% DPI |
-| 2026-11-11 | Settings window | Opened from `--settings` and from the tray. Apply saved the new schema through the atomic writer. The external-edit prompt, invalid-field messages, and pinned add/remove/reorder were not exercised |
+| 2026-11-11 | Settings window | Opened through `--settings`; every field matched the config. Apply saved a valid width. Close discarded a draft width of 700 and left the file at 560. Width `abc` produced `width must be a whole number: invalid digit found in string` and left the file unchanged. A new quit hotkey saved and showed `Restart Dockwind to apply the new quit hotkey.` |
+| 2026-11-11 | Settings external edit | With the settings window open, the file was changed to width 620 with an extra comment. Apply showed `The config file changed on disk. Overwrite it?`. No preserved the external file. A second Apply and Yes overwrote it with 560 and dropped the comment |
+| 2026-11-11 | Settings pinned apps | Added `notepad.exe` through the file picker, then Apply wrote one pinned entry. With two entries, Down reordered them and Apply wrote Calculator first. Selecting the first entry and Remove left one Notepad entry |
 | 2026-11-11 | App list and auto geometry | Horizontal scrolling and middle-click launch were added. A one-second monitor poll repositions the dock on work-area, display, or DPI changes. The dock still rendered at a 300 px width. Resolution and DPI changes and the middle-click gesture were not manually exercised |
-| 2026-11-11 | Taskbar startup and quit | With a 45-second watchdog, startup with `hide_native_taskbar = true` hid `Shell_TrayWnd`. `Ctrl+Alt+Shift+Q` was received, the process exited, and the taskbar was visible again. The log recorded `quit hotkey received` and `native taskbar restored` |
+| 2026-11-11 | Taskbar startup and quit | With a 45-second watchdog, startup with `hide_native_taskbar = true` hid `Shell_TrayWnd`. `Ctrl+Alt+Shift+Q` was received, the process exited, and the taskbar was visible again. The log recorded `quit hotkey received` and `native taskbar restored`. `ABM_GETSTATE` went from 1 to 0 while hidden and back to 1 after quit |
+| 2026-11-11 | Native auto-hide | The native taskbar was set to auto-hide (`ABM_GETSTATE = 1`) and `Shell_TrayWnd` was visible. With `hide_native_taskbar = true`, the state became 0 and `Shell_TrayWnd` became hidden. After quit the state returned to 1 and the taskbar was visible |
+| 2026-11-11 | Explorer restart | A real `explorer.exe` restart replaced all three taskbar windows. The two-second watcher refresh re-hid the replacement within about six seconds and set auto-hide to 0. The late `TaskbarCreated` broadcast only refreshed the state. The tray icon was re-added and resolved with `Shell_NotifyIconGetRect` after `--restore-taskbar`. Normal quit restored auto-hide 1 and left the taskbar visible without a restore error |
 | 2026-11-11 | AppBar reservation | With `hide_native_taskbar = true`, `reserve_space = true`, `auto_hide = false`, and a 50-second restore watchdog, the work area became `0,0,1920,976` and the dock was placed at `y=976`. `Shell_TrayWnd` was hidden. After `Ctrl+Alt+Shift+Q`, the process exited, the work area returned to `0,0,1920,1040`, and the taskbar was visible. A maximized Notepad had a visible DWM frame of `0,0,1920,976`; its `GetWindowRect` was `984` because of the 8 px invisible border |
 | 2026-11-11 | Installer upgrade | `Dockwind-0.1.0-setup.exe` installed silently. `Dockwind-0.2.0-setup.exe` installed over it with exit 0. The installed `--settings` window title read `Dockwind Settings 0.2.0`. Silent uninstall removed the install directory and Start Menu shortcut and preserved the config |
+| 2026-11-11 | AppBar with auto-hide | Native auto-hide was 1 and the work area was `0,0,1920,1080`. With `reserve_space = true`, auto-hide became 0, the AppBar work area was `0,0,1920,976`, and `Shell_TrayWnd` was hidden. After quit auto-hide returned to 1, the work area returned to `0,0,1920,1080`, and the taskbar was visible |
 | 2026-11-11 | AppBar forced kill | A forced process kill while reserving space left the work area at `0,0,1920,976`. Running `--restore-taskbar` returned it to `0,0,1920,1040` and showed the taskbar. The recovery command is the tested path |
 | 2026-11-11 | Live taskbar toggle | With a 40-second `--restore-taskbar` watchdog, a config reload changed `hide_native_taskbar` from false to true and `IsWindowVisible(Shell_TrayWnd)` went from true to false. Changing it back restored visibility. The settings checkbox plus Apply repeated the same sequence. The log recorded `taskbar mode updated`, `native taskbar hidden`, and `native taskbar restored` |
 | 2026-11-11 | Hosted CI | GitHub Actions `CI` run 42866275074 on `adb2206` and run 42868103165 on `42421fc` both completed successfully on `windows-latest`. Runs 42878351738 on `189ef25`, 42884752869 on `f8ed473`, 42889880818 on `85e4067`, and 42892342420 on `c2984b5` completed both `gate` and `installer` jobs and uploaded the `Dockwind-installer` artifact |
 | 2026-11-11 | Tray | Icon visible in the notification area. Right-click showed Settings, Reload config, Start with Windows, Restore taskbar, and Quit. The Settings item opened the settings window |
-| 2026-11-11 | Full gate | `scripts/check.ps1` passed on the current source: fmt, check, clippy with `-D warnings`, **79 tests**, release build, link parser self-test (16 cases), and 30 Markdown links in 12 files |
-| 2026-11-11 | Installer | `installer/dockwind.iss`, `scripts/build-installer.ps1`, and `scripts/bump-version.ps1` produced `dist\Dockwind-0.2.0-setup.exe` with Inno Setup 6.7.3. Silent install exited 0, the installed app started with a tray icon, and silent uninstall exited 0. The 0.1.0 to 0.2.0 upgrade was installed silently and uninstalled cleanly. The install directory and Start Menu shortcut were removed and the config was preserved. A clean profile is still untested |
+| 2026-11-11 | Full gate | `scripts/check.ps1` passed on the current source: fmt, check, clippy with `-D warnings`, **86 tests**, release build, link parser self-test (16 cases), and 30 Markdown links in 12 files |
+| 2026-11-11 | Installer | `installer/dockwind.iss`, `scripts/build-installer.ps1`, and `scripts/bump-version.ps1` produced the final `dist\Dockwind-0.2.0-setup.exe` with Inno Setup 6.7.3. Silent 0.1.0 install and 0.2.0 upgrade exited 0. The installed settings title read `Dockwind Settings 0.2.0`. The Start Menu shortcut existed after install and was removed by silent uninstall. The install directory was removed and the config was preserved. A clean profile is still untested |
 | 2026-11-11 | Build resources | `build.rs` injects the package version into the manifest and embeds the manifest and icon. The release build passed |
 | 2026-11-10 | Build warning | Baseline `proc-macro-error2` v2.0.1 warning remains |
 | 2026-11-10 | Earlier debug startup smoke | 4 seconds on Windows 10 build 19045, 1920x1080, 100% DPI, `hide_native_taskbar = false`. Logs showed config load, hotkey registration, placement, transparent styles. Process was force-killed |
 
 Not verified on the current integrated code:
 
-- Real Explorer restart.
 - Panic restore.
 - Console-control restore.
-- `--restore-taskbar` recovery CLI.
-- Settings external-edit prompt, invalid-field messages, and pinned app editing.
-- Clean-profile install, upgrade, and Start Menu and desktop shortcut checks.
+- Clean-profile install and Start Menu shortcut creation. The upgrade, uninstall, and shortcut removal path passed.
 - The tag release workflow and the GitHub Release publish step.
 - Windows 11 behavior.
 - Mica or Acrylic.
@@ -246,31 +257,29 @@ Order is a recommendation, not a commitment.
 2. **Tag release workflow.** Push a `vX.Y.Z` tag and confirm the installer build,
    artifact upload, and GitHub Release publish steps. The CI gate already passes
    on `windows-latest`. See PRD P14 and `docs/RELEASE.md`.
-3. **Remaining taskbar recovery checks.** Real Explorer restart, panic restore,
-   console-control restore, and `--restore-taskbar`. Startup hide and normal quit
-   restore passed on 2026-11-11. See PRD U06.
-4. **Settings follow-up checks.** Exercise the external-edit prompt, invalid field
-   messages, and pinned app add/remove/reorder. The live taskbar toggle is already
-   manually checked. See PRD P02 to P06.
-5. **Automatic geometry check.** Exercise a resolution change, a DPI change, and a
+3. **Remaining taskbar recovery checks.** Panic restore and console-control
+   restore. A real Explorer restart, `--restore-taskbar`, startup hide, normal
+   quit, auto-hide restore, and the settings checks passed on 2026-11-11. See PRD
+   U06.
+4. **Automatic geometry check.** Exercise a resolution change, a DPI change, and a
    taskbar hide or restore. The dock polls the primary monitor every second and
    repositions itself. See PRD U02.
-6. **AppBar forced-kill cleanup.** The work area and visible maximized frame
+5. **AppBar forced-kill cleanup.** The work area and visible maximized frame
    passed on 2026-11-11. After a forced kill, `--restore-taskbar` restores the
    taskbar and work area. Confirm whether the shell eventually clears the
    reservation without the command. See PRD R40.
-7. **App-list polish.** Add tooltips and a clearer overflow affordance.
+6. **App-list polish.** Add tooltips and a clearer overflow affordance.
    Middle-click launch and horizontal scrolling are implemented. See PRD U03.
-8. **UWP identity.** Map `ApplicationFrameHost.exe` windows to the real app, or
+7. **UWP identity.** Map `ApplicationFrameHost.exe` windows to the real app, or
    document a supported alternative. See PRD U04.
-9. **Windows 11 blur.** Exercise Mica and Acrylic on Windows 11 22H2 or newer.
+8. **Windows 11 blur.** Exercise Mica and Acrylic on Windows 11 22H2 or newer.
    See PRD U05.
-10. **Multi-DPI UI.** Exercise the running UI at 125%, 150%, and 200%. See PRD U07.
-11. **Shutdown latency.** Profile teardown if the several-second exit remains.
+9. **Multi-DPI UI.** Exercise the running UI at 125%, 150%, and 200%. See PRD U07.
+10. **Shutdown latency.** Profile teardown if the several-second exit remains.
     See PRD U08.
-12. **Settings polish.** Inline field validation, comment and unknown-key
+11. **Settings polish.** Inline field validation, comment and unknown-key
     preservation, and coordination between multiple settings processes.
-13. **Code signing.** The installer and binary are unsigned. Add signing only with
+12. **Code signing.** The installer and binary are unsigned. Add signing only with
     a certificate and a recorded decision.
 
 ## Known Limitations
@@ -282,19 +291,23 @@ section 9. The short version:
   second; a real multi-DPI or resolution change was not exercised.
 - `reserve_space` requires hiding the native taskbar. A forced process kill can
   leave the reserved work area until `--restore-taskbar` runs.
+- Native taskbar auto-hide is suspended while the taskbar is hidden. A forced
+  process kill can leave it disabled. `--restore-taskbar` shows the taskbar but
+  cannot restore the previous auto-hide setting.
 - The app list scrolls horizontally and supports middle-click launch for pinned
   apps. Tooltips are not implemented.
 - UWP windows are skipped.
 - `clock.locale` is unused.
 - Mica and Acrylic are unverified on Windows 11.
 - The running UI was exercised at 100% DPI only.
-- Explorer restart, panic, console-control, and `--restore-taskbar` recovery are
-  unverified. Normal quit and live toggles passed.
+- Panic and console-control recovery are unverified. Normal quit, live toggles,
+  Explorer restart, auto-hide restore, and `--restore-taskbar` passed.
 - The installer is built and the 0.1.0 to 0.2.0 upgrade, install, and uninstall
   path passed. A clean Windows profile was not tested. The installer is unsigned
   and the release workflow has not run yet.
 - A settings save drops comments and unknown keys. The native window has message
-  box errors, not inline field errors. The taskbar toggle is live.
+  box errors, not inline field errors. Multiple settings processes are not
+  coordinated. The taskbar toggle is live and the settings checks passed.
 - A missing tray icon is logged and does not block the dock.
 
 ## Documentation Map

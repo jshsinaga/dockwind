@@ -6,8 +6,9 @@ and acceptance criteria. It does not own architecture or configuration details.
 Last updated: 2026-11-11
 Current code: integrated, review-cleared, and extended with settings, tray, theming,
 and release delivery
-Current stage: full gate on 2026-11-10 after the settings, tray, and live geometry
-work. Taskbar recovery and installer checks remain manual.
+Current stage: full gate on 2026-11-11 after the settings, tray, live geometry,
+auto-hide, and Explorer recovery work. Panic/console recovery, a clean-profile
+install, and the tag release remain manual.
 Historical baseline: `482bd7a`
 
 ## 1. Product Definition
@@ -88,11 +89,11 @@ A behavior is not Verified only because a code path exists. Evidence lives in
 
 | ID | Requirement | Status | Acceptance criteria |
 |---|---|---|---|
-| R21 | Hide the native taskbar only when configured | Verified | `hide_native_taskbar` defaults to false. The hide path is not entered by default |
-| R22 | Restore the taskbar on normal quit | Verified | The `TaskbarGuard` restores the saved-visible taskbar windows. On 2026-11-11 a watchdog-backed startup hide and `Ctrl+Alt+Shift+Q` quit restored `Shell_TrayWnd` |
-| R23 | Restore the taskbar on panic and console control events | Implemented | The panic hook and console handler use the lock-free force-show path with the irreversible recovered latch. No dated manual panic or console restore test exists for the integrated code |
-| R24 | Restore the taskbar on session end and Explorer restart | Implemented | `WM_ENDSESSION` and a simulated `TaskbarCreated` broadcast exist. A real Explorer restart is not yet exercised |
-| R25 | Provide a standalone recovery command | Implemented | `dockwind --restore-taskbar` force-shows all taskbar windows and runs before the single-instance check. Historical recovery evidence exists at `482bd7a`; the integrated binary has not been re-tested |
+| R21 | Hide the native taskbar only when configured | Verified | `hide_native_taskbar` defaults to false. The hide path is not entered by default. While hidden, Dockwind suspends native taskbar auto-hide and restores the previous state on normal restore |
+| R22 | Restore the taskbar on normal quit | Verified | The `TaskbarGuard` restores the saved-visible taskbar windows and the recorded auto-hide state. On 2026-11-11 a watchdog-backed startup hide and `Ctrl+Alt+Shift+Q` quit restored `Shell_TrayWnd`; `ABM_GETSTATE` returned from 0 to 1 |
+| R23 | Restore the taskbar on panic and console control events | Implemented | The panic hook and console handler use the lock-free force-show path with the irreversible recovered latch. The auto-hide restore is also attempted. No dated manual panic or console restore test exists for the integrated code |
+| R24 | Restore the taskbar on session end and Explorer restart | Verified | `WM_ENDSESSION` and a real Explorer restart use the ownership path. On 2026-11-11 a replacement taskbar was detected within two seconds, auto-hide was disabled again, and the taskbar was hidden. A late `TaskbarCreated` refreshed without re-hiding. The tray icon returned |
+| R25 | Provide a standalone recovery command | Verified | `dockwind --restore-taskbar` force-shows all taskbar windows and runs before the single-instance check. It restored the taskbar and work area after a forced kill on 2026-11-11. After a forced kill it cannot restore a previous native auto-hide setting |
 | R26 | Prevent two dock instances | Verified | A named mutex rejects a second instance. The restore command bypasses the mutex |
 | R27 | Provide a global quit hotkey | Verified | The default `Ctrl+Alt+Shift+Q` registers at startup. The 2026-11-11 watchdog check received the hotkey, exited the app, and restored the taskbar |
 
@@ -111,10 +112,10 @@ A behavior is not Verified only because a code path exists. Evidence lives in
 |---|---|---|---|
 | R32 | Configure dock geometry and orientation | Implemented | `width`, `height`, `offset`, and `orientation` (top or bottom) are validated. Config changes reposition and resize the running dock without a restart. Top and bottom placement are manually checked at 100% DPI |
 | R33 | Configure transparency and appearance | Implemented | `opacity` multiplies the background alpha from 10 to 100. Background, radius, icon size, padding, and opacity apply live. Invalid values are sanitized and logged |
-| R34 | Provide a settings window | Implemented | A separate focusable window edits appearance, behavior, clock, and pinned apps. Apply validates and saves atomically. Close discards unsaved edits. External file changes prompt before overwrite. The window is native Win32, not GPUI |
-| R35 | Provide a tray icon | Implemented | A tray icon exists while the dock runs. Its menu opens settings, reloads config, toggles autostart, restores the taskbar, and quits. Double-click opens settings. The icon returns after `TaskbarCreated` |
+| R34 | Provide a settings window | Verified | A separate focusable window edits appearance, behavior, clock, and pinned apps. Apply validates and saves atomically. Close discards unsaved edits. External file changes prompt before overwrite. On 2026-11-11 the validation, prompt, restart notice, Close discard, and pinned add/remove/reorder checks passed. The window is native Win32, not GPUI |
+| R35 | Provide a tray icon | Verified | A tray icon exists while the dock runs. Its menu opens settings, reloads config, toggles autostart, restores the taskbar, and quits. Double-click opens settings. On 2026-11-11 the icon returned after a real Explorer restart, and a two-second visible-taskbar check re-adds a missing icon |
 | R36 | Manage displayed apps | Implemented | The settings window adds, removes, and reorders pinned apps. `show_running_apps = false` hides running-only apps |
-| R37 | Package a release | Implemented | An Inno Setup script builds a per-user installer with Start Menu and optional desktop shortcuts. Uninstall restores the taskbar and disables autostart. Built and smoke-tested on 2026-11-11. A clean profile and upgrade are not checked |
+| R37 | Package a release | Implemented | An Inno Setup script builds a per-user installer with Start Menu and optional desktop shortcuts. Uninstall restores the taskbar and disables autostart. Built and smoke-tested on 2026-11-11. The 0.1.0 to 0.2.0 upgrade passed; a clean profile is not checked |
 | R38 | Provide hosted CI and release automation | Implemented | GitHub Actions runs the local gate on Windows for pushes and pull requests. The gate and installer artifact job passed on 2026-11-11. A `vX.Y.Z` tag checks the version, builds the installer, and publishes a GitHub release; the tag path has not run yet |
 | R39 | Toggle the native taskbar without restart | Verified | A live config change from false to true hides `Shell_TrayWnd` and from true to false restores it. The panic hook, console handler, and watcher start before hiding. Manual check on 2026-11-11 with a watchdog |
 | R40 | Reserve screen space with an AppBar | Verified | With `hide_native_taskbar = true` and `reserve_space = true`, an AppBar reservation shrinks the work area to stop at the dock top. A maximized window visible frame ends at the work area. `ABM_REMOVE` restores it on quit. A forced kill needs `--restore-taskbar` |
@@ -130,7 +131,7 @@ are not proposed new features.
 | U03 | App-list polish | Pinned app management, `show_running_apps`, middle-click launch, and horizontal scrolling exist. Tooltips and a clearer overflow affordance do not | Middle-click launches a second instance for pinned apps. Tooltips show the app name. A long app list remains usable within the configured width |
 | U04 | UWP identity | `ApplicationFrameHost.exe` windows are skipped | A UWP app shows its real identity and icon, or the limitation is documented with a supported alternative |
 | U05 | Windows 11 blur verification | Mica and Acrylic code exists and is gated on build 22621. It is not verified on Windows 11 | Mica and Acrylic are exercised on Windows 11 22H2 or newer. The radius behavior in those modes is recorded |
-| U06 | Manual robustness coverage | Some Win32 paths are unit-tested or simulated, not exercised for real | A real Explorer restart, panic restore, console-control restore, and fullscreen app are tested with the taskbar visible again afterward |
+| U06 | Manual robustness coverage | Some Win32 paths are unit-tested or simulated, not exercised for real | A real Explorer restart was tested on 2026-11-11; the replacement taskbar was re-hidden and the tray icon returned. Panic restore, console-control restore, and a fullscreen app still need real checks with the taskbar visible afterward |
 | U07 | Multi-DPI UI coverage | Running UI was exercised at 100% only. Conversions are unit-tested to 200% | The running UI is checked at 125%, 150%, and 200% with correct size and placement |
 | U08 | Shutdown latency | Quit works, but the process can exit several seconds after the request | Shutdown completes in a bounded time. Teardown is profiled if the delay remains |
 
@@ -145,12 +146,12 @@ verified.
 
 | ID | Requirement | Status | Acceptance criteria |
 |---|---|---|---|
-| P01 | Provide a settings window | Implemented | A separate, focusable native Win32 window edits the shared config. The dock remains a non-activating tool window. This deliberately deviates from the original GPUI wording, see D031 |
-| P02 | Use draft, Apply, and Close | Implemented | Controls hold the draft. Apply validates and saves. Close discards unsaved edits |
-| P03 | Show validation and errors | Implemented | Invalid fields show a message box naming the failure. A failed save leaves the previous file intact and reports the failure. Inline field errors are not implemented |
-| P04 | Show restart notices | Implemented | Changing `quit_hotkey` shows a restart-required notice. `hide_native_taskbar` and `offset` are live |
+| P01 | Provide a settings window | Verified | A separate, focusable native Win32 window edits the shared config. The dock remains a non-activating tool window. Opened through `--settings` on 2026-11-11; all fields were populated. This deliberately deviates from the original GPUI wording, see D031 |
+| P02 | Use draft, Apply, and Close | Verified | Controls hold the draft. Apply validates and saves. Close discards unsaved edits. On 2026-11-11, a draft width of 700 was discarded by Close and the file stayed at 560 |
+| P03 | Show validation and errors | Verified | Invalid fields show a message box naming the failure. A failed save leaves the previous file intact and reports the failure. On 2026-11-11, width `abc` produced `width must be a whole number: invalid digit found in string` and the file was unchanged. Inline field errors are not implemented |
+| P04 | Show restart notices | Verified | Changing `quit_hotkey` shows a restart-required notice. `hide_native_taskbar` and `offset` are live. On 2026-11-11, a new hotkey saved and showed the restart notice |
 | P05 | Share one config owner | Implemented with limitation | One settings window per process. The dock never writes the file. A `--settings` process can coexist with the dock and the watcher reloads its save. Multiple settings processes are not coordinated |
-| P06 | Save safely | Implemented with limitation | Saves use atomic replacement in the same directory. External edits are detected and prompt before overwrite. Comments and unknown keys are not preserved |
+| P06 | Save safely | Implemented with limitation | Saves use atomic replacement in the same directory. External edits are detected and prompt before overwrite. On 2026-11-11, No preserved the external file and Yes overwrote it. Comments and unknown keys are not preserved |
 | P07 | Avoid new CLI behavior | Superseded | `--settings` was added so the window can open without the dock. Existing commands keep their behavior |
 
 The save contract is defined in `docs/CONFIGURATION.md`.

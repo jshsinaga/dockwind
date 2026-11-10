@@ -13,11 +13,14 @@ use windows::{
     Win32::{
         Foundation::{GetLastError, HWND, LPARAM, LRESULT, WPARAM},
         System::{Console::SetConsoleCtrlHandler, LibraryLoader::GetModuleHandleW},
-        UI::WindowsAndMessaging::{
-            CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, EnumWindows,
-            GetClassNameW, IsWindowVisible, RegisterClassW, RegisterWindowMessageW, SW_HIDE,
-            SW_SHOW, ShowWindow, TranslateMessage, UnregisterClassW, WM_ENDSESSION, WNDCLASSW,
-            WS_EX_TOOLWINDOW, WS_POPUP,
+        UI::{
+            Shell::{ABM_GETSTATE, ABM_SETSTATE, ABS_AUTOHIDE, APPBARDATA, SHAppBarMessage},
+            WindowsAndMessaging::{
+                CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, EnumWindows,
+                GetClassNameW, IsWindowVisible, KillTimer, RegisterClassW, RegisterWindowMessageW,
+                SW_HIDE, SW_SHOW, SetTimer, ShowWindow, TranslateMessage, UnregisterClassW,
+                WINDOW_EX_STYLE, WM_ENDSESSION, WM_TIMER, WNDCLASSW, WS_POPUP,
+            },
         },
     },
     core::{BOOL, HSTRING, PCWSTR},
@@ -27,6 +30,8 @@ use crate::win::worker;
 
 const WATCH_CLASS_NAME: &str = "DockwindTaskbarWatch";
 const READY_TIMEOUT: Duration = Duration::from_secs(5);
+const REFRESH_TIMER_ID: usize = 1;
+const REFRESH_INTERVAL_MS: u32 = 2_000;
 
 #[derive(Debug, Clone, Copy)]
 struct TaskbarRecord {
@@ -41,11 +46,13 @@ struct TaskbarRecord {
 struct TaskbarState {
     hidden_by_dockwind: bool,
     records: Vec<TaskbarRecord>,
+    native_auto_hide: Option<bool>,
 }
 
 struct TaskbarOwnership {
     state: Mutex<TaskbarState>,
     recovered: AtomicBool,
+    auto_hide_restore: AtomicBool,
 }
 
 static TASKBAR_OWNERSHIP: TaskbarOwnership = TaskbarOwnership::new();
@@ -56,8 +63,10 @@ impl TaskbarOwnership {
             state: Mutex::new(TaskbarState {
                 hidden_by_dockwind: false,
                 records: Vec::new(),
+                native_auto_hide: None,
             }),
             recovered: AtomicBool::new(false),
+            auto_hide_restore: AtomicBool::new(false),
         }
     }
 
@@ -77,7 +86,29 @@ impl TaskbarOwnership {
         if only_if_owned && !state.hidden_by_dockwind {
             return Ok(());
         }
-        hide_locked(&mut state, windows, &self.recovered)
+
+        let native_auto_hide = match state.native_auto_hide {
+            Some(value) => value,
+            None => {
+                let value = windows.auto_hide()?;
+                state.native_auto_hide = Some(value);
+                self.auto_hide_restore.store(value, Ordering::SeqCst);
+                value
+            }
+        };
+        if native_auto_hide {
+            windows.set_auto_hide(false)?;
+        }
+
+        let result = hide_locked(&mut state, windows, &self.recovered);
+        if result.is_err() {
+            if native_auto_hide && let Err(error) = windows.set_auto_hide(true) {
+                warn!(%error, "failed to restore native taskbar auto-hide after a failed hide");
+            }
+            state.native_auto_hide = None;
+            self.auto_hide_restore.store(false, Ordering::SeqCst);
+        }
+        result
     }
 
     fn restore(&self, windows: &dyn TaskbarWindows, force: bool) -> Result<()> {
@@ -85,11 +116,46 @@ impl TaskbarOwnership {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        restore_locked(
+        let result = restore_locked(
             &mut state,
             windows,
             force || self.recovered.load(Ordering::SeqCst),
-        )
+        );
+        if result.is_ok() {
+            self.auto_hide_restore.store(false, Ordering::SeqCst);
+        }
+        result
+    }
+
+    /// Fallback for a missed `TaskbarCreated` broadcast. Only replacement taskbar
+    /// windows trigger a hide; an unchanged taskbar is never re-hidden, so explicit
+    /// restores are not fought.
+    fn refresh(&self, windows: &dyn TaskbarWindows) -> Result<()> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if self.recovered.load(Ordering::SeqCst) || !state.hidden_by_dockwind {
+            return Ok(());
+        }
+        let current = windows.handles()?;
+        if current.is_empty() {
+            return Ok(());
+        }
+        let replaced = current.len() != state.records.len()
+            || current
+                .iter()
+                .any(|hwnd| !state.records.iter().any(|record| record.hwnd == *hwnd));
+        let auto_hide = windows.auto_hide()?;
+        if !replaced && !auto_hide {
+            return Ok(());
+        }
+        if auto_hide {
+            windows.set_auto_hide(false)?;
+        }
+        hide_locked(&mut state, windows, &self.recovered)?;
+        info!("native taskbar replacement or auto-hide re-hidden");
+        Ok(())
     }
 
     fn recover(&self, windows: &dyn TaskbarWindows) -> Result<()> {
@@ -97,6 +163,7 @@ impl TaskbarOwnership {
         // never reset. Every native hide checks it AFTER the effect as well: a hide
         // completing after this show must repair its own effect before returning.
         self.recovered.store(true, Ordering::SeqCst);
+        let restore_auto_hide = self.auto_hide_restore.swap(false, Ordering::SeqCst);
         let handles = windows.handles()?;
         if handles.is_empty() {
             bail!("no native taskbar windows were found during forced recovery");
@@ -107,6 +174,9 @@ impl TaskbarOwnership {
             if !windows.is_visible(hwnd) {
                 failures += 1;
             }
+        }
+        if restore_auto_hide && let Err(error) = windows.set_auto_hide(true) {
+            warn!(%error, "failed to restore native taskbar auto-hide during recovery");
         }
         if failures != 0 {
             bail!("failed to show {failures} native taskbar window(s) during recovery");
@@ -123,6 +193,8 @@ trait TaskbarWindows {
     fn handles(&self) -> Result<Vec<isize>>;
     fn is_visible(&self, hwnd: isize) -> bool;
     fn set_visible(&self, hwnd: isize, visible: bool);
+    fn auto_hide(&self) -> Result<bool>;
+    fn set_auto_hide(&self, enabled: bool) -> Result<()>;
 }
 
 struct NativeTaskbar;
@@ -150,6 +222,50 @@ impl TaskbarWindows for NativeTaskbar {
             let _ = ShowWindow(hwnd, if visible { SW_SHOW } else { SW_HIDE });
         }
     }
+
+    fn auto_hide(&self) -> Result<bool> {
+        native_auto_hide()
+    }
+
+    fn set_auto_hide(&self, enabled: bool) -> Result<()> {
+        set_native_auto_hide(enabled)
+    }
+}
+
+fn appbar_data() -> APPBARDATA {
+    APPBARDATA {
+        cbSize: std::mem::size_of::<APPBARDATA>() as u32,
+        ..Default::default()
+    }
+}
+
+fn native_auto_hide() -> Result<bool> {
+    let mut data = appbar_data();
+    // SAFETY: `data` is initialized with the structure size.
+    let state = unsafe { SHAppBarMessage(ABM_GETSTATE, &mut data) };
+    Ok(state & ABS_AUTOHIDE as usize != 0)
+}
+
+fn set_native_auto_hide(enabled: bool) -> Result<()> {
+    let mut data = appbar_data();
+    // SAFETY: `data` is initialized with the structure size.
+    let state = unsafe { SHAppBarMessage(ABM_GETSTATE, &mut data) };
+    let current = state as u32;
+    let desired = if enabled {
+        current | ABS_AUTOHIDE
+    } else {
+        current & !ABS_AUTOHIDE
+    };
+    if desired == current {
+        return Ok(());
+    }
+    data.lParam = LPARAM(desired as isize);
+    // SAFETY: `data` is initialized with the structure size and the desired state.
+    let result = unsafe { SHAppBarMessage(ABM_SETSTATE, &mut data) };
+    if result == 0 {
+        bail!("SHAppBarMessage(ABM_SETSTATE) failed");
+    }
+    Ok(())
 }
 
 /// Owns the hidden taskbar lifecycle. Restores on drop unless an explicit restore
@@ -390,7 +506,7 @@ fn run(stop: isize, ready_sender: mpsc::Sender<Result<(), String>>) -> Result<()
     // SAFETY: `instance` owns the registered class; every string outlives the call.
     let window = match unsafe {
         CreateWindowExW(
-            WS_EX_TOOLWINDOW,
+            WINDOW_EX_STYLE(0),
             &class_name,
             &window_name,
             WS_POPUP,
@@ -436,12 +552,21 @@ fn run(stop: isize, ready_sender: mpsc::Sender<Result<(), String>>) -> Result<()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(taskbar_created);
 
+    // SAFETY: the window is live and owned by this thread.
+    if unsafe { SetTimer(Some(window), REFRESH_TIMER_ID, REFRESH_INTERVAL_MS, None) } == 0 {
+        warn!("failed to install the taskbar refresh timer");
+    }
+
     let _ = ready_sender.send(Ok(()));
 
     let loop_result = message_loop(stop);
 
     // SAFETY: the window and class were created on this thread and are released on the
     // same thread. Failure to clean up is reported but does not replace a loop error.
+    unsafe {
+        let _ = KillTimer(Some(window), REFRESH_TIMER_ID);
+    }
+    // SAFETY: the window was created on this thread and is released once.
     if let Err(error) = unsafe { DestroyWindow(window) } {
         warn!(%error, "failed to destroy the taskbar watch window");
     }
@@ -546,17 +671,31 @@ fn restore_locked(
         bail!("no native taskbar windows were found while restoring");
     }
 
-    if force {
-        state.records.clear();
-        state
-            .records
-            .extend(handles.into_iter().map(|hwnd| TaskbarRecord {
-                hwnd,
-                was_visible: true,
-            }));
-    }
+    // Explorer can replace the taskbar windows while Dockwind owns the hide. The
+    // current handles are authoritative; stale records must not block the restore.
+    // A replacement window that was not recorded before is assumed to have been
+    // visible when Explorer created it and hidden by Dockwind afterward.
+    let previous = std::mem::take(&mut state.records);
+    state.records = handles
+        .into_iter()
+        .map(|hwnd| {
+            let was_visible = if force {
+                true
+            } else {
+                previous
+                    .iter()
+                    .find(|record| record.hwnd == hwnd)
+                    .is_none_or(|record| record.was_visible)
+            };
+            TaskbarRecord { hwnd, was_visible }
+        })
+        .collect();
 
     restore_records(state, windows, force, state.hidden_by_dockwind || force)?;
+    if state.native_auto_hide == Some(true) {
+        windows.set_auto_hide(true)?;
+    }
+    state.native_auto_hide = None;
     state.hidden_by_dockwind = false;
     info!("native taskbar restored");
     Ok(())
@@ -598,8 +737,9 @@ fn restore_records(
 /// run under the same lock as `restore_native`, so a restore that wins the lock is
 /// never followed by a hide from this callback.
 fn hide_after_taskbar_created() {
-    if let Err(error) = TASKBAR_OWNERSHIP.hide(&NativeTaskbar, true) {
-        warn!(%error, "failed to hide the restarted taskbar");
+    info!("TaskbarCreated received; refreshing the native taskbar");
+    if let Err(error) = TASKBAR_OWNERSHIP.refresh(&NativeTaskbar) {
+        warn!(%error, "failed to refresh the restarted taskbar");
     }
 }
 
@@ -651,6 +791,12 @@ unsafe extern "system" fn taskbar_watch_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    if message == WM_TIMER {
+        if let Err(error) = TASKBAR_OWNERSHIP.refresh(&NativeTaskbar) {
+            warn!(%error, "failed to refresh the hidden taskbar");
+        }
+        return LRESULT(0);
+    }
     if message == WM_ENDSESSION && wparam.0 != 0 {
         if let Err(error) = restore_native(false) {
             warn!(%error, "failed to restore the taskbar on session end");
@@ -687,6 +833,7 @@ mod tests {
     struct FakeTaskbar {
         visible: Mutex<Vec<(isize, bool)>>,
         actions: Mutex<Vec<(isize, bool)>>,
+        auto_hide: Mutex<bool>,
     }
 
     impl FakeTaskbar {
@@ -694,7 +841,15 @@ mod tests {
             Self {
                 visible: Mutex::new(handles.iter().map(|hwnd| (*hwnd, true)).collect()),
                 actions: Mutex::new(Vec::new()),
+                auto_hide: Mutex::new(false),
             }
+        }
+
+        fn set_auto_hide_state(&self, enabled: bool) {
+            *self
+                .auto_hide
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = enabled;
         }
 
         fn visible(&self, hwnd: isize) -> bool {
@@ -745,6 +900,21 @@ mod tests {
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .push((hwnd, visible));
         }
+
+        fn auto_hide(&self) -> Result<bool> {
+            Ok(*self
+                .auto_hide
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()))
+        }
+
+        fn set_auto_hide(&self, enabled: bool) -> Result<()> {
+            *self
+                .auto_hide
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = enabled;
+            Ok(())
+        }
     }
 
     #[test]
@@ -753,6 +923,100 @@ mod tests {
         assert!(needs_show(false, true, true));
         assert!(!needs_show(false, false, true));
         assert!(!needs_show(false, true, false));
+    }
+
+    #[test]
+    fn restore_keeps_a_recorded_hidden_taskbar_hidden() {
+        let ownership = TaskbarOwnership::new();
+        let taskbar = FakeTaskbar::new(&[1, 2]);
+        taskbar.set_visible(2, false);
+        ownership.hide(&taskbar, false).expect("initial hide");
+        ownership.restore(&taskbar, false).expect("restore");
+        assert!(taskbar.is_visible(1));
+        assert!(!taskbar.is_visible(2));
+        assert!(!ownership.state.lock().expect("state").hidden_by_dockwind);
+    }
+
+    #[test]
+    fn restore_reconciles_replacement_taskbar_handles() {
+        let ownership = TaskbarOwnership::new();
+        let old = FakeTaskbar::new(&[1, 2]);
+        ownership.hide(&old, false).expect("initial hide");
+        let replacement = FakeTaskbar::new(&[3, 4]);
+        replacement.set_visible(3, false);
+        replacement.set_visible(4, false);
+        ownership
+            .restore(&replacement, false)
+            .expect("restore replacement");
+        assert!(replacement.is_visible(3));
+        assert!(replacement.is_visible(4));
+        assert!(!ownership.state.lock().expect("state").hidden_by_dockwind);
+    }
+
+    #[test]
+    fn refresh_rehides_replacement_without_losing_restore_state() {
+        let ownership = TaskbarOwnership::new();
+        let old = FakeTaskbar::new(&[1]);
+        old.set_auto_hide_state(true);
+        ownership.hide(&old, false).expect("initial hide");
+        let replacement = FakeTaskbar::new(&[2]);
+        replacement.set_auto_hide_state(true);
+        ownership.refresh(&replacement).expect("refresh");
+        assert!(!replacement.is_visible(2));
+        assert!(!replacement.auto_hide().expect("query auto-hide"));
+        ownership.restore(&replacement, false).expect("restore");
+        assert!(replacement.is_visible(2));
+        assert!(replacement.auto_hide().expect("query auto-hide"));
+    }
+
+    #[test]
+    fn refresh_does_not_rehide_an_unchanged_taskbar() {
+        let ownership = TaskbarOwnership::new();
+        let taskbar = FakeTaskbar::new(&[1]);
+        ownership.hide(&taskbar, false).expect("initial hide");
+        taskbar.set_visible(1, true);
+        ownership.refresh(&taskbar).expect("refresh");
+        assert!(taskbar.is_visible(1));
+    }
+
+    #[test]
+    fn hide_disables_and_restore_reenables_native_auto_hide() {
+        let ownership = TaskbarOwnership::new();
+        let taskbar = FakeTaskbar::new(&[1, 2]);
+        taskbar.set_auto_hide_state(true);
+        ownership.hide(&taskbar, false).expect("initial hide");
+        assert!(!taskbar.auto_hide().expect("query auto-hide"));
+        assert!(ownership.auto_hide_restore.load(Ordering::SeqCst));
+        ownership.restore(&taskbar, false).expect("restore");
+        assert!(taskbar.auto_hide().expect("query auto-hide"));
+        assert!(!ownership.auto_hide_restore.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn rehide_after_taskbar_created_disables_new_auto_hide() {
+        let ownership = TaskbarOwnership::new();
+        let old = FakeTaskbar::new(&[1]);
+        old.set_auto_hide_state(true);
+        ownership.hide(&old, false).expect("initial hide");
+        let replacement = FakeTaskbar::new(&[2]);
+        replacement.set_auto_hide_state(true);
+        ownership
+            .hide(&replacement, true)
+            .expect("replacement hide");
+        assert!(!replacement.auto_hide().expect("query auto-hide"));
+        ownership.restore(&replacement, false).expect("restore");
+        assert!(replacement.auto_hide().expect("query auto-hide"));
+    }
+
+    #[test]
+    fn recovery_restores_native_auto_hide() {
+        let ownership = TaskbarOwnership::new();
+        let taskbar = FakeTaskbar::new(&[1]);
+        taskbar.set_auto_hide_state(true);
+        ownership.hide(&taskbar, false).expect("initial hide");
+        ownership.recover(&taskbar).expect("recover");
+        assert!(taskbar.auto_hide().expect("query auto-hide"));
+        assert!(!ownership.auto_hide_restore.load(Ordering::SeqCst));
     }
 
     // Pause a real policy transition at the native visibility-effect boundary.
@@ -788,6 +1052,14 @@ mod tests {
                     .expect("resume effect");
             }
             self.taskbar.set_visible(hwnd, visible);
+        }
+
+        fn auto_hide(&self) -> Result<bool> {
+            self.taskbar.auto_hide()
+        }
+
+        fn set_auto_hide(&self, enabled: bool) -> Result<()> {
+            self.taskbar.set_auto_hide(enabled)
         }
     }
 

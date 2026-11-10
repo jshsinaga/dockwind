@@ -57,10 +57,12 @@ Output:
 dist\Dockwind-<version>-setup.exe
 ```
 
-On 2026-11-11, Inno Setup 6.7.3 built `dist\Dockwind-0.1.0-setup.exe`. A silent
-install, launch, and uninstall passed on this development profile. The install
-directory and shortcuts were removed, and the config was preserved. A clean
-Windows profile and an upgrade were not tested.
+On 2026-11-11, Inno Setup 6.7.3 built the final
+`dist\Dockwind-0.2.0-setup.exe`. A silent 0.1.0 install, a 0.2.0 upgrade over it,
+a settings-window launch, and an uninstall passed on this development profile.
+The installed settings title read `Dockwind Settings 0.2.0`. The Start Menu
+shortcut existed after install. Uninstall removed the install directory and
+shortcut and preserved the config. A clean Windows profile is still untested.
 
 The installer is unsigned. Windows SmartScreen may warn on first run. Code
 signing is future work and needs a certificate and a signing decision.

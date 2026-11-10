@@ -9,11 +9,11 @@ It has a native settings window, a system tray icon, per-user autostart, a globa
 quit hotkey, a standalone taskbar restore command, and an Inno Setup installer.
 
 Current build status: the full gate passes on the current source. Settings, tray,
-live geometry, live taskbar toggling, AppBar reservation, startup hide, normal
-quit restore, and the basic installer path were manually checked on 2026-11-11.
-Explorer restart, panic/console recovery, the recovery CLI, a clean-profile
-install, and the tag release are still open. See
-[docs/HANDOFF.md](docs/HANDOFF.md) for dated evidence.
+live geometry, live taskbar toggling, native auto-hide suspension, AppBar
+reservation, startup hide, normal quit restore, Explorer restart recovery, the
+recovery CLI, and the basic installer path were manually checked on 2026-11-11.
+Panic/console recovery, a clean-profile install, and the tag release are still
+open. See [docs/HANDOFF.md](docs/HANDOFF.md) for dated evidence.
 
 ## Documentation
 
@@ -92,9 +92,11 @@ The window covers:
 - Pinned apps: add, remove, and reorder.
 
 `hide_native_taskbar` applies live, including the taskbar watcher and recovery
-hooks. `quit_hotkey` needs a restart and the window shows a notice after saving
-it. `reserve_space` is available when the native taskbar is hidden. The settings
-window rejects the combination without hiding.
+hooks. While the native taskbar is hidden, Dockwind suspends its auto-hide setting
+and restores it on quit. A two-second watcher fallback re-hides a replacement
+taskbar after an Explorer restart. `quit_hotkey` needs a restart and the window
+shows a notice after saving it. `reserve_space` is available when the native
+taskbar is hidden. The settings window rejects the combination without hiding.
 
 ## Tray
 
@@ -106,8 +108,9 @@ A Dockwind tray icon appears while the dock is running. Right-click it for:
 - Restore taskbar
 - Quit
 
-Double-click opens settings. The tray icon is re-added after an Explorer restart
-and removed on normal shutdown.
+Double-click opens settings. The tray icon is re-added after an Explorer restart,
+checked every two seconds while the taskbar is visible, and removed on normal
+shutdown.
 
 ## Theming
 
@@ -255,6 +258,9 @@ manifest and icon. The embedded resources are checked by the build.
 - `reserve_space` requires `hide_native_taskbar = true`. It reserves the dock
   strip through an AppBar. A forced process kill can leave the work area
   reserved until `--restore-taskbar` runs.
+- Dockwind suspends native taskbar auto-hide while the taskbar is hidden. A
+  forced kill can leave auto-hide disabled; `--restore-taskbar` shows the taskbar
+  but does not restore the previous setting.
 - `clock.locale` is accepted but unused. Clock text uses the process locale.
 - `quit_hotkey` is read at startup. The settings window shows a restart notice.
   `hide_native_taskbar` applies live.
@@ -265,10 +271,11 @@ manifest and icon. The embedded resources are checked by the build.
   not been verified. The current machine is Windows 10 22H2.
 - The running UI was exercised at 100% DPI only. The physical to logical
   conversion and dock rectangle are unit-tested at 100%, 125%, 150%, and 200%.
-- A real Explorer restart, panic restore, console-control restore, and fullscreen
-  app check are still pending.
+- Panic restore, console-control restore, and a fullscreen app check are still
+  pending. A real Explorer restart passed.
 - UWP windows hosted by `ApplicationFrameHost.exe` are skipped.
-- Middle-click launch and app tooltips are not implemented yet.
+- App tooltips are not implemented yet. Middle-click launch for pinned apps is
+  implemented.
 - The installer is unsigned. Windows SmartScreen may warn on first run.
 - The GitHub Actions CI gate passed on 2026-11-11. The tag release workflow has not
   run yet.

@@ -135,9 +135,14 @@ can leave the work area reserved until `--restore-taskbar` runs.
 
 `hide_native_taskbar` is applied live. Enabling it installs the panic hook,
 console handler, and taskbar watcher before hiding. Disabling it restores the
-taskbar before stopping the watcher. When it is true at startup, an invalid or
-unavailable `quit_hotkey` fails startup because the user would lose the safe quit
-path.
+taskbar before stopping the watcher. The runtime records whether the native
+taskbar used auto-hide, disables it while the taskbar is hidden, and restores it
+on disable, normal quit, and panic/console recovery. A replacement taskbar is
+re-hidden by a two-second watcher check, and an explicitly restored taskbar is not
+re-hidden. A forced kill can leave auto-hide disabled; `--restore-taskbar` shows
+the taskbar but cannot restore the previous setting. When it is true at startup,
+an invalid or unavailable `quit_hotkey` fails startup because the user would lose
+the safe quit path.
 
 `quit_hotkey` is read at startup. Changing it saves the value, validates it, and
 shows a restart notice.
@@ -341,5 +346,6 @@ Do not swallow a write or parse error. Log it or show it to the user.
 | `dockwind --settings` | Open the settings window and wait for it to close |
 
 The tray icon is created by a dedicated worker thread. It is removed on normal
-shutdown and re-added if Explorer broadcasts `TaskbarCreated`. A missing tray icon
-is logged and does not block the dock.
+shutdown and re-added if Explorer broadcasts `TaskbarCreated`. While the native
+taskbar is visible, a two-second check also re-adds a missing icon. A missing tray
+icon is logged and does not block the dock.

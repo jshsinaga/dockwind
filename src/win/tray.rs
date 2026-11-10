@@ -13,17 +13,18 @@ use windows::{
         UI::{
             Shell::{
                 NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
-                Shell_NotifyIconW,
+                NOTIFYICONIDENTIFIER, Shell_NotifyIconGetRect, Shell_NotifyIconW,
             },
             WindowsAndMessaging::{
                 AppendMenuW, CheckMenuItem, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
-                DestroyMenu, DestroyWindow, DispatchMessageW, GetCursorPos, HICON, IDI_APPLICATION,
-                LoadIconW, MF_BYCOMMAND, MF_CHECKED, MF_SEPARATOR, MF_STRING, MF_UNCHECKED,
-                PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW,
-                SetForegroundWindow, SetWindowLongPtrW, TPM_LEFTALIGN, TPM_RETURNCMD,
-                TPM_RIGHTBUTTON, TPM_TOPALIGN, TrackPopupMenu, TranslateMessage, WINDOW_STYLE,
-                WM_CONTEXTMENU, WM_DESTROY, WM_LBUTTONDBLCLK, WM_NULL, WM_RBUTTONUP, WNDCLASSW,
-                WS_EX_TOOLWINDOW, WS_OVERLAPPED,
+                DestroyMenu, DestroyWindow, DispatchMessageW, FindWindowW, GetCursorPos, HICON,
+                IDI_APPLICATION, IsWindowVisible, KillTimer, LoadIconW, MF_BYCOMMAND, MF_CHECKED,
+                MF_SEPARATOR, MF_STRING, MF_UNCHECKED, PostMessageW, PostQuitMessage,
+                RegisterClassW, RegisterWindowMessageW, SetForegroundWindow, SetTimer,
+                SetWindowLongPtrW, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, TPM_TOPALIGN,
+                TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CONTEXTMENU,
+                WM_DESTROY, WM_LBUTTONDBLCLK, WM_NULL, WM_RBUTTONUP, WM_TIMER, WNDCLASSW,
+                WS_OVERLAPPED,
             },
         },
     },
@@ -42,6 +43,8 @@ const MENU_RESTORE: usize = 4;
 const MENU_QUIT: usize = 5;
 const CLASS_NAME: PCWSTR = w!("DockwindTray");
 const READY_TIMEOUT: Duration = Duration::from_secs(5);
+const REFRESH_TIMER_ID: usize = 1;
+const REFRESH_INTERVAL_MS: u32 = 2_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayEvent {
@@ -141,7 +144,7 @@ fn run(
     // and is used only as the tray callback and menu owner.
     let hwnd = match unsafe {
         CreateWindowExW(
-            WS_EX_TOOLWINDOW,
+            WINDOW_EX_STYLE(0),
             CLASS_NAME,
             &HSTRING::from("Dockwind tray"),
             WINDOW_STYLE(WS_OVERLAPPED.0),
@@ -203,6 +206,11 @@ fn run(
         return Err(error);
     }
 
+    // SAFETY: the window is live and owned by this thread.
+    if unsafe { SetTimer(Some(hwnd), REFRESH_TIMER_ID, REFRESH_INTERVAL_MS, None) } == 0 {
+        warn!("failed to install the tray icon refresh timer");
+    }
+
     let _ = ready_sender.send(Ok(()));
     info!("tray icon added");
 
@@ -217,6 +225,7 @@ fn run(
     // SAFETY: the window is still live on this thread and the state pointer is
     // owned until destroy.
     unsafe {
+        let _ = KillTimer(Some(hwnd), REFRESH_TIMER_ID);
         let _ = Shell_NotifyIconW(NIM_DELETE, &icon_data(hwnd, icon));
         let _ = DestroyWindow(hwnd);
     }
@@ -267,6 +276,44 @@ unsafe fn add_icon(state: &TrayState) -> Result<()> {
         bail!("Shell_NotifyIconW(NIM_ADD) failed");
     }
     Ok(())
+}
+
+unsafe fn restore_icon(state: &TrayState) -> Result<()> {
+    // A failed or repeated TaskbarCreated can leave a stale icon registered. Remove
+    // it before adding the replacement; a missing icon makes NIM_DELETE fail
+    // harmlessly.
+    // SAFETY: the window and icon handles are live, and the data lives for the call.
+    unsafe {
+        let _ = Shell_NotifyIconW(NIM_DELETE, &icon_data(state.hwnd, state.icon));
+        add_icon(state)
+    }
+}
+
+unsafe fn ensure_icon(state: &TrayState) -> Result<()> {
+    // The shell cannot resolve an icon rectangle while the taskbar is hidden, and a
+    // hidden taskbar does not need a visible icon. Verify only while it is shown.
+    // SAFETY: plain lookup of the shell taskbar window.
+    let Ok(taskbar) = (unsafe { FindWindowW(w!("Shell_TrayWnd"), PCWSTR::null()) }) else {
+        return Ok(());
+    };
+    // SAFETY: `taskbar` is a live top-level window returned by the shell.
+    if !unsafe { IsWindowVisible(taskbar) }.as_bool() {
+        return Ok(());
+    }
+
+    let identifier = NOTIFYICONIDENTIFIER {
+        cbSize: std::mem::size_of::<NOTIFYICONIDENTIFIER>() as u32,
+        hWnd: state.hwnd,
+        uID: TRAY_ID,
+        guidItem: Default::default(),
+    };
+    // SAFETY: `identifier` describes this tray window and the query only reads the
+    // shell's registration.
+    if unsafe { Shell_NotifyIconGetRect(&identifier) }.is_ok() {
+        return Ok(());
+    }
+    // SAFETY: the window and icon handles are live.
+    unsafe { restore_icon(state) }
 }
 
 fn show_menu(state: &TrayState) -> Option<TrayEvent> {
@@ -409,12 +456,24 @@ unsafe extern "system" fn wndproc(
         return windows::Win32::Foundation::LRESULT(0);
     }
 
+    if message == WM_TIMER {
+        if let Some(state) = state {
+            // SAFETY: the tray window and icon handles are live for this window's lifetime.
+            let result = unsafe { ensure_icon(state) };
+            if let Err(error) = result {
+                warn!(%error, "failed to refresh the tray icon");
+            }
+        }
+        return windows::Win32::Foundation::LRESULT(0);
+    }
+
     if let Some(state) = state
         && message == state.taskbar_created
     {
+        info!("TaskbarCreated received; restoring the tray icon");
         // SAFETY: the window and icon handles are live. Re-adding the icon after an
         // Explorer restart is the documented tray recovery.
-        if let Err(error) = unsafe { add_icon(state) } {
+        if let Err(error) = unsafe { restore_icon(state) } {
             warn!(%error, "failed to restore the tray icon after TaskbarCreated");
         }
         return windows::Win32::Foundation::LRESULT(0);

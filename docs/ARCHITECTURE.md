@@ -47,7 +47,7 @@ module exists only when it has code.
 | `src/win/worker.rs` | Manual-reset stop event and `MsgWaitForMultipleObjectsEx` cancellation shared by the event, taskbar, hotkey, and tray workers | Worker cancellation primitive |
 | `src/win/appbar.rs` | AppBar registration, reserved rect, callback window thread, remove on release | AppBar reservation |
 | `src/win/settings.rs` | Native Win32 settings window thread, controls, validation, atomic save, external-edit prompt | Settings window lifetime |
-| `src/win/tray.rs` | Tray icon worker, menu, `TaskbarCreated` recovery | Tray icon and menu |
+| `src/win/tray.rs` | Tray icon worker, menu, `TaskbarCreated` recovery, two-second visible-taskbar icon check | Tray icon and menu |
 | `src/win/*.rs` | Win32 wrappers for windows, DWM, monitors, icons, events, taskbar, appbar, hotkey, menu, settings, tray, autostart, single instance, cursor, launch | OS resources |
 | `src/logging.rs` | Tracing setup and daily log file | Log worker guard |
 
@@ -130,7 +130,7 @@ normal mutex interleavings, a late callback, recovery between hides, and recover
 during an in-flight effect. A message-only window test covers sent-only wake and
 stop, `WM_QUIT`, and a busy queue. An injected cancellation failure at the signal
 operation verifies ownership retention and retry. The full gate passed on
-2026-11-11 with 79 tests, clean Clippy, and a release build.
+2026-11-11 with 86 tests, clean Clippy, and a release build.
 
 ## 5. Runtime Ownership and Lifetimes
 
@@ -186,8 +186,9 @@ The order is part of the safety contract:
 6. If `hide_native_taskbar` is true, `TaskbarRuntime::enable` installs the panic
    hook, console handler, taskbar watcher, and guard in that order. Console
    handler registration is required and fails startup before the taskbar is
-   hidden. If it is false, the runtime holds an empty `TaskbarRuntime` for a later
-   live enable.
+   hidden. The guard records and suspends native taskbar auto-hide before hiding.
+   If it is false, the runtime holds an empty `TaskbarRuntime` for a later live
+   enable.
 7. The config watcher starts.
 8. The tray icon worker starts. A failure is logged and does not block the dock.
 9. The GPUI application runs and the runtime retains a strong `AppController`
@@ -236,7 +237,8 @@ monitor poll --> primary work area + DPI --> dock rect + trigger --> SetWindowPo
 right click --> DockView --> deferred task --> native menu --> AppController command
 hide_native_taskbar --(config reload)--> AppController --> TaskbarRuntime
 reserve_space + hidden taskbar --> DockView --> AppBarHandle --> ABM_SETPOS
-TaskbarCreated --> taskbar watcher --> hide again
+TaskbarCreated --> taskbar watcher --> refresh hide
+taskbar watch timer (2 s) --> taskbar watcher --> refresh hide
 ```
 
 1. Config is loaded and sanitized before the window opens. The watcher sends a
@@ -251,8 +253,9 @@ TaskbarCreated --> taskbar watcher --> hide again
    machine returns progress. The view applies offset, opacity, and click-through.
 5. The native menu runs in a deferred task. `menu_open` pins the dock while the
    modal menu loop runs. Menu actions go back to `AppController`.
-6. The taskbar watcher re-hides a restarted taskbar only while Dockwind owns the
-   hidden state.
+6. The taskbar watcher re-hides a replacement taskbar only while Dockwind owns
+   the hidden state. It also refreshes every two seconds so a missed or late
+   `TaskbarCreated` broadcast cannot leave the taskbar visible.
 
 ## 7. Threading Rules
 
@@ -260,9 +263,9 @@ TaskbarCreated --> taskbar watcher --> hide again
 |---|---|---|
 | GPUI main thread | Window, rendering, config apply, menu actions | No blocking calls in handlers |
 | `win-events` | WinEvent hooks and message loop | Callback is light. No allocation or I/O in the callback. Uses the stop-aware message reader |
-| `taskbar-watch` | Hidden window and message loop | Handles `WM_ENDSESSION`, `WM_CLOSE`, `TaskbarCreated`. Uses the stop-aware message reader |
+| `taskbar-watch` | Hidden window and message loop | Handles `WM_ENDSESSION`, `WM_CLOSE`, `TaskbarCreated`, and a two-second `WM_TIMER` refresh. Uses the stop-aware message reader |
 | `quit-hotkey` | `RegisterHotKey` and message loop | Owns the hotkey registration. Uses the stop-aware message reader |
-| `dockwind-tray` | Hidden window, tray callback, menu | Owns the tray icon and menu. Uses the stop-aware message reader |
+| `dockwind-tray` | Hidden window, tray callback, menu | Owns the tray icon and menu. A two-second timer verifies the icon while the taskbar is visible. Uses the stop-aware message reader |
 | `dockwind-settings` | Settings window and controls | Edits the config file on its own thread. It does not touch GPUI state |
 | `dockwind-appbar` | Hidden AppBar callback window and message loop | Owns the callback window. AppBar setpos and remove calls come from the GPUI thread |
 | `config-watch` | `notify` events, debounce, parse | Sends a full config to the UI. Uses its own control channel and join handle |
@@ -310,8 +313,15 @@ starve cancellation. A sent-only wake leaves no posted message and does not bloc
 15. The settings window prompts before overwriting an external edit or recreating a
     deleted file.
 16. The tray icon is removed on normal shutdown and re-added after `TaskbarCreated`.
+    A two-second timer re-adds it if the taskbar is visible and the icon is missing.
 17. The dock stays non-activating. The settings window is focusable and must not
     change the dock's extended styles.
+18. Native taskbar auto-hide is recorded once per hide, disabled before hiding, and
+    restored on normal restore and panic/console recovery. A forced kill cannot
+    restore it.
+19. The taskbar refresh compares current handles with the hidden records. It
+    re-hides only a replacement taskbar or a re-enabled auto-hide, so it never
+    fights an explicit restore of unchanged handles.
 13. The recovered latch is irreversible. Effective ownership is the hidden flag
     AND `!recovered`. Every hide checks the latch before and after each native
     effect. An in-flight hide that completes after recovery compensates by
@@ -334,12 +344,13 @@ These are current limits. Do not describe them as fixed.
 | Config geometry is live | `width`, `height`, `offset`, and `orientation` update without a restart. A one-second primary-monitor poll repositions on work-area, display, and DPI changes. A real multi-DPI or resolution change is not manually exercised |
 | Hiding the taskbar does not update `rcWork` | The dock stays above the old work-area edge |
 | AppBar reservation requires a hidden taskbar | `reserve_space` is ignored while the native taskbar is visible. A forced kill leaves the work area reserved until `--restore-taskbar` runs |
+| Native auto-hide is suspended while hidden | A forced kill can leave auto-hide disabled. `--restore-taskbar` shows the taskbar but cannot restore the previous setting. The watcher and tray checks run every two seconds |
 | Content size defaults to `560x92` | The app list scrolls horizontally; a large list has no visible overflow affordance |
 | `ApplicationFrameHost.exe` windows are skipped | UWP app identity is not mapped |
 | `clock.locale` is accepted but unused | Clock text uses the process locale |
 | Mica and Acrylic are gated on build 22621 and unverified | Windows 11 visual behavior is not proven on this machine |
 | Running UI was exercised at 100% DPI | 125% to 200% are unit-tested conversions only |
-| Manual desktop cases are unverified | Normal quit, taskbar hide and restore, Explorer restart, panic, console, restore CLI, GUI smoke, Windows 11, Mica, and real multi-DPI are not verified on the integrated code |
+| Manual desktop cases are unverified | Panic, console, Windows 11, Mica, and real multi-DPI are not verified on the integrated code. Normal quit, taskbar hide and restore, Explorer restart, and the restore CLI passed |
 
 ## 10. Change Rules
 
