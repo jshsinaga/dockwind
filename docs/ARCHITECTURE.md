@@ -288,45 +288,47 @@ starve cancellation. A sent-only wake leaves no posted message and does not bloc
    taskbar. Console handler registration failure aborts startup before hiding.
    A live enable follows the same order.
 4. The same taskbar state mutex guards the ownership flag, the visibility records,
-   restore, and the `TaskbarCreated` re-hide. A restore that wins the lock is not
-   followed by a hide.
+   restore, the `TaskbarCreated` refresh, and the timer refresh. A restore that
+   wins the lock is not followed by a hide.
 5. Panic and console recovery use the lock-free force-show path. They may show a
    taskbar the user hid intentionally; that is preferred to a hidden desktop.
-6. `WS_EX_TOOLWINDOW` is set, `WS_EX_APPWINDOW` is clear, and the window has no
-   taskbar button or Alt+Tab entry.
-7. The dock does not take keyboard focus.
-8. All `unsafe` stays under `src/win/` and has a `// SAFETY:` comment.
-9. Pure modules do not import GPUI or Win32 types unless the type is a plain
-   value such as `Bounds`.
-10. Config updates run on the GPUI thread.
-11. A failed config reload never replaces the last valid config.
-12. A taskbar recovery path never leaves the taskbar hidden after a handled exit.
-13. The dock window is not shown before GPUI has drawn its first frame. An empty
+6. The recovered latch is irreversible. Effective ownership is the hidden flag
+   AND `!recovered`. Every hide checks the latch before and after each native
+   effect. An in-flight hide that completes after recovery compensates by
+   force-showing its recorded handles.
+7. `WS_EX_TOOLWINDOW` is set on the dock, `WS_EX_APPWINDOW` is clear, and the
+   window has no taskbar button or Alt+Tab entry.
+8. The dock does not take keyboard focus.
+9. All `unsafe` stays under `src/win/` and has a `// SAFETY:` comment.
+10. Pure modules do not import GPUI or Win32 types unless the type is a plain
+    value such as `Bounds`.
+11. Config updates run on the GPUI thread.
+12. A failed config reload never replaces the last valid config.
+13. A taskbar recovery path never leaves the taskbar hidden after a handled exit.
+14. The dock window is not shown before GPUI has drawn its first frame. An empty
     native surface must never be visible.
-14. An AppBar reservation is enabled only when `hide_native_taskbar` and
+15. An AppBar reservation is enabled only when `hide_native_taskbar` and
     `reserve_space` are both true. The reserved rect is removed before the
     process exits or the taskbar is restored.
-15. The AppBar reserved rect starts at the dock top (bottom edge) or ends at the
+16. The AppBar reserved rect starts at the dock top (bottom edge) or ends at the
     dock bottom (top edge), so maximized windows cannot cover the dock.
-14. The settings window validates before saving and writes through a same-directory
-    temporary file plus an atomic rename. A failed save leaves the previous file.
-15. The settings window prompts before overwriting an external edit or recreating a
-    deleted file.
-16. The tray icon is removed on normal shutdown and re-added after `TaskbarCreated`.
-    A two-second timer re-adds it if the taskbar is visible and the icon is missing.
-17. The dock stays non-activating. The settings window is focusable and must not
+17. The settings window validates before saving and writes through a
+    same-directory temporary file plus an atomic rename. A failed save leaves the
+    previous file.
+18. The settings window prompts before overwriting an external edit or recreating
+    a deleted file.
+19. The tray icon is removed on normal shutdown and re-added after
+    `TaskbarCreated`. A two-second timer re-adds it if the taskbar is visible and
+    the icon is missing.
+20. The dock stays non-activating. The settings window is focusable and must not
     change the dock's extended styles.
-18. Native taskbar auto-hide is recorded once per hide, disabled before hiding, and
-    restored on normal restore and panic/console recovery. A forced kill cannot
-    restore it.
-19. The taskbar refresh compares current handles with the hidden records. It
+21. Native taskbar auto-hide is recorded once per hide, disabled before hiding,
+    and restored on normal restore and panic/console recovery. A forced kill
+    cannot restore it.
+22. The taskbar refresh compares current handles with the hidden records. It
     re-hides only a replacement taskbar or a re-enabled auto-hide, so it never
     fights an explicit restore of unchanged handles.
-13. The recovered latch is irreversible. Effective ownership is the hidden flag
-    AND `!recovered`. Every hide checks the latch before and after each native
-    effect. An in-flight hide that completes after recovery compensates by
-    force-showing its recorded handles.
-14. The runtime holds the strong `AppController` reference for the whole event
+23. The runtime holds the strong `AppController` reference for the whole event
     loop. The logger drops last.
 15. The event, taskbar, and hotkey workers use the stop-aware message reader. The
     reader polls the stop event, consumes one posted message with `PeekMessageW`,
