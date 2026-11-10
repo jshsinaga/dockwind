@@ -46,7 +46,7 @@ module exists only when it has code.
 | `src/ui/theme.rs` | Color, contrast, radius, padding mapping | Derived theme |
 | `src/win/worker.rs` | Manual-reset stop event and `MsgWaitForMultipleObjectsEx` cancellation shared by the event, taskbar, hotkey, and tray workers | Worker cancellation primitive |
 | `src/win/appbar.rs` | AppBar registration, reserved rect, callback window thread, remove on release | AppBar reservation |
-| `src/win/settings.rs` | Native Win32 settings window thread, controls, validation, atomic save, external-edit prompt | Settings window lifetime |
+| `src/win/settings.rs` | Native Win32 settings window thread, controls, validation, comment-preserving atomic save, external-edit prompt | Settings window lifetime |
 | `src/win/tray.rs` | Tray icon worker, menu, `TaskbarCreated` recovery, two-second visible-taskbar icon check | Tray icon and menu |
 | `src/win/*.rs` | Win32 wrappers for windows, DWM, monitors, icons, events, taskbar, appbar, hotkey, menu, settings, tray, autostart, single instance, cursor, launch | OS resources |
 | `src/logging.rs` | Tracing setup and daily log file | Log worker guard |
@@ -130,7 +130,7 @@ normal mutex interleavings, a late callback, recovery between hides, and recover
 during an in-flight effect. A message-only window test covers sent-only wake and
 stop, `WM_QUIT`, and a busy queue. An injected cancellation failure at the signal
 operation verifies ownership retention and retry. The full gate passed on
-2026-11-11 with 86 tests, clean Clippy, and a release build.
+2026-11-11 with 89 tests, clean Clippy, and a release build.
 
 ## 5. Runtime Ownership and Lifetimes
 
@@ -312,9 +312,11 @@ starve cancellation. A sent-only wake leaves no posted message and does not bloc
     process exits or the taskbar is restored.
 16. The AppBar reserved rect starts at the dock top (bottom edge) or ends at the
     dock bottom (top edge), so maximized windows cannot cover the dock.
-17. The settings window validates before saving and writes through a
-    same-directory temporary file plus an atomic rename. A failed save leaves the
-    previous file.
+17. The settings window validates before saving and updates a valid existing
+    TOML document in place with `toml_edit`, then writes through a same-directory
+    temporary file plus an atomic rename. Comments, ordering, and unknown keys
+    survive; `pinned` entries are rewritten. A failed save leaves the previous
+    file, and an invalid file is not overwritten.
 18. The settings window prompts before overwriting an external edit or recreating
     a deleted file.
 19. The tray icon is removed on normal shutdown and re-added after

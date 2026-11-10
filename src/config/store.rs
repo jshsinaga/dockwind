@@ -3,8 +3,9 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
+use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, value};
 
-use super::model::{Config, LoadedConfig};
+use super::model::{BlurMode, Config, DockEdge, LoadedConfig};
 
 pub const CONFIG_DIR_NAME: &str = "Dockwind";
 pub const CONFIG_FILE_NAME: &str = "config.toml";
@@ -83,52 +84,135 @@ impl Config {
         Ok(config.sanitize())
     }
 
-    /// Writes a validated config through a same-directory temporary file and an
-    /// atomic replace. A failed write leaves the previous file untouched.
-    pub fn save_atomic(&self, path: &Path) -> Result<LoadedConfig, ConfigError> {
+    /// Writes a validated config while preserving comments, key ordering, and
+    /// unknown keys in an existing valid TOML document. An invalid existing file
+    /// is not overwritten.
+    pub fn save_atomic_preserving(&self, path: &Path) -> Result<LoadedConfig, ConfigError> {
         let loaded = self.clone().sanitize();
-        let body = toml::to_string_pretty(&loaded.config)?;
-        let contents = format!(
-            "# Dockwind configuration\n\
-             # Written by the Dockwind settings window. Edit and save to reload.\n\n{body}"
-        );
-
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|source| ConfigError::Write {
+        let contents = if path.exists() {
+            let existing = fs::read_to_string(path).map_err(|source| ConfigError::Read {
                 path: path.to_path_buf(),
                 source,
             })?;
-        }
-
-        let temporary = path.with_extension("toml.tmp");
-        let mut file = fs::File::create(&temporary).map_err(|source| ConfigError::Write {
-            path: temporary.clone(),
-            source,
-        })?;
-        let write_result = file
-            .write_all(contents.as_bytes())
-            .and_then(|()| file.sync_all())
-            .map_err(|source| ConfigError::Write {
-                path: temporary.clone(),
-                source,
-            });
-        drop(file);
-
-        if let Err(error) = write_result {
-            let _ = fs::remove_file(&temporary);
-            return Err(error);
-        }
-
-        if let Err(source) = fs::rename(&temporary, path) {
-            let _ = fs::remove_file(&temporary);
-            return Err(ConfigError::Write {
-                path: path.to_path_buf(),
-                source,
-            });
-        }
-
+            let mut document: DocumentMut =
+                existing
+                    .parse::<DocumentMut>()
+                    .map_err(|error| ConfigError::Parse {
+                        path: path.to_path_buf(),
+                        message: error.to_string(),
+                    })?;
+            update_document(&mut document, &loaded.config);
+            document.to_string()
+        } else {
+            let body = toml::to_string_pretty(&loaded.config)?;
+            format!(
+                "# Dockwind configuration\n\
+                 # Written by the Dockwind settings window. Edit and save to reload.\n\n{body}"
+            )
+        };
+        write_atomic(path, &contents)?;
         Ok(loaded)
     }
+}
+
+fn write_atomic(path: &Path, contents: &str) -> Result<(), ConfigError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|source| ConfigError::Write {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    }
+
+    let temporary = path.with_extension("toml.tmp");
+    let mut file = fs::File::create(&temporary).map_err(|source| ConfigError::Write {
+        path: temporary.clone(),
+        source,
+    })?;
+    let write_result = file
+        .write_all(contents.as_bytes())
+        .and_then(|()| file.sync_all())
+        .map_err(|source| ConfigError::Write {
+            path: temporary.clone(),
+            source,
+        });
+    drop(file);
+
+    if let Err(error) = write_result {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
+
+    if let Err(source) = fs::rename(&temporary, path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(ConfigError::Write {
+            path: path.to_path_buf(),
+            source,
+        });
+    }
+    Ok(())
+}
+
+fn table_mut<'a>(document: &'a mut DocumentMut, key: &str) -> &'a mut Table {
+    let item = document[key].or_insert(Item::Table(Table::new()));
+    if !item.is_table() {
+        *item = Item::Table(Table::new());
+    }
+    match item.as_table_mut() {
+        Some(table) => table,
+        None => unreachable!("the table was inserted above"),
+    }
+}
+
+fn update_document(document: &mut DocumentMut, config: &Config) {
+    let appearance = table_mut(document, "appearance");
+    appearance["background"] = value(config.appearance.background.as_str());
+    appearance["corner_radius"] = value(config.appearance.corner_radius as i64);
+    appearance["blur"] = value(match config.appearance.blur {
+        BlurMode::None => "none",
+        BlurMode::Mica => "mica",
+        BlurMode::Acrylic => "acrylic",
+    });
+    appearance["icon_size"] = value(config.appearance.icon_size as i64);
+    appearance["padding"] = value(config.appearance.padding as i64);
+    appearance["width"] = value(config.appearance.width as i64);
+    appearance["height"] = value(config.appearance.height as i64);
+    appearance["offset"] = value(config.appearance.offset as i64);
+    appearance["orientation"] = value(match config.appearance.orientation {
+        DockEdge::Bottom => "bottom",
+        DockEdge::Top => "top",
+    });
+    appearance["opacity"] = value(config.appearance.opacity as i64);
+    appearance.remove("margin_bottom");
+
+    let behavior = table_mut(document, "behavior");
+    behavior["auto_hide"] = value(config.behavior.auto_hide);
+    behavior["show_delay_ms"] = value(config.behavior.show_delay_ms as i64);
+    behavior["hide_delay_ms"] = value(config.behavior.hide_delay_ms as i64);
+    behavior["animation_ms"] = value(config.behavior.animation_ms as i64);
+    behavior["reserve_space"] = value(config.behavior.reserve_space);
+    behavior["hide_native_taskbar"] = value(config.behavior.hide_native_taskbar);
+    behavior["hide_in_fullscreen"] = value(config.behavior.hide_in_fullscreen);
+    behavior["show_running_apps"] = value(config.behavior.show_running_apps);
+    behavior["quit_hotkey"] = value(config.behavior.quit_hotkey.as_str());
+
+    let clock = table_mut(document, "clock");
+    clock["time_format"] = value(config.clock.time_format.as_str());
+    clock["date_format"] = value(config.clock.date_format.as_str());
+    clock["locale"] = value(config.clock.locale.as_str());
+
+    let mut pinned = ArrayOfTables::new();
+    for app in &config.pinned {
+        let mut table = Table::new();
+        table["name"] = value(app.name.as_str());
+        table["path"] = value(app.path.as_str());
+        let mut args = toml_edit::Array::new();
+        for arg in &app.args {
+            args.push(arg.as_str());
+        }
+        table["args"] = value(args);
+        pinned.push(table);
+    }
+    document["pinned"] = Item::ArrayOfTables(pinned);
 }
 
 fn write_default(path: &Path, config: &Config) -> Result<(), ConfigError> {
@@ -186,14 +270,14 @@ mod tests {
     }
 
     #[test]
-    fn save_atomic_round_trips_and_removes_the_temporary_file() {
+    fn save_preserving_round_trips_and_removes_the_temporary_file() {
         let directory = tempfile::tempdir().expect("tempdir");
         let path = directory.path().join("config.toml");
         let mut config = Config::default();
         config.appearance.width = 720;
         config.appearance.orientation = crate::config::DockEdge::Top;
 
-        let saved = config.save_atomic(&path).expect("save config");
+        let saved = config.save_atomic_preserving(&path).expect("save config");
         assert_eq!(saved.config, config);
         assert!(!directory.path().join("config.toml.tmp").exists());
 
@@ -202,14 +286,92 @@ mod tests {
     }
 
     #[test]
-    fn save_atomic_writes_sanitized_values() {
+    fn save_atomic_preserving_keeps_comments_and_unknown_keys() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("config.toml");
+        fs::write(
+            &path,
+            r##"# top comment
+custom = "keep"
+
+[appearance]
+# width comment
+width = 560
+
+[unknown]
+value = 7
+"##,
+        )
+        .expect("write baseline");
+
+        let mut config = Config::default();
+        config.appearance.width = 700;
+        config
+            .save_atomic_preserving(&path)
+            .expect("save preserved");
+
+        let text = fs::read_to_string(&path).expect("read saved");
+        assert!(text.contains("# top comment"));
+        assert!(text.contains("custom = \"keep\""));
+        assert!(text.contains("# width comment"));
+        assert!(text.contains("[unknown]"));
+        assert!(text.contains("width = 700"));
+
+        let loaded = Config::load_existing(&path).expect("reload saved");
+        assert_eq!(loaded.config.appearance.width, 700);
+    }
+
+    #[test]
+    fn save_atomic_preserving_removes_legacy_alias_and_updates_pinned() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("config.toml");
+        fs::write(&path, "pinned = []\n\n[appearance]\nmargin_bottom = 24\n")
+            .expect("write baseline");
+
+        let mut config = Config::default();
+        config.appearance.offset = 12;
+        config.pinned.push(crate::config::PinnedApp {
+            name: "Notepad".to_string(),
+            path: "C:\\Windows\\System32\\notepad.exe".to_string(),
+            args: Vec::new(),
+        });
+        config
+            .save_atomic_preserving(&path)
+            .expect("save preserved");
+
+        let text = fs::read_to_string(&path).expect("read saved");
+        assert!(!text.contains("margin_bottom"));
+        assert!(text.contains("offset = 12"));
+        let loaded = Config::load_existing(&path).expect("reload saved");
+        assert_eq!(loaded.config.pinned.len(), 1);
+        assert_eq!(loaded.config.pinned[0].name, "Notepad");
+    }
+
+    #[test]
+    fn save_atomic_preserving_rejects_invalid_existing_toml() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("config.toml");
+        fs::write(&path, "not valid = [").expect("write invalid");
+
+        assert!(matches!(
+            Config::default().save_atomic_preserving(&path),
+            Err(ConfigError::Parse { .. })
+        ));
+        assert_eq!(
+            fs::read_to_string(&path).expect("read unchanged"),
+            "not valid = ["
+        );
+    }
+
+    #[test]
+    fn save_preserving_writes_sanitized_values() {
         let directory = tempfile::tempdir().expect("tempdir");
         let path = directory.path().join("config.toml");
         let mut config = Config::default();
         config.appearance.width = 10;
         config.appearance.opacity = 5;
 
-        let saved = config.save_atomic(&path).expect("save config");
+        let saved = config.save_atomic_preserving(&path).expect("save config");
         assert_eq!(saved.config.appearance.width, 560);
         assert_eq!(saved.config.appearance.opacity, 100);
         assert_eq!(saved.warnings.len(), 2);

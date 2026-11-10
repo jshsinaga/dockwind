@@ -286,14 +286,17 @@ the file again. If the contents changed, it asks before overwriting. If the file
 was deleted, it asks before recreating it. A failed save leaves the existing file
 intact and reports the error.
 
-The current writer does not merge external edits. Overwrite replaces the whole
-file after confirmation.
+The writer does not merge external field values into the draft. Overwrite applies
+the draft's known fields to the current valid document after confirmation. An
+invalid current file is not overwritten.
 
 ### 6.5 Preserved User Content
 
-The current writer serializes the full known schema. Comments, key ordering, and
-unknown keys are not preserved by a settings save. This is a known limitation.
-Editing the file by hand preserves them until the settings window saves.
+A valid file keeps its comments, key ordering, and unknown keys. The writer
+updates known keys in place through `toml_edit`; it does not serialize a fresh
+document. The `pinned` array is rewritten from the draft, so comments and unknown
+keys inside `pinned` entries are not preserved. A file with invalid TOML is
+rejected by Apply and left unchanged.
 
 ### 6.6 Restart Notices
 

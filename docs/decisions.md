@@ -850,3 +850,29 @@ taskbar with auto-hide `0`; a late `TaskbarCreated` refreshed without re-hiding.
 The tray icon returned and `Shell_NotifyIconGetRect` resolved after the taskbar
 was shown. The AppBar case kept work area `0,0,1920,976` while hidden and restored
 auto-hide `1` and work area `0,0,1920,1080` after quit.
+
+## D041: Update the existing TOML document when settings save
+
+Date: 2026-11-11
+
+The settings writer parses an existing valid file with `toml_edit`, updates the
+known keys in place, and writes the result through the same atomic temporary-file
+and rename path. Comments, key ordering, unknown top-level keys, and unknown keys
+inside known tables survive. The `pinned` array is rebuilt from the draft, so
+comments and unknown keys inside pinned entries do not survive. A legacy
+`margin_bottom` is removed when `offset` is written. An invalid existing TOML file
+is rejected and left unchanged rather than replaced with a fresh document.
+
+Reason: a settings save should not destroy user comments or forward-compatible
+keys. A full re-serialization was simple but made the config file destructive to
+hand editing and future fields.
+
+Trade-off: `toml_edit` is a new direct dependency. The writer is not a full merge:
+external field values are not merged into the open draft, and the pinned array is
+replaced. A corrupt file blocks Apply until the user fixes or removes it; the
+error names the parse failure and the file stays intact.
+
+Evidence: unit tests on 2026-11-11 preserved a top-level comment, an unknown
+top-level key, an unknown table, and a comment on `width` while changing width to
+700. A legacy alias was removed, pinned entries round-tripped, and an invalid file
+was rejected without modification. The full gate covers these tests.

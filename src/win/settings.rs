@@ -568,7 +568,7 @@ fn apply(hwnd: HWND, state: &mut SettingsState) -> Result<()> {
     }
 
     let loaded = config
-        .save_atomic(&state.path)
+        .save_atomic_preserving(&state.path)
         .context("failed to save the configuration; the existing file is unchanged")?;
 
     state.config = loaded.config.clone();

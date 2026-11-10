@@ -151,7 +151,7 @@ verified.
 | P03 | Show validation and errors | Verified | Invalid fields show a message box naming the failure. A failed save leaves the previous file intact and reports the failure. On 2026-11-11, width `abc` produced `width must be a whole number: invalid digit found in string` and the file was unchanged. Inline field errors are not implemented |
 | P04 | Show restart notices | Verified | Changing `quit_hotkey` shows a restart-required notice. `hide_native_taskbar` and `offset` are live. On 2026-11-11, a new hotkey saved and showed the restart notice |
 | P05 | Share one config owner | Implemented with limitation | One settings window per process. The dock never writes the file. A `--settings` process can coexist with the dock and the watcher reloads its save. Multiple settings processes are not coordinated |
-| P06 | Save safely | Implemented with limitation | Saves use atomic replacement in the same directory. External edits are detected and prompt before overwrite. On 2026-11-11, No preserved the external file and Yes overwrote it. Comments and unknown keys are not preserved |
+| P06 | Save safely | Verified | Saves use atomic replacement in the same directory. External edits are detected and prompt before overwrite. On 2026-11-11, No preserved the external file and Yes overwrote it. A valid file keeps its comments, key ordering, and unknown keys because known fields are updated in place; an invalid file is not overwritten. Comments and unknown keys inside rewritten `pinned` entries are not preserved |
 | P07 | Avoid new CLI behavior | Superseded | `--settings` was added so the window can open without the dock. Existing commands keep their behavior |
 
 The save contract is defined in `docs/CONFIGURATION.md`.
