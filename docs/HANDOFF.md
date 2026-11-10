@@ -20,7 +20,7 @@ work, and dated evidence. It does not repeat the architecture. Read
 | Branch | `main` |
 | Source layout | Target layout integrated |
 | Independent review | Cleared on 2026-11-10. No new blockers |
-| Tests | 89 tests passed in the full gate on 2026-11-11 |
+| Tests | 92 tests passed in the full gate on 2026-11-11 |
 | Clippy | `cargo clippy --all-targets --locked -- -D warnings` passed in the final full gate |
 | Intermediate gate | Historical: 59 tests passed before the lifecycle fixes. Superseded by the final gate |
 | Release binary | `target\release\dockwind.exe` |
@@ -233,7 +233,7 @@ Historical evidence does not automatically verify the integrated code.
 | 2026-11-11 | Live taskbar toggle | With a 40-second `--restore-taskbar` watchdog, a config reload changed `hide_native_taskbar` from false to true and `IsWindowVisible(Shell_TrayWnd)` went from true to false. Changing it back restored visibility. The settings checkbox plus Apply repeated the same sequence. The log recorded `taskbar mode updated`, `native taskbar hidden`, and `native taskbar restored` |
 | 2026-11-11 | Hosted CI | GitHub Actions `CI` run 42866275074 on `adb2206` and run 42868103165 on `42421fc` both completed successfully on `windows-latest`. Runs 42878351738 on `189ef25`, 42884752869 on `f8ed473`, 42889880818 on `85e4067`, 42892342420 on `c2984b5`, 42902593790 on `fc65aa3`, 42904347913 on `73ebf42`, 42906568724 on `dfd88e8`, 42911029970 on `639f945`, and 42913132229 on `5fbc691` completed both `gate` and `installer` jobs and uploaded the `Dockwind-installer` artifact |
 | 2026-11-11 | Tray | Icon visible in the notification area. Right-click showed Settings, Reload config, Start with Windows, Restore taskbar, and Quit. The Settings item opened the settings window |
-| 2026-11-11 | Full gate | `scripts/check.ps1` passed on the current source: fmt, check, clippy with `-D warnings`, **89 tests**, release build, link parser self-test (16 cases), and 30 Markdown links in 12 files |
+| 2026-11-11 | Full gate | `scripts/check.ps1` passed on the current source: fmt, check, clippy with `-D warnings`, **92 tests**, release build, link parser self-test (16 cases), and 30 Markdown links in 12 files |
 | 2026-11-11 | Installer | `installer/dockwind.iss`, `scripts/build-installer.ps1`, and `scripts/bump-version.ps1` produced the final `dist\Dockwind-0.2.0-setup.exe` with Inno Setup 6.7.3. Silent 0.1.0 install and 0.2.0 upgrade exited 0. The installed settings title read `Dockwind Settings 0.2.0`. The Start Menu shortcut existed after install and was removed by silent uninstall. The install directory was removed and the config was preserved. The installer was rebuilt after the TOML preservation and settings-mutex changes; silent install and uninstall exited 0. A clean profile is still untested |
 | 2026-11-11 | Build resources | `build.rs` injects the package version into the manifest and embeds the manifest and icon. The release build passed |
 | 2026-11-10 | Build warning | Baseline `proc-macro-error2` v2.0.1 warning remains |

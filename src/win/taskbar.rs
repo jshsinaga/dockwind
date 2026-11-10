@@ -1,6 +1,6 @@
 use std::ffi::c_void;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{
     Mutex,
     atomic::{AtomicBool, Ordering},
@@ -278,12 +278,34 @@ fn auto_hide_marker_path() -> Result<PathBuf> {
 }
 
 fn remember_auto_hide() -> Result<()> {
-    let path = auto_hide_marker_path()?;
+    remember_auto_hide_at(&auto_hide_marker_path()?)
+}
+
+fn remember_auto_hide_at(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
-    fs::write(&path, b"1").with_context(|| format!("failed to write {}", path.display()))
+    fs::write(path, b"1").with_context(|| format!("failed to write {}", path.display()))
+}
+
+fn read_auto_hide_marker(path: &Path) -> Result<Option<bool>> {
+    let contents = match fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to read {}", path.display()));
+        }
+    };
+    Ok(Some(contents.trim() == "1"))
+}
+
+fn remove_auto_hide_marker(path: &Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("failed to remove {}", path.display())),
+    }
 }
 
 fn clear_auto_hide_marker() {
@@ -294,28 +316,20 @@ fn clear_auto_hide_marker() {
             return;
         }
     };
-    match fs::remove_file(&path) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            warn!(%error, path = %path.display(), "failed to remove the auto-hide marker")
-        }
+    if let Err(error) = remove_auto_hide_marker(&path) {
+        warn!(%error, path = %path.display(), "failed to remove the auto-hide marker");
     }
 }
 
 fn restore_auto_hide_marker() -> Result<()> {
     let path = auto_hide_marker_path()?;
-    let contents = match fs::read_to_string(&path) {
-        Ok(contents) => contents,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => {
-            return Err(error).with_context(|| format!("failed to read {}", path.display()));
-        }
+    let Some(enabled) = read_auto_hide_marker(&path)? else {
+        return Ok(());
     };
-    if contents.trim() == "1" {
+    if enabled {
         set_native_auto_hide(true)?;
     }
-    fs::remove_file(&path).with_context(|| format!("failed to remove {}", path.display()))
+    remove_auto_hide_marker(&path)
 }
 
 /// Recovery entry point for `--restore-taskbar`: show the taskbar and restore a
@@ -1045,6 +1059,43 @@ mod tests {
         assert!(replacement.is_visible(3));
         assert!(replacement.is_visible(4));
         assert!(!ownership.state.lock().expect("state").hidden_by_dockwind);
+    }
+
+    #[test]
+    fn auto_hide_marker_round_trip() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("Dockwind").join("taskbar-auto-hide");
+        assert_eq!(read_auto_hide_marker(&path).expect("read missing"), None);
+        remember_auto_hide_at(&path).expect("write marker");
+        assert_eq!(
+            read_auto_hide_marker(&path).expect("read marker"),
+            Some(true)
+        );
+        remove_auto_hide_marker(&path).expect("remove marker");
+        assert_eq!(read_auto_hide_marker(&path).expect("read removed"), None);
+    }
+
+    #[test]
+    fn auto_hide_marker_treats_other_contents_as_disabled() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("taskbar-auto-hide");
+        for value in ["0", "garbage", ""] {
+            fs::write(&path, value).expect("write marker");
+            assert_eq!(
+                read_auto_hide_marker(&path).expect("read marker"),
+                Some(false)
+            );
+        }
+    }
+
+    #[test]
+    fn auto_hide_marker_removal_is_idempotent() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("taskbar-auto-hide");
+        remove_auto_hide_marker(&path).expect("remove missing");
+        fs::write(&path, "1").expect("write marker");
+        remove_auto_hide_marker(&path).expect("remove existing");
+        remove_auto_hide_marker(&path).expect("remove again");
     }
 
     #[test]

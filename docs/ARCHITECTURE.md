@@ -130,7 +130,7 @@ normal mutex interleavings, a late callback, recovery between hides, and recover
 during an in-flight effect. A message-only window test covers sent-only wake and
 stop, `WM_QUIT`, and a busy queue. An injected cancellation failure at the signal
 operation verifies ownership retention and retry. The full gate passed on
-2026-11-11 with 89 tests, clean Clippy, and a release build.
+2026-11-11 with 92 tests, clean Clippy, and a release build.
 
 ## 5. Runtime Ownership and Lifetimes
 
