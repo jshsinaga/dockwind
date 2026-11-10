@@ -902,3 +902,26 @@ the second process logs a warning and exits without opening a duplicate.
 Evidence: on 2026-11-11, the first `--settings` process owned one
 `DockwindSettings` window. A second process exited 0 and the window count stayed
 one. After the first closed, a third process opened a new window.
+
+## D043: Manual release dispatch is a dry run
+
+Date: 2026-11-11
+
+`release.yml` accepts `workflow_dispatch` without a tag. A manual run checks out
+the selected ref, reads the version from `Cargo.toml`, builds the release binary
+and installer, and uploads the installer artifact. The GitHub Release publish
+step is gated on `github.event_name == 'push'` and a tag ref, so only a pushed
+`vX.Y.Z` tag publishes. A tag push still validates the tag against the package
+version before building.
+
+Reason: the release build path should be testable without creating a public
+release or moving a tag. The earlier manual path required an existing tag and
+published immediately.
+
+Trade-off: a dry run does not exercise the GitHub Release API call, generated
+notes, or release permissions. Those remain tag-push-only checks. The workflow
+still declares `contents: write` because the tag path needs it.
+
+Evidence: manual dispatch run 42916491747 on `b252850` completed the build job,
+uploaded `Dockwind-0.2.0-setup` (4,259,448 bytes), and created no release. The tag
+publish path has not run.

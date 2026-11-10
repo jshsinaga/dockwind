@@ -90,15 +90,19 @@ the pinned toolchain and Rust cache. On non-pull-request runs, an `installer` jo
 depends on the gate, installs Inno Setup, builds the installer, and uploads it as
 the `Dockwind-installer` workflow artifact.
 
-`.github/workflows/release.yml` runs on a `v*` tag or manual dispatch with an
-existing tag. It:
+`.github/workflows/release.yml` runs on a `v*` tag or manual dispatch. A manual
+dispatch is a dry run from the selected branch: it reads the version from
+`Cargo.toml`, builds the installer, and uploads the artifact without publishing.
+A tag push also validates the tag against `Cargo.toml` and creates or updates the
+GitHub Release.
 
-1. Checks the tag against `Cargo.toml`.
-2. Builds the release binary with locked dependencies.
-3. Installs Inno Setup.
-4. Builds the installer.
-5. Uploads the installer artifact.
-6. Creates or updates a GitHub Release with the installer and generated notes.
+1. Resolve the version. On a tag push, require `vX.Y.Z` to match `Cargo.toml`.
+2. Build the release binary with locked dependencies.
+3. Install Inno Setup.
+4. Build the installer.
+5. Upload the installer artifact.
+6. On a tag push, create or update a GitHub Release with the installer and
+   generated notes. Manual dispatch skips this step.
 
 The workflow uses the repository `GITHUB_TOKEN` with `contents: write`. No extra
 secret is required for an unsigned build.
@@ -108,8 +112,11 @@ The CI gate passed on `windows-latest` on 2026-11-11 for commits `adb2206` and
 42889880818 on `85e4067`, 42892342420 on `c2984b5`, 42902593790 on
 `fc65aa3`, 42904347913 on `73ebf42`, 42906568724 on `dfd88e8`, 42911029970 on
 `639f945`, 42913132229 on `5fbc691`, and 42914769400 on `aa9b53d` also completed
-the `installer` job and uploaded the `Dockwind-installer` artifact. The
-tag release workflow has not run yet.
+the `installer` job and uploaded the `Dockwind-installer` artifact.
+
+Release workflow run 42916491747 on `b252850` was a manual dry run. It completed
+the build job and uploaded `Dockwind-0.2.0-setup` (4,259,448 bytes). It created
+no GitHub Release. The tag push publish path has not run yet.
 
 ## 5. Release Checklist
 

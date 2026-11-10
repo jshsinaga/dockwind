@@ -11,9 +11,10 @@ quit hotkey, a standalone taskbar restore command, and an Inno Setup installer.
 Current build status: the full gate passes on the current source. Settings, tray,
 live geometry, live taskbar toggling, native auto-hide suspension, AppBar
 reservation, startup hide, normal quit restore, Explorer restart recovery, the
-recovery CLI, and the basic installer path were manually checked on 2026-11-11.
-Panic/console recovery, a clean-profile install, and the tag release are still
-open. See [docs/HANDOFF.md](docs/HANDOFF.md) for dated evidence.
+recovery CLI, the basic installer path, and the release dry run were manually
+checked on 2026-11-11. Panic/console recovery, a clean-profile install, and the
+tag publish are still open. See [docs/HANDOFF.md](docs/HANDOFF.md) for dated
+evidence.
 
 ## Documentation
 
@@ -280,7 +281,7 @@ manifest and icon. The embedded resources are checked by the build.
 - App tooltips are not implemented yet. Middle-click launch for pinned apps is
   implemented.
 - The installer is unsigned. Windows SmartScreen may warn on first run.
-- The GitHub Actions CI gate passed on 2026-11-11. The tag release workflow has not
-  run yet.
+- The GitHub Actions CI gate passed on 2026-11-11. A manual release dry run built
+  and uploaded the installer; the tag publish path has not run yet.
 - GPUI is pinned to `=0.2.2` because it is pre-1.0 and its API changes between
   releases.
