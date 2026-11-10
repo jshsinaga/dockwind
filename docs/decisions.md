@@ -299,3 +299,19 @@ taskbar guard mid-run adds failure paths without being required by M6.
 
 Trade-off: Changing either setting requires restarting Dockwind. This is noted
 in the README.
+
+## D019: Autostart is exposed through CLI flags
+
+Date: 2026-11-10
+
+Add `--enable-autostart` and `--disable-autostart`, backed by a value under
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+
+Reason: GPUI 0.2.2 has no native context-menu API. The plan's menu entry would
+require a custom popup window or a blocking Win32 `TrackPopupMenu` call on the
+dock thread. The CLI keeps the feature usable without adding an unverified
+popup path.
+
+Trade-off: This deviates from the plan's context-menu interaction and is
+recorded here. The autostart value is machine-user scoped and can be removed
+with `--disable-autostart` or Registry Editor.

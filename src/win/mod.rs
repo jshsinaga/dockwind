@@ -1,3 +1,4 @@
+pub mod autostart;
 pub mod cursor;
 pub mod dwm;
 pub mod events;

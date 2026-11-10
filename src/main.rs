@@ -17,6 +17,22 @@ fn main() {
         return;
     }
 
+    if std::env::args().any(|argument| argument == "--enable-autostart") {
+        if let Err(error) = win::autostart::enable() {
+            eprintln!("failed to enable autostart: {error:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    if std::env::args().any(|argument| argument == "--disable-autostart") {
+        if let Err(error) = win::autostart::disable() {
+            eprintln!("failed to disable autostart: {error:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     if let Err(error) = run() {
         eprintln!("dockwind failed: {error:#}");
         std::process::exit(1);
@@ -35,7 +51,6 @@ fn run() -> anyhow::Result<()> {
 
     tracing::info!(
         path = %config_path.display(),
-        config = ?loaded.config,
         "config loaded"
     );
 
