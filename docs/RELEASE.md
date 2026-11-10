@@ -106,8 +106,9 @@ secret is required for an unsigned build.
 The CI gate passed on `windows-latest` on 2026-11-11 for commits `adb2206` and
 `42421fc`. Runs 42878351738 on `189ef25`, 42884752869 on `f8ed473`,
 42889880818 on `85e4067`, 42892342420 on `c2984b5`, 42902593790 on
-`fc65aa3`, 42904347913 on `73ebf42`, and 42906568724 on `dfd88e8` also completed
-the `installer` job and uploaded the `Dockwind-installer` artifact. The
+`fc65aa3`, 42904347913 on `73ebf42`, 42906568724 on `dfd88e8`, and 42911029970
+on `639f945` also completed the `installer` job and uploaded the
+`Dockwind-installer` artifact. The
 tag release workflow has not run yet.
 
 ## 5. Release Checklist
