@@ -19,7 +19,7 @@ use windows::{
                 CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, EnumWindows,
                 GetClassNameW, IsWindowVisible, KillTimer, RegisterClassW, RegisterWindowMessageW,
                 SW_HIDE, SW_SHOW, SetTimer, ShowWindow, TranslateMessage, UnregisterClassW,
-                WINDOW_EX_STYLE, WM_ENDSESSION, WM_TIMER, WNDCLASSW, WS_POPUP,
+                WM_ENDSESSION, WM_TIMER, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
             },
         },
     },
@@ -506,7 +506,7 @@ fn run(stop: isize, ready_sender: mpsc::Sender<Result<(), String>>) -> Result<()
     // SAFETY: `instance` owns the registered class; every string outlives the call.
     let window = match unsafe {
         CreateWindowExW(
-            WINDOW_EX_STYLE(0),
+            WS_EX_TOOLWINDOW,
             &class_name,
             &window_name,
             WS_POPUP,

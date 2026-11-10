@@ -22,8 +22,8 @@ use windows::{
                 MF_SEPARATOR, MF_STRING, MF_UNCHECKED, PostMessageW, PostQuitMessage,
                 RegisterClassW, RegisterWindowMessageW, SetForegroundWindow, SetTimer,
                 SetWindowLongPtrW, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, TPM_TOPALIGN,
-                TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CONTEXTMENU,
-                WM_DESTROY, WM_LBUTTONDBLCLK, WM_NULL, WM_RBUTTONUP, WM_TIMER, WNDCLASSW,
+                TrackPopupMenu, TranslateMessage, WINDOW_STYLE, WM_CONTEXTMENU, WM_DESTROY,
+                WM_LBUTTONDBLCLK, WM_NULL, WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_EX_TOOLWINDOW,
                 WS_OVERLAPPED,
             },
         },
@@ -144,7 +144,7 @@ fn run(
     // and is used only as the tray callback and menu owner.
     let hwnd = match unsafe {
         CreateWindowExW(
-            WINDOW_EX_STYLE(0),
+            WS_EX_TOOLWINDOW,
             CLASS_NAME,
             &HSTRING::from("Dockwind tray"),
             WINDOW_STYLE(WS_OVERLAPPED.0),
