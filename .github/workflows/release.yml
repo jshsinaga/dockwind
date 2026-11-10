@@ -48,9 +48,9 @@ jobs:
           }
           "version=$cargoVersion" >> $env:GITHUB_OUTPUT
 
-      - name: Build the releases
+      - name: Run the canonical quality gate
         shell: pwsh
-        run: cargo build --release --locked
+        run: ./scripts/check.ps1
 
       - name: Install Inno Setup
         shell: pwsh
