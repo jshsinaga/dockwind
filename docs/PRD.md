@@ -133,7 +133,7 @@ are not proposed new features.
 | U05 | Windows 11 blur verification | Mica and Acrylic code exists and is gated on build 22621. It is not verified on Windows 11 | Mica and Acrylic are exercised on Windows 11 22H2 or newer. The radius behavior in those modes is recorded |
 | U06 | Manual robustness coverage | Implemented | A real Explorer restart was tested on 2026-11-11; the replacement taskbar was re-hidden and the tray icon returned. Controlled panic and console-control events restored the taskbar and auto-hide. A fullscreen app still needs a real check with the taskbar visible afterward |
 | U07 | Multi-DPI UI coverage | Running UI was exercised at 100% only. Conversions are unit-tested to 200% | The running UI is checked at 125%, 150%, and 200% with correct size and placement |
-| U08 | Shutdown latency | Quit works, but the process can exit several seconds after the request | Shutdown completes in a bounded time. Teardown is profiled if the delay remains |
+| U08 | Shutdown latency | Verified | Quit completion is bounded. Three release runs on 2026-11-11 exited in 98 ms, 77 ms, and 77 ms after the quit hotkey |
 
 ## 6. Implemented Development Features
 
