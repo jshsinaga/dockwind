@@ -1,7 +1,10 @@
 pub mod cursor;
 pub mod dwm;
 pub mod events;
+pub mod hotkey;
 pub mod icons;
 pub mod launch;
 pub mod monitors;
+pub mod single_instance;
+pub mod taskbar;
 pub mod windows_enum;

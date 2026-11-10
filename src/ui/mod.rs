@@ -24,6 +24,7 @@ pub fn open_dock_window(
     config: Config,
     config_updates: UnboundedReceiver<Config>,
     window_events: UnboundedReceiver<()>,
+    hotkey_events: Option<UnboundedReceiver<()>>,
 ) -> Result<()> {
     let monitor =
         win::monitors::MonitorInfo::primary().context("failed to read the primary monitor")?;
@@ -81,6 +82,7 @@ pub fn open_dock_window(
                     config,
                     config_updates,
                     window_events,
+                    hotkey_events,
                 )
             })
         },

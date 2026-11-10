@@ -18,7 +18,8 @@ replacement are not implemented yet.
 | M3: clock and date | Implemented. |
 | M4: app list, icons, launch, activate/minimize | Implemented. |
 | M5: auto-hide, cursor trigger, click-through | Implemented. |
-| M6 onward | Not started. |
+| M6: native taskbar hide/restore, quit hotkey, single instance | Implemented. |
+| M7 onward | Not started. |
 
 ## Requirements
 
@@ -49,6 +50,20 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 cargo build --release
 ```
+
+## Restoring the Taskbar
+
+Dockwind only hides `Shell_TrayWnd` and `Shell_SecondaryTrayWnd`; it does not
+stop `explorer.exe`. The taskbar is restored on normal quit, panic, console
+control events, and session end. If Dockwind is killed, run:
+
+```powershell
+dockwind --restore-taskbar
+```
+
+The default quit hotkey is `Ctrl+Alt+Shift+Q`. Dockwind uses a named mutex to
+prevent multiple instances. `--restore-taskbar` runs even when another instance
+is active.
 
 ## Configuration
 
@@ -108,12 +123,17 @@ The embedded manifest is verified with `mt.exe` after building.
   and 200% DPI; a real 125% to 200% desktop was not available for manual testing.
 - Auto-hide fullscreen suppression is unit-tested, but a real fullscreen game or
   video was not exercised on this machine.
-- The native taskbar is not hidden yet. `--restore-taskbar` is not implemented;
-  do not enable taskbar hiding by hand.
+- The native taskbar hide/restore path is tested for normal quit, forced process
+  kill plus `--restore-taskbar`, and a simulated `TaskbarCreated` broadcast. A
+  real `explorer.exe` restart was not performed.
+- `reserve_space` is not implemented; the AppBar reservation path is still
+  pending.
 - UWP windows hosted by `ApplicationFrameHost.exe` are skipped in v1 because
   their real app identity is not mapped yet.
 - Middle-click to launch a second instance, tooltips, and context menus are not
   implemented yet.
 - Autostart is not implemented yet.
+- `hide_native_taskbar` and `quit_hotkey` are read at startup. Changing them by
+  hot reload does not apply until the next launch.
 - GPUI is pinned to `=0.2.2` because it is pre-1.0 and its API changes between
   releases.

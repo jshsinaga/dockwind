@@ -249,3 +249,53 @@ hidden later.
 Trade-off: With a bottom taskbar, the pointer must be just above the taskbar,
 not on the taskbar itself. M6 will expand the work area when it hides the native
 taskbar.
+
+## D016: Native taskbar safety and recovery
+
+Date: 2026-11-10
+
+Hide `Shell_TrayWnd` and `Shell_SecondaryTrayWnd` with `ShowWindow(SW_HIDE)`,
+record whether each was visible, and restore through a `TaskbarGuard` drop. Also
+install a panic hook, a console control handler, and a hidden top-level window
+that handles `WM_ENDSESSION` and the `TaskbarCreated` broadcast. The standalone
+`--restore-taskbar` path forces the taskbar visible even if no state exists.
+
+Reason: A crash or Explorer restart must not leave the user without a taskbar.
+The watcher re-hides a restarted taskbar while Dockwind is running; the force
+restore handles a kill that bypassed the guard.
+
+Trade-off: Hiding is performed with `ShowWindow`, not by stopping Explorer, so
+Start, the system tray, and notification center remain unavailable while hidden.
+`reserve_space` and AppBar reservation are not implemented. The Explorer restart
+case was tested by broadcasting `TaskbarCreated`, not by restarting Explorer.
+
+## D017: Single instance and global quit hotkey
+
+Date: 2026-11-10
+
+Use a named mutex (`Local\Dockwind.SingleInstance`) and a dedicated hotkey
+thread. The hotkey thread registers `quit_hotkey`, waits for `WM_HOTKEY`, then
+sends a quit event consumed by the GPUI view.
+
+Reason: Two docks would fight over the taskbar and config. The hotkey runs on a
+thread with its own message queue because `RegisterHotKey` delivers
+`WM_HOTKEY` to the registering thread. `--restore-taskbar` bypasses the mutex so
+it can recover a running or crashed instance.
+
+Trade-off: If the hotkey is unavailable and `hide_native_taskbar = true`, startup
+fails before hiding rather than running without a safe quit path. If taskbar
+hiding is off, a hotkey failure is only logged.
+
+## D018: Taskbar settings are startup-only
+
+Date: 2026-11-10
+
+`hide_native_taskbar` and `quit_hotkey` are read during startup. Hot reload
+updates appearance, clock, pinned apps, and auto-hide, but not the taskbar or
+hotkey.
+
+Reason: Registering/unregistering global hotkeys and installing/removing the
+taskbar guard mid-run adds failure paths without being required by M6.
+
+Trade-off: Changing either setting requires restarting Dockwind. This is noted
+in the README.

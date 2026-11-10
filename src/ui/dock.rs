@@ -50,6 +50,7 @@ impl DockView {
         config: Config,
         mut config_updates: UnboundedReceiver<Config>,
         mut window_events: UnboundedReceiver<()>,
+        hotkey_events: Option<UnboundedReceiver<()>>,
     ) -> Self {
         let clock = cx.new(|cx| ClockView::new(cx, &config.clock));
         let auto_hide_enabled = config.behavior.auto_hide;
@@ -145,6 +146,18 @@ impl DockView {
             }
         })
         .detach();
+
+        if let Some(mut hotkey_events) = hotkey_events {
+            cx.spawn(async move |_this, cx| {
+                if hotkey_events.next().await.is_some() {
+                    info!("quit hotkey received");
+                    if let Err(error) = cx.update(|cx| cx.quit()) {
+                        warn!(%error, "failed to request application quit");
+                    }
+                }
+            })
+            .detach();
+        }
 
         let start = Instant::now();
         cx.spawn(async move |this, cx| {
