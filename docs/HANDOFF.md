@@ -125,6 +125,7 @@ Set `RUST_LOG=dockwind=debug` for refresh, reload, and taskbar diagnostics.
   atomic save, and an external-edit prompt.
 - Tray icon and menu with settings, reload, autostart, restore taskbar, and quit.
 - `show_running_apps` to hide running-only apps.
+- Horizontal app-list scrolling and middle-click launch for pinned apps.
 - Versioned Windows resources, Inno Setup installer script, and GitHub Actions
   gate and release workflows.
 
@@ -193,6 +194,7 @@ Historical evidence does not automatically verify the integrated code.
 | 2026-11-10 | Startup surface fix | Release binary launched with the window hidden and then shown. Log recorded `dock window shown after first frame`. Hidden state was transparent; shown state rendered icons and the clock. The full gate passed after the fix: fmt, check, clippy with `-D warnings`, **66 tests**, release build, link parser, and Markdown links |
 | 2026-11-11 | Live theming and geometry | A config reload changed the width to 700 and the orientation to top. The running dock moved to the top. Restoring 560 and bottom moved it back. Unit tests cover top placement, the top trigger, opacity scaling, and size bounds. 100% DPI |
 | 2026-11-11 | Settings window | Opened from `--settings` and from the tray. Apply saved the new schema through the atomic writer. The external-edit prompt, invalid-field messages, and pinned add/remove/reorder were not exercised |
+| 2026-11-11 | App list and auto geometry | Horizontal scrolling and middle-click launch were added. A one-second monitor poll repositions the dock on work-area, display, or DPI changes. The dock still rendered at a 300 px width. Resolution and DPI changes and the middle-click gesture were not manually exercised |
 | 2026-11-11 | Tray | Icon visible in the notification area. Right-click showed Settings, Reload config, Start with Windows, Restore taskbar, and Quit. The Settings item opened the settings window |
 | 2026-11-11 | Full gate | `scripts/check.ps1` passed on the current source: fmt, check, clippy with `-D warnings`, **78 tests**, release build, link parser self-test (16 cases), and 30 Markdown links in 12 files |
 | 2026-11-11 | Installer | `installer/dockwind.iss`, `scripts/build-installer.ps1`, and `scripts/bump-version.ps1` produced `dist\Dockwind-0.1.0-setup.exe` with Inno Setup 6.7.3. Silent install exited 0, the installed app started with a tray icon, and silent uninstall exited 0. The install directory was removed and the config was preserved. Not a clean profile; upgrade was not exercised |
@@ -240,8 +242,8 @@ Order is a recommendation, not a commitment.
 6. **AppBar `reserve_space`.** Implement `SHAppBarMessage` registration,
    `ABN_POSCHANGED`, `ABN_FULLSCREENAPP`, and `ABM_REMOVE` on shutdown. See PRD
    U01.
-7. **App-list polish.** Middle-click launch, tooltips, scrolling, and overflow.
-   See PRD U03.
+7. **App-list polish.** Add tooltips and a clearer overflow affordance.
+   Middle-click launch and horizontal scrolling are implemented. See PRD U03.
 8. **UWP identity.** Map `ApplicationFrameHost.exe` windows to the real app, or
    document a supported alternative. See PRD U04.
 9. **Windows 11 blur.** Exercise Mica and Acrylic on Windows 11 22H2 or newer.
@@ -262,7 +264,8 @@ section 9. The short version:
 - Config geometry is live. Automatic DPI, display, and work-area changes still
   need a restart.
 - `reserve_space` does nothing.
-- The app list does not scroll, show tooltips, or support middle-click launch.
+- The app list scrolls horizontally and supports middle-click launch for pinned
+  apps. Tooltips are not implemented.
 - UWP windows are skipped.
 - `clock.locale` is unused.
 - Mica and Acrylic are unverified on Windows 11.

@@ -1,10 +1,10 @@
 use std::time::{Duration, Instant};
 
 use gpui::{
-    Bounds, ClickEvent, Context, Entity, MouseButton, Pixels, Point, Render, Timer, Window, div,
-    prelude::*, px, rgba,
+    Bounds, ClickEvent, Context, Entity, MouseButton, MouseDownEvent, Pixels, Point, Render, Timer,
+    Window, div, prelude::*, px, rgba,
 };
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use super::app_item::render_app_item;
 use super::clock::ClockView;
@@ -13,6 +13,7 @@ use crate::app::AppController;
 use crate::config::{Config, DockEdge};
 use crate::dock::{AutoHide, AutoHideInput, AutoHideSettings, DockItem};
 use crate::win::menu::MenuAction;
+use crate::win::monitors::MonitorInfo;
 use crate::win::{self, icons::IconCache};
 
 #[derive(Debug, Clone, Copy)]
@@ -22,6 +23,7 @@ pub struct DockGeometry {
     pub scale_factor: f32,
     pub hwnd: isize,
     pub edge: DockEdge,
+    pub monitor: MonitorInfo,
 }
 
 pub struct DockView {
@@ -37,6 +39,7 @@ pub struct DockView {
     auto_hide_settings: AutoHideSettings,
     menu_open: bool,
     progress: f32,
+    last_monitor_check: Instant,
 }
 
 impl DockView {
@@ -66,6 +69,7 @@ impl DockView {
             auto_hide_settings: auto_hide_settings(&config),
             menu_open: false,
             progress,
+            last_monitor_check: Instant::now(),
         };
         this.set_click_through(progress <= 0.001);
 
@@ -156,37 +160,57 @@ impl DockView {
     }
 
     fn apply_geometry(&mut self, config: &Config) {
-        let monitor = match win::monitors::MonitorInfo::primary() {
+        let monitor = match MonitorInfo::primary() {
             Ok(monitor) => monitor,
             Err(error) => {
                 warn!(%error, "failed to read the primary monitor for a geometry update");
                 return;
             }
         };
+        self.apply_geometry_with_monitor(config, &monitor);
+    }
+
+    fn apply_geometry_with_monitor(&mut self, config: &Config, monitor: &MonitorInfo) -> bool {
         let content_size = gpui::size(
             px(config.appearance.width as f32),
             px(config.appearance.height as f32),
         );
         let bounds = win::monitors::dock_rect(
-            &monitor,
+            monitor,
             content_size,
             config.appearance.offset as f32,
             config.appearance.orientation,
         );
-        let trigger = win::monitors::trigger_rect(&monitor, config.appearance.orientation);
+        let trigger = win::monitors::trigger_rect(monitor, config.appearance.orientation);
 
         if let Err(error) = win::dwm::set_bounds(self.geometry.hwnd, bounds, monitor.scale_factor) {
             warn!(%error, "failed to apply the dock geometry");
-            return;
+            return false;
         }
 
         self.geometry.bounds = bounds;
         self.geometry.trigger = trigger;
         self.geometry.scale_factor = monitor.scale_factor;
         self.geometry.edge = config.appearance.orientation;
+        self.geometry.monitor = *monitor;
+        true
     }
 
     fn tick(&mut self, now: Duration, cx: &mut Context<Self>) {
+        if self.last_monitor_check.elapsed() >= Duration::from_secs(1) {
+            self.last_monitor_check = Instant::now();
+            match MonitorInfo::primary() {
+                Ok(monitor) if monitor != self.geometry.monitor => {
+                    let config = self.applied_config.clone();
+                    if self.apply_geometry_with_monitor(&config, &monitor) {
+                        cx.notify();
+                    }
+                }
+                Ok(_) => {}
+                Err(error) => debug!(%error, "failed to read the primary monitor"),
+            }
+        }
+
         let cursor = match win::cursor::cursor_pos(self.geometry.scale_factor) {
             Ok(cursor) => cursor,
             Err(error) => {
@@ -324,6 +348,7 @@ impl Render for DockView {
                 .collect::<Vec<_>>()
         };
 
+        // The app list owns the flexible width; the clock keeps its natural size.
         div().size_full().child(
             div()
                 .id("dock-bar")
@@ -345,19 +370,37 @@ impl Render for DockView {
                     cx.listener(|this, _event, _window, cx| this.on_context_menu(cx)),
                 )
                 .child(
-                    div().flex().items_center().gap_1().children(
-                        self.items
-                            .iter()
-                            .zip(icons)
-                            .enumerate()
-                            .map(|(index, (item, icon))| {
+                    div()
+                        .id("dock-apps")
+                        .flex()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .items_center()
+                        .gap_1()
+                        .overflow_x_scroll()
+                        .children(self.items.iter().zip(icons).enumerate().map(
+                            |(index, (item, icon))| {
                                 let on_click =
                                     cx.listener(move |this, event: &ClickEvent, window, cx| {
                                         this.on_item_click(index, event, window, cx);
                                     });
-                                render_app_item(item, icon, &self.theme, self.icon_size, on_click)
-                            }),
-                    ),
+                                let on_middle = cx.listener(
+                                    move |this, _event: &MouseDownEvent, _window, cx| {
+                                        this.controller.update(cx, |controller, _| {
+                                            controller.launch_second_instance(index);
+                                        });
+                                    },
+                                );
+                                render_app_item(
+                                    item,
+                                    icon,
+                                    &self.theme,
+                                    self.icon_size,
+                                    on_click,
+                                    on_middle,
+                                )
+                            },
+                        )),
                 )
                 .child(self.clock.clone()),
         )

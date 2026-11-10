@@ -141,7 +141,7 @@ operation verifies ownership retention and retry. The final full gate passed on
 | `HotkeyWorker` | Registered hotkey, its stop event, and its message loop | `shutdown`, then unregister |
 | `TaskbarWatcher` | Hidden watch window, its stop event, and its message loop | `shutdown` or process exit |
 | `win::worker` | Manual-reset stop event, explicit stop poll, `MsgWaitForMultipleObjectsEx` wake, `PeekMessageW` message consumption, and shutdown/abort policy | Event worker, taskbar watcher, or hotkey worker |
-| `DockView` | Applied config, clock entity, item snapshot, icon cache, geometry snapshot, auto-hide state, menu state | Window close |
+| `DockView` | Applied config, clock entity, item snapshot, icon cache, geometry and primary-monitor snapshot, auto-hide state, menu state | Window close |
 | `ClockView` | Boundary timer task | Entity drop |
 
 The runtime keeps a strong `AppController` reference in a slot outside the view
@@ -217,6 +217,7 @@ config.toml --(notify, 200 ms debounce)--> ConfigWatcher --> Config --> AppContr
 AppController --> DockView
 WinEvent hook --(unbounded channel)--> AppController --(120 ms debounce)--> enumerate
 cursor timer --> cursor + fullscreen state --> AutoHide --> progress --> UI + click-through
+monitor poll --> primary work area + DPI --> dock rect + trigger --> SetWindowPos
 right click --> DockView --> deferred task --> native menu --> AppController command
 hide_native_taskbar --> TaskbarGuard
 TaskbarCreated --> taskbar watcher --> hide again
@@ -307,7 +308,7 @@ These are current limits. Do not describe them as fixed.
 
 | Limit | Effect |
 |---|---|
-| Config geometry is live | `width`, `height`, `offset`, and `orientation` update without a restart. Automatic DPI, display, and work-area changes still need the next milestone |
+| Config geometry is live | `width`, `height`, `offset`, and `orientation` update without a restart. A one-second primary-monitor poll repositions on work-area, display, and DPI changes. A real multi-DPI or resolution change is not manually exercised |
 | Hiding the taskbar does not update `rcWork` | The dock stays above the old work-area edge |
 | `reserve_space` is accepted but unused | Maximized windows can cover the dock. No AppBar registration or `ABM_REMOVE` |
 | Content size defaults to `560x92` | Large app lists do not scroll |

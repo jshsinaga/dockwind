@@ -237,15 +237,16 @@ manifest and icon. The embedded resources are checked by the build.
 
 ## Known Limitations
 
-- The app list does not scroll yet. A large app list can overflow the fixed dock
-  width.
+- The app list scrolls horizontally. Tooltips and a visible overflow affordance
+  are not implemented.
 - `reserve_space` is accepted in config but has no effect. AppBar reservation is
   not implemented.
 - `clock.locale` is accepted but unused. Clock text uses the process locale.
 - `hide_native_taskbar` and `quit_hotkey` are read at startup. The settings window
   shows a restart notice.
-- Placement updates live for config changes. Automatic DPI, display, and work-area
-  changes still need the next milestone.
+- Placement updates live for config changes and is polled once per second for
+  work-area, display, and DPI changes. A real multi-DPI or resolution change has
+  not been manually exercised.
 - The Mica and Acrylic backdrop branches need Windows 11 22H2 or newer and have
   not been verified. The current machine is Windows 10 22H2.
 - The running UI was exercised at 100% DPI only. The physical to logical

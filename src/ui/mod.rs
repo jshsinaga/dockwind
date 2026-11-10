@@ -94,6 +94,7 @@ pub fn open_dock_window(
                     scale_factor,
                     hwnd,
                     edge: config.appearance.orientation,
+                    monitor,
                 };
                 Ok(cx.new(|cx| DockView::new(cx, controller, geometry, theme)))
             })();

@@ -192,6 +192,22 @@ impl AppController {
         cx.notify();
     }
 
+    /// Middle-click launches a pinned app again instead of activating its window.
+    pub fn launch_second_instance(&mut self, index: usize) {
+        let Some(item) = self.items.get(index) else {
+            return;
+        };
+        if !item.is_pinned {
+            return;
+        }
+
+        let path = item.key.to_string_lossy();
+        if let Err(error) = win::launch::launch(&path, &item.args) {
+            warn!(%error, app = %item.name, "failed to launch a second instance");
+        }
+        self.refresh();
+    }
+
     pub fn toggle_autostart(&mut self) {
         let enabled = match win::autostart::is_enabled() {
             Ok(enabled) => enabled,

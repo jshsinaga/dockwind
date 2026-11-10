@@ -743,3 +743,21 @@ testable in isolation.
 Trade-off: This is a new CLI flag, so PRD P07 is superseded. A second process can
 open a second settings window. Coordination between settings processes is future
 work.
+
+## D037: Poll the primary monitor once per second
+
+Date: 2026-11-11
+
+The dock reads the primary monitor work area, display bounds, and effective DPI
+once per second from the existing UI tick. A changed snapshot recomputes the dock
+rect and trigger and calls `SetWindowPos`. Config geometry changes remain event
+driven through the config watcher.
+
+Reason: A message-only window plus `WM_SETTINGCHANGE`, `WM_DISPLAYCHANGE`, and
+`WM_DPICHANGED` would add another native window and message path. The dock already
+ticks for cursor and auto-hide state, so a one-second check covers taskbar,
+resolution, and DPI changes with one code path and no new window.
+
+Trade-off: A change can take up to one second to apply. The check calls
+`GetMonitorInfoW` and `GetDpiForMonitor` every second, even when nothing changed.
+A real multi-DPI or resolution change is not manually exercised yet.

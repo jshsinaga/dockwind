@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use gpui::{
-    App, ClickEvent, Pixels, RenderImage, SharedString, Window, div, img, prelude::*, px, rgba,
+    App, ClickEvent, MouseButton, MouseDownEvent, Pixels, RenderImage, SharedString, Window, div,
+    img, prelude::*, px, rgba,
 };
 
 use super::theme::Theme;
@@ -13,6 +14,7 @@ pub fn render_app_item(
     theme: &Theme,
     icon_size: Pixels,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    on_middle_click: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let indicator = if item.is_active {
         Some(theme.active_indicator)
@@ -54,6 +56,7 @@ pub fn render_app_item(
         .cursor_pointer()
         .hover(|style| style.bg(rgba(0xFFFFFF14)))
         .on_click(on_click)
+        .on_mouse_down(MouseButton::Middle, on_middle_click)
         .child(icon)
         .child(
             div()
