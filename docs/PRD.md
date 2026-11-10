@@ -115,7 +115,7 @@ A behavior is not Verified only because a code path exists. Evidence lives in
 | R34 | Provide a settings window | Verified | A separate focusable window edits appearance, behavior, clock, and pinned apps. Apply validates and saves atomically. Close discards unsaved edits. External file changes prompt before overwrite. On 2026-11-11 the validation, prompt, restart notice, Close discard, and pinned add/remove/reorder checks passed. The window is native Win32, not GPUI |
 | R35 | Provide a tray icon | Verified | A tray icon exists while the dock runs. Its menu opens settings, reloads config, toggles autostart, restores the taskbar, and quits. Double-click opens settings. On 2026-11-11 the icon returned after a real Explorer restart, and a two-second visible-taskbar check re-adds a missing icon |
 | R36 | Manage displayed apps | Implemented | The settings window adds, removes, and reorders pinned apps. `show_running_apps = false` hides running-only apps |
-| R37 | Package a release | Implemented | An Inno Setup script builds a per-user installer with Start Menu and optional desktop shortcuts. Uninstall restores the taskbar and disables autostart. Built and smoke-tested on 2026-11-11. The 0.1.0 to 0.2.0 upgrade passed; a clean profile is not checked |
+| R37 | Package a release | Implemented | An Inno Setup script builds a per-user installer with Start Menu and optional desktop shortcuts. Uninstall restores the taskbar and disables autostart. Built and smoke-tested on 2026-11-11. A first-run install without Dockwind data and the 0.1.0 to 0.2.0 upgrade passed; a clean Windows profile is not checked |
 | R38 | Provide hosted CI and release automation | Implemented | GitHub Actions runs the local gate on Windows for pushes and pull requests. The gate and installer artifact job passed on 2026-11-11. A manual dispatch dry run built and uploaded the 0.2.0 installer without publishing. A `vX.Y.Z` tag checks the version and publishes a GitHub release; the tag publish path has not run yet |
 | R39 | Toggle the native taskbar without restart | Verified | A live config change from false to true hides `Shell_TrayWnd` and from true to false restores it. The panic hook, console handler, and watcher start before hiding. Manual check on 2026-11-11 with a watchdog |
 | R40 | Reserve screen space with an AppBar | Verified | With `hide_native_taskbar = true` and `reserve_space = true`, an AppBar reservation shrinks the work area to stop at the dock top. A maximized window visible frame ends at the work area. `ABM_REMOVE` restores it on quit. A forced kill needs `--restore-taskbar` |
@@ -167,9 +167,10 @@ The save contract is defined in `docs/CONFIGURATION.md`.
 | P12 | Define the user-data policy | Implemented | Uninstall preserves `%APPDATA%\Dockwind\config.toml` and logs. The installer does not delete user data |
 | P13 | Do not guess the packaging tool | Implemented | Inno Setup 6 is selected in D033. The script is in `installer/dockwind.iss` |
 
-The installer was built with Inno Setup 6.7.3 on 2026-11-11 and a silent install
-and uninstall passed. A clean Windows profile and an upgrade were not tested. The
-release workflow installs Inno Setup before building.
+The installer was built with Inno Setup 6.7.3 on 2026-11-11. A silent first-run
+install with no Dockwind data created the default config and tray icon; the 0.1.0
+to 0.2.0 upgrade and uninstall also passed. A clean Windows profile was not
+tested. The release workflow installs Inno Setup before building.
 
 ### 6.3 Delivery
 

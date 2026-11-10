@@ -199,8 +199,8 @@ Output: `dist\Dockwind-<version>-setup.exe`.
 The installer is per-user, creates a Start Menu shortcut, offers an optional
 desktop shortcut, and does not force autostart. Uninstall runs
 `--disable-autostart` and `--restore-taskbar` before removing files. User config
-and logs are preserved. A silent install and uninstall passed on 2026-11-11. A
-clean Windows profile and upgrade were not tested.
+and logs are preserved. A silent first-run install, the 0.1.0 to 0.2.0 upgrade,
+and uninstall passed on 2026-11-11. A clean Windows profile was not tested.
 
 CI runs `scripts/check.ps1` on `windows-latest` for pushes and pull requests. On
 push and manual runs, a second job builds the installer and uploads the

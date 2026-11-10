@@ -26,7 +26,7 @@ work, and dated evidence. It does not repeat the architecture. Read
 | Lints | `unsafe_op_in_unsafe_fn` and `clippy::undocumented_unsafe_blocks` are `deny`. Production-only `unwrap_used` and `expect_used` are denied outside tests |
 | Settings | Native Win32 window on its own thread. One window per user session through a named mutex. Atomic save, external-edit prompt, and TOML preservation. Validation, restart notice, Close discard, and pinned add/remove/reorder passed on 2026-11-11. A valid file keeps comments, ordering, and unknown keys; pinned entries are rewritten |
 | Tray | Icon, menu, settings, reload, autostart, restore, quit, TaskbarCreated recovery, and a two-second visible-taskbar icon check |
-| Installer | Inno Setup 6. Built and smoke-tested on 2026-11-11. Upgrade 0.1.0 to 0.2.0 passed. The Start Menu shortcut was created and removed. Clean profile is still pending |
+| Installer | Inno Setup 6. Built and smoke-tested on 2026-11-11. Upgrade 0.1.0 to 0.2.0 passed. The Start Menu shortcut was created and removed. A first-run install without Dockwind data created the default config and tray icon. A clean Windows profile is still pending |
 | CI | GitHub Actions gate and installer artifact passed on 2026-11-11. Runs 42878351738 on `189ef25`, 42884752869 on `f8ed473`, 42889880818 on `85e4067`, 42892342420 on `c2984b5`, 42902593790 on `fc65aa3`, 42904347913 on `73ebf42`, 42906568724 on `dfd88e8`, 42911029970 on `639f945`, 42913132229 on `5fbc691`, and 42914769400 on `aa9b53d` completed the `gate` and `installer` jobs. The release workflow dry run 42916491747 on `b252850` built and uploaded the installer without publishing. The tag publish path has not run |
 | Taskbar toggle | Live. Manual hide/restore, native auto-hide suspension, Explorer restart, and late `TaskbarCreated` checks passed on 2026-11-11 |
 | AppBar | `reserve_space` reserves the dock strip when the taskbar is hidden. Work area, visible maximized-frame, and auto-hide interaction checks passed on 2026-11-11. Forced kill needs the recovery command |
@@ -237,7 +237,7 @@ Historical evidence does not automatically verify the integrated code.
 | 2026-11-11 | Release dry run | Manual `release.yml` dispatch run 42916491747 on `b252850` resolved `0.2.0` from `Cargo.toml`, built the release binary and installer, and uploaded the `Dockwind-0.2.0-setup` artifact (4,259,448 bytes). No GitHub Release was created. The tag publish path remains |
 | 2026-11-11 | Tray | Icon visible in the notification area. Right-click showed Settings, Reload config, Start with Windows, Restore taskbar, and Quit. The Settings item opened the settings window |
 | 2026-11-11 | Full gate | `scripts/check.ps1` passed on the current source: fmt, check, clippy with `-D warnings`, **92 tests**, release build, link parser self-test (16 cases), and 30 Markdown links in 12 files |
-| 2026-11-11 | Installer | `installer/dockwind.iss`, `scripts/build-installer.ps1`, and `scripts/bump-version.ps1` produced the final `dist\Dockwind-0.2.0-setup.exe` with Inno Setup 6.7.3. Silent 0.1.0 install and 0.2.0 upgrade exited 0. The installed settings title read `Dockwind Settings 0.2.0`. The Start Menu shortcut existed after install and was removed by silent uninstall. The install directory was removed and the config was preserved. The installer was rebuilt after the TOML preservation, settings-mutex, and marker-test changes; silent install and uninstall exited 0. A clean profile is still untested |
+| 2026-11-11 | Installer | `installer/dockwind.iss`, `scripts/build-installer.ps1`, and `scripts/bump-version.ps1` produced the final `dist\Dockwind-0.2.0-setup.exe` with Inno Setup 6.7.3. Silent 0.1.0 install and 0.2.0 upgrade exited 0. The installed settings title read `Dockwind Settings 0.2.0`. The Start Menu shortcut existed after install and was removed by silent uninstall. The install directory was removed and the config was preserved. The installer was rebuilt after the TOML preservation, settings-mutex, and marker-test changes; silent install and uninstall exited 0. A first-run install with no existing Dockwind config started the app, created the default config, and added the tray window; uninstall kept the config. A clean Windows profile is still untested |
 | 2026-11-11 | Build resources | `build.rs` injects the package version into the manifest and embeds the manifest and icon. The release build passed |
 | 2026-11-10 | Build warning | Baseline `proc-macro-error2` v2.0.1 warning remains |
 | 2026-11-10 | Earlier debug startup smoke | 4 seconds on Windows 10 build 19045, 1920x1080, 100% DPI, `hide_native_taskbar = false`. Logs showed config load, hotkey registration, placement, transparent styles. Process was force-killed |
@@ -259,8 +259,9 @@ Order is a recommendation, not a commitment.
 
 1. **Clean-profile installer check.** Run the 0.2.0 installer on a fresh Windows
    profile, confirm the Start Menu and optional desktop shortcuts, and confirm
-   config preservation. The 0.1.0 to 0.2.0 upgrade, install, launch, and uninstall
-   path passed on 2026-11-11. See PRD P08 to P13 and `docs/RELEASE.md`.
+   config preservation. The first-run install with no Dockwind data, upgrade,
+   launch, and uninstall path passed on 2026-11-11. See PRD P08 to P13 and
+   `docs/RELEASE.md`.
 2. **Tag release publish.** Push a `vX.Y.Z` tag and confirm the GitHub Release
    publish step. The manual release dry run already built and uploaded the
    installer without publishing. See PRD P14 and `docs/RELEASE.md`.
@@ -302,9 +303,9 @@ section 9. The short version:
 - `clock.locale` is unused.
 - Mica and Acrylic are unverified on Windows 11.
 - The running UI was exercised at 100% DPI only.
-- The installer is built and the 0.1.0 to 0.2.0 upgrade, install, and uninstall
-  path passed. A clean Windows profile was not tested. The installer is unsigned.
-  The release dry run passed; the tag publish path has not run.
+- The installer is built and the first-run, 0.1.0 to 0.2.0 upgrade, install, and
+  uninstall path passed. A clean Windows profile was not tested. The installer is
+  unsigned. The release dry run passed; the tag publish path has not run.
 - A settings save preserves comments, ordering, and unknown keys for a valid
   file, but rewrites `pinned` entries. An invalid TOML file is not overwritten.
   The native window has message box errors, not inline field errors. A second
