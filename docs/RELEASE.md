@@ -102,7 +102,9 @@ The workflow uses the repository `GITHUB_TOKEN` with `contents: write`. No extra
 secret is required for an unsigned build.
 
 The CI gate passed on `windows-latest` on 2026-11-11 for commits `adb2206` and
-`42421fc`. The tag release workflow has not run yet.
+`42421fc`. Run 42878351738 on `189ef25` also completed the `installer` job and
+uploaded the `Dockwind-installer` artifact. The tag release workflow has not run
+yet.
 
 ## 5. Release Checklist
 
