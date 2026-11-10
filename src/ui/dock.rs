@@ -1,15 +1,17 @@
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
-use gpui::{AnyWindowHandle, Context, Render, Window, div, prelude::*, rgba};
+use gpui::{AnyWindowHandle, Context, Entity, Render, Window, div, prelude::*, rgba};
 use tracing::{error, info, warn};
 
-use crate::config::{BlurMode, Config};
+use super::clock::ClockView;
+use crate::config::{BlurMode, Clock, Config};
 use crate::theme::Theme;
 use crate::win;
 
 pub struct DockView {
     theme: Theme,
     blur: BlurMode,
+    clock: Entity<ClockView>,
 }
 
 impl DockView {
@@ -18,8 +20,11 @@ impl DockView {
         theme: Theme,
         blur: BlurMode,
         window_handle: AnyWindowHandle,
+        clock_config: Clock,
         mut updates: UnboundedReceiver<Config>,
     ) -> Self {
+        let clock = cx.new(|cx| ClockView::new(cx, &clock_config));
+
         cx.spawn(async move |this, cx| {
             while let Some(config) = updates.next().await {
                 match Theme::from_config(&config.appearance) {
@@ -28,6 +33,8 @@ impl DockView {
                             let blur_changed = this.blur != config.appearance.blur;
                             this.blur = config.appearance.blur;
                             this.theme = theme;
+                            this.clock
+                                .update(cx, |clock, cx| clock.set_config(&config.clock, cx));
                             cx.notify();
                             blur_changed
                         });
@@ -60,7 +67,7 @@ impl DockView {
         })
         .detach();
 
-        Self { theme, blur }
+        Self { theme, blur, clock }
     }
 }
 
@@ -75,10 +82,11 @@ impl Render for DockView {
                 .border_color(rgba(0xFFFFFF33))
                 .flex()
                 .items_center()
-                .justify_center()
+                .justify_between()
                 .p(self.theme.padding)
                 .text_color(self.theme.text)
-                .child(div().flex().flex_col().child("Dockwind").child("M2 shell")),
+                .child(div().flex().flex_col().child("Dockwind").child("M3 clock"))
+                .child(self.clock.clone()),
         )
     }
 }

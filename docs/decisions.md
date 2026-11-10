@@ -77,6 +77,10 @@ becoming the foreground window. M0 showed that the dock took focus, then showed
 that `WS_EX_NOACTIVATE` plus `SetForegroundWindow(previous)` keeps the target
 application focused. Mouse clicks still reach the dock.
 
+M3 hardened the restore path: it only runs when the dock is actually the
+foreground window, attaches to the foreground thread when needed, and logs a
+warning instead of aborting startup if Windows still denies the request.
+
 Trade-off: The dock has no keyboard focus. Keyboard-driven dock actions and
 context menus need their own M5/M6 verification.
 
@@ -141,3 +145,22 @@ handle lets the update run on the UI thread with the real `Window`.
 Trade-off: A closed window makes the update fail; the failure is logged and the
 config update for the theme is still retained. DWM backdrop remains gated on
 Windows 11 build 22621 and is not validated on this Windows 10 machine.
+
+## D010: Clock ticks on real time boundaries
+
+Date: 2026-11-10
+
+`ClockView` computes the delay to the next minute, or the next second when the
+time format contains `%S`, `%T`, or `%r`. It does not use a fixed polling
+interval.
+
+Reason: The plan requires the clock to change at the minute boundary without
+wasting CPU on a fixed short interval. A live format change is applied
+immediately, and the timer is restarted when the precision changes.
+
+Invalid time and date formats are rejected during config sanitization using
+`chrono::format::StrftimeItems` and replaced with defaults with a warning.
+
+Trade-off: A format change that keeps the same precision does not restart the
+timer. The new text is rendered immediately, and the next tick stays aligned to
+the existing boundary.

@@ -15,7 +15,8 @@ replacement are not implemented yet.
 | M0: GPUI window spike | Passed on Windows 10 22H2. See `docs/spike-m0.md`. |
 | M1: scaffold, config, theme, logging | Implemented. |
 | M2: shell window, monitor/DPI placement, live appearance | Implemented. |
-| M3 onward | Not started. |
+| M3: clock and date | Implemented. |
+| M4 onward | Not started. |
 
 ## Requirements
 
@@ -98,7 +99,7 @@ The embedded manifest is verified with `mt.exe` after building.
   and 200% DPI; a real 125% to 200% desktop was not available for manual testing.
 - The native taskbar is not hidden yet. `--restore-taskbar` is not implemented;
   do not enable taskbar hiding by hand.
-- The dock currently shows a shell label. App icons, the clock, auto-hide, and
+- The dock currently shows a shell label and the clock. App icons, auto-hide, and
   autostart arrive in later milestones.
 - GPUI is pinned to `=0.2.2` because it is pre-1.0 and its API changes between
   releases.

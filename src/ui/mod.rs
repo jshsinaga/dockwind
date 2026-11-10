@@ -1,3 +1,4 @@
+mod clock;
 mod dock;
 
 pub use dock::DockView;
@@ -32,6 +33,7 @@ pub fn open_dock_window(
     );
     let theme = Theme::from_config(&config.appearance).context("failed to build the dock theme")?;
     let blur = config.appearance.blur;
+    let clock_config = config.clock.clone();
 
     info!(?monitor, ?bounds, "positioning dock");
     let previous_foreground = win::dwm::foreground_window();
@@ -60,7 +62,7 @@ pub fn open_dock_window(
                 warn!(%error, "backdrop configuration failed; keeping transparent");
             }
             let window_handle = window.window_handle();
-            cx.new(|cx| DockView::new(cx, theme, blur, window_handle, config_updates))
+            cx.new(|cx| DockView::new(cx, theme, blur, window_handle, clock_config, config_updates))
         },
     )
     .context("failed to open the dock window")?;

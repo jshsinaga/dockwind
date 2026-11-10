@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use chrono::format::{Item, StrftimeItems};
 use futures::channel::mpsc::{UnboundedReceiver, unbounded};
 use notify::Watcher;
 use serde::{Deserialize, Serialize};
@@ -210,11 +211,31 @@ impl Config {
             self.appearance.background = defaults.appearance.background;
         }
 
+        if !valid_strftime(&self.clock.time_format) {
+            warnings.push(format!(
+                "time_format '{}' is invalid; using {}",
+                self.clock.time_format, defaults.clock.time_format
+            ));
+            self.clock.time_format = defaults.clock.time_format.clone();
+        }
+
+        if !valid_strftime(&self.clock.date_format) {
+            warnings.push(format!(
+                "date_format '{}' is invalid; using {}",
+                self.clock.date_format, defaults.clock.date_format
+            ));
+            self.clock.date_format = defaults.clock.date_format.clone();
+        }
+
         LoadedConfig {
             config: self,
             warnings,
         }
     }
+}
+
+fn valid_strftime(value: &str) -> bool {
+    StrftimeItems::new(value).all(|item| !matches!(item, Item::Error))
 }
 
 pub fn parse_rgba_hex(value: &str) -> Option<[u8; 4]> {
@@ -377,6 +398,17 @@ mod tests {
         let loaded = config.sanitize();
         assert_eq!(loaded.config.appearance.corner_radius, 8);
         assert_eq!(loaded.warnings.len(), 1);
+    }
+
+    #[test]
+    fn invalid_clock_formats_fall_back_with_warning() {
+        let mut config = Config::default();
+        config.clock.time_format = "%Q".to_string();
+        config.clock.date_format = "%Q".to_string();
+        let loaded = config.sanitize();
+        assert_eq!(loaded.config.clock.time_format, "%H:%M");
+        assert_eq!(loaded.config.clock.date_format, "%a, %d %b %Y");
+        assert_eq!(loaded.warnings.len(), 2);
     }
 
     #[test]

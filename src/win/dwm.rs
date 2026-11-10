@@ -14,10 +14,12 @@ use windows::{
             DWMWCP_DONOTROUND, DWMWCP_ROUND, DwmSetWindowAttribute,
         },
         System::SystemInformation::OSVERSIONINFOW,
+        System::Threading::{AttachThreadInput, GetCurrentThreadId},
         UI::WindowsAndMessaging::{
-            GWL_EXSTYLE, GetForegroundWindow, GetWindowLongPtrW, HWND_TOPMOST, SWP_FRAMECHANGED,
-            SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetForegroundWindow, SetWindowLongPtrW,
-            SetWindowPos, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+            GWL_EXSTYLE, GetForegroundWindow, GetWindowLongPtrW, GetWindowThreadProcessId,
+            HWND_TOPMOST, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+            SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, WS_EX_APPWINDOW,
+            WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
         },
     },
 };
@@ -78,13 +80,43 @@ pub fn apply_dock_styles(window: &Window, previous_foreground: HWND) -> Result<(
             "dock window styles applied"
         );
 
-        if !previous_foreground.0.is_null() {
-            let restored = SetForegroundWindow(previous_foreground).as_bool();
-            ensure!(restored, "failed to restore the previous foreground window");
+        if !restore_foreground(hwnd, previous_foreground) {
+            warn!("could not restore the previous foreground window");
         }
     }
 
     Ok(())
+}
+
+fn restore_foreground(dock: HWND, previous: HWND) -> bool {
+    if previous.0.is_null() {
+        return true;
+    }
+
+    unsafe {
+        if GetForegroundWindow().0 != dock.0 {
+            return true;
+        }
+
+        let current_thread = GetCurrentThreadId();
+        let foreground = GetForegroundWindow();
+        let foreground_thread = if foreground.0.is_null() {
+            0
+        } else {
+            GetWindowThreadProcessId(foreground, None)
+        };
+        let attached = foreground_thread != 0
+            && foreground_thread != current_thread
+            && AttachThreadInput(current_thread, foreground_thread, true).as_bool();
+
+        let restored = SetForegroundWindow(previous).as_bool();
+
+        if attached {
+            let _ = AttachThreadInput(current_thread, foreground_thread, false);
+        }
+
+        restored
+    }
 }
 
 pub fn apply_backdrop(window: &Window, mode: BlurMode) -> Result<()> {
