@@ -5,6 +5,8 @@ mod theme;
 
 pub use dock::{DockGeometry, DockView};
 
+use std::cell::Cell;
+
 use anyhow::{Context as _, Result};
 use gpui::{
     App, AppContext, Entity, Render, SharedString, TitlebarOptions, Window,
@@ -17,9 +19,6 @@ use crate::config::Config;
 use crate::win;
 
 use self::theme::Theme;
-
-const DOCK_WIDTH: f32 = 560.0;
-const DOCK_HEIGHT: f32 = 92.0;
 
 /// Window root that owns the dock view once creation has fully succeeded.
 struct DockRoot {
@@ -42,13 +41,17 @@ pub fn open_dock_window(
 ) -> Result<()> {
     let monitor =
         win::monitors::MonitorInfo::primary().context("failed to read the primary monitor")?;
-    let content_size = size(px(DOCK_WIDTH), px(DOCK_HEIGHT));
+    let content_size = size(
+        px(config.appearance.width as f32),
+        px(config.appearance.height as f32),
+    );
     let bounds = win::monitors::dock_rect(
         &monitor,
         content_size,
-        config.appearance.margin_bottom as f32,
+        config.appearance.offset as f32,
+        config.appearance.orientation,
     );
-    let trigger = win::monitors::trigger_rect(&monitor);
+    let trigger = win::monitors::trigger_rect(&monitor, config.appearance.orientation);
     let scale_factor = monitor.scale_factor;
     let theme = Theme::from_config(&config.appearance).context("failed to build the dock theme")?;
     let blur = config.appearance.blur;
@@ -56,6 +59,7 @@ pub fn open_dock_window(
     info!(?monitor, ?bounds, "positioning dock");
     let previous_foreground = win::dwm::foreground_window();
     let mut startup_error = None;
+    let hwnd_slot = Cell::new(0isize);
 
     cx.open_window(
         WindowOptions {
@@ -66,7 +70,9 @@ pub fn open_dock_window(
                 ..Default::default()
             }),
             focus: false,
-            show: true,
+            // Keep the window hidden until GPUI has drawn the first frame. Showing
+            // it earlier exposes the empty native surface as a white rectangle.
+            show: false,
             kind: WindowKind::PopUp,
             is_movable: false,
             is_resizable: false,
@@ -78,6 +84,7 @@ pub fn open_dock_window(
             let view = (|| -> Result<Entity<DockView>> {
                 win::dwm::apply_dock_styles(window, previous_foreground)?;
                 let hwnd = win::dwm::window_hwnd(window)?;
+                hwnd_slot.set(hwnd);
                 if let Err(error) = win::dwm::apply_backdrop(window, blur) {
                     warn!(%error, "backdrop configuration failed; keeping transparent");
                 }
@@ -86,6 +93,7 @@ pub fn open_dock_window(
                     trigger,
                     scale_factor,
                     hwnd,
+                    edge: config.appearance.orientation,
                 };
                 Ok(cx.new(|cx| DockView::new(cx, controller, geometry, theme)))
             })();
@@ -101,8 +109,10 @@ pub fn open_dock_window(
     )
     .context("failed to open the dock window")?;
 
-    match startup_error {
-        Some(error) => Err(error),
-        None => Ok(()),
+    if let Some(error) = startup_error {
+        return Err(error);
     }
+
+    win::dwm::show_without_activating(hwnd_slot.get()).context("failed to show the dock window")?;
+    Ok(())
 }

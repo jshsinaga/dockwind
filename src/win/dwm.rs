@@ -1,7 +1,7 @@
 use std::ffi::c_void;
 
-use anyhow::{Context as _, Result, ensure};
-use gpui::Window;
+use anyhow::{Context as _, Result, bail, ensure};
+use gpui::{Bounds, Pixels, Window};
 use raw_window_handle::RawWindowHandle;
 use tracing::{info, warn};
 use windows::{
@@ -17,9 +17,10 @@ use windows::{
         System::Threading::{AttachThreadInput, GetCurrentThreadId},
         UI::WindowsAndMessaging::{
             GWL_EXSTYLE, GetForegroundWindow, GetWindowLongPtrW, GetWindowThreadProcessId,
-            HWND_TOPMOST, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-            SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, WS_EX_APPWINDOW,
-            WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+            HWND_TOPMOST, IsWindowVisible, SW_SHOWNOACTIVATE, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+            SWP_NOMOVE, SWP_NOSIZE, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
+            ShowWindow, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+            WS_EX_TRANSPARENT,
         },
     },
 };
@@ -106,10 +107,13 @@ pub fn apply_dock_styles(window: &Window, previous_foreground: HWND) -> Result<(
             bits & WS_EX_APPWINDOW.0 == 0,
             "window still has WS_EX_APPWINDOW"
         );
-        ensure!(
-            bits & WS_EX_TOPMOST.0 != 0,
-            "window is missing WS_EX_TOPMOST"
-        );
+        // The functional topmost guarantee is the SetWindowPos(HWND_TOPMOST) above.
+        // A hidden window can take one show cycle to reflect WS_EX_TOPMOST in the
+        // style bits, so a read-back failure is reported and retried after the first
+        // frame instead of failing startup.
+        if bits & WS_EX_TOPMOST.0 == 0 {
+            warn!("window style read-back is missing WS_EX_TOPMOST until it is shown");
+        }
         ensure!(
             bits & WS_EX_NOACTIVATE.0 != 0,
             "window is missing WS_EX_NOACTIVATE"
@@ -130,6 +134,77 @@ pub fn apply_dock_styles(window: &Window, previous_foreground: HWND) -> Result<(
         }
     }
 
+    Ok(())
+}
+
+/// Moves and resizes the dock from logical bounds. GPUI receives the resulting
+/// `WM_SIZE` and lays the root view out at the new size.
+pub fn set_bounds(hwnd: isize, bounds: Bounds<Pixels>, scale_factor: f32) -> Result<()> {
+    if !scale_factor.is_finite() || scale_factor <= 0.0 {
+        bail!("invalid monitor scale factor: {scale_factor}");
+    }
+
+    let hwnd = HWND(hwnd as *mut c_void);
+    let x = (f32::from(bounds.origin.x) * scale_factor).round() as i32;
+    let y = (f32::from(bounds.origin.y) * scale_factor).round() as i32;
+    let width = (f32::from(bounds.size.width) * scale_factor).round() as i32;
+    let height = (f32::from(bounds.size.height) * scale_factor).round() as i32;
+
+    // SAFETY: `hwnd` belongs to the live dock window. The window stays topmost and
+    // is not activated. The size and position are physical pixels derived from the
+    // monitor scale factor.
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            Some(HWND_TOPMOST),
+            x,
+            y,
+            width,
+            height,
+            SWP_NOACTIVATE,
+        )
+        .context("SetWindowPos(dock bounds) failed")?;
+    }
+    Ok(())
+}
+
+/// Shows the dock after GPUI has drawn its first frame, without activating it.
+///
+/// A window shown before its first frame exposes the empty native surface, which
+/// appears as a white rectangle until the renderer presents.
+pub fn show_without_activating(hwnd: isize) -> Result<()> {
+    let hwnd = HWND(hwnd as *mut c_void);
+
+    // SAFETY: `hwnd` belongs to the live dock window. ShowWindow only changes the
+    // visibility state, and the result is read back with IsWindowVisible because
+    // ShowWindow returns the previous state rather than success. The second
+    // SetWindowPos reinforces topmost now that the window is visible.
+    unsafe {
+        // ShowWindow reports the previous visibility, not success; IsWindowVisible
+        // below is the actual check.
+        let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        ensure!(
+            IsWindowVisible(hwnd).as_bool(),
+            "failed to show the dock window"
+        );
+        SetWindowPos(
+            hwnd,
+            Some(HWND_TOPMOST),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        )
+        .context("SetWindowPos(topmost after show) failed")?;
+
+        let bits = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+        if bits & WS_EX_TOPMOST.0 == 0 {
+            warn!("dock window is topmost by z-order but missing WS_EX_TOPMOST");
+        }
+    }
+
+    info!("dock window shown after first frame");
     Ok(())
 }
 

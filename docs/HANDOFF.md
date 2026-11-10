@@ -1,7 +1,9 @@
 # Dockwind Handoff
 
-Last updated: 2026-11-10
-Stage: final full gate passed. Manual desktop cases remain unverified.
+Last updated: 2026-11-11
+Stage: settings, tray, live theming, installer, and CI integrated. Full gate
+passed on 2026-11-11. Manual taskbar checks and a clean-profile installer check
+remain.
 Historical baseline: `482bd7a`
 
 This is the starting point for a fresh agent. It records current state, pending
@@ -17,12 +19,16 @@ work, and dated evidence. It does not repeat the architecture. Read
 | Branch | `main` |
 | Source layout | Target layout integrated |
 | Independent review | Cleared on 2026-11-10. No new blockers |
-| Tests | 66 tests passed in the final full gate on 2026-11-10 |
+| Tests | 78 tests passed in the full gate on 2026-11-11 |
 | Clippy | `cargo clippy --all-targets --locked -- -D warnings` passed in the final full gate |
 | Intermediate gate | Historical: 59 tests passed before the lifecycle fixes. Superseded by the final gate |
 | Release binary | `target\release\dockwind.exe` |
 | Lints | `unsafe_op_in_unsafe_fn` and `clippy::undocumented_unsafe_blocks` are `deny`. Production-only `unwrap_used` and `expect_used` are denied outside tests |
-| Final status | Full gate passed on 2026-11-10. Manual desktop cases unverified |
+| Settings | Native Win32 window on its own thread. Atomic save and external-edit prompt |
+| Tray | Icon, menu, settings, reload, autostart, restore, quit, TaskbarCreated recovery |
+| Installer | Inno Setup 6. Built and smoke-tested on 2026-11-11. Clean profile and upgrade are still pending |
+| CI | GitHub Actions gate and tag release workflows. Not run on GitHub yet |
+| Final status | Full gate passed on 2026-11-11. Settings, tray, live geometry, and the basic installer path manually checked. Taskbar recovery and clean-profile installer checks unverified |
 
 The original M0 feasibility spike is closed. Do not repeat it unless the UI stack
 changes. Evidence is in `docs/spike-m0.md`.
@@ -98,7 +104,8 @@ Set `RUST_LOG=dockwind=debug` for refresh, reload, and taskbar diagnostics.
 
 ## What Works
 
-- Transparent, borderless, rounded dock drawn by GPUI.
+- Transparent, borderless, rounded dock drawn by GPUI. The window stays hidden
+  until the first frame is drawn, so an empty white surface is not exposed.
 - Primary work-area placement with DPI conversion.
 - Live config reload for appearance, clock, pinned apps, and auto-hide.
 - App list grouped by executable, with live icons.
@@ -111,10 +118,19 @@ Set `RUST_LOG=dockwind=debug` for refresh, reload, and taskbar diagnostics.
 - Global quit hotkey, default `Ctrl+Alt+Shift+Q`.
 - Single-instance mutex.
 - Native right-click menu.
-- Autostart through the menu and CLI.
+- Autostart through the menu, tray, settings window, and CLI.
+- Configurable width, height, offset, opacity, and top or bottom orientation.
+  Geometry changes apply live.
+- Native settings window with appearance, behavior, clock, pinned app management,
+  atomic save, and an external-edit prompt.
+- Tray icon and menu with settings, reload, autostart, restore taskbar, and quit.
+- `show_running_apps` to hide running-only apps.
+- Versioned Windows resources, Inno Setup installer script, and GitHub Actions
+  gate and release workflows.
 
-These are current code capabilities. Manual desktop verification for this
-review-cleared code is still pending.
+These are current code capabilities. Settings, tray, and live geometry were
+manually checked on 2026-11-11. Taskbar recovery and a clean-profile installer
+check are still pending.
 
 ## Taskbar Safety
 
@@ -174,6 +190,13 @@ Historical evidence does not automatically verify the integrated code.
 | 2026-11-10 | Intermediate gate | Full `scripts/check.ps1` passed before the lifecycle fixes: fmt, check, clippy, 59 tests, release build, link checks. Not the final gate |
 | 2026-11-10 | Native lifecycle fixes | 26 targeted Windows tests passed after the fixes. Sent-only wake, busy queue, `WM_QUIT`, cancellation retention, normal mutex interleavings, late callback, and recovery during an in-flight hide are covered. `cargo clippy --all-targets --locked -- -D warnings` passed. Superseded by the final gate |
 | 2026-11-10 | Final full gate | `scripts/check.ps1` passed on the final review-cleared source: fmt, check, clippy with `-D warnings`, **66 tests**, release build, link parser self-test (16 cases), and 27 Markdown links in 11 files |
+| 2026-11-10 | Startup surface fix | Release binary launched with the window hidden and then shown. Log recorded `dock window shown after first frame`. Hidden state was transparent; shown state rendered icons and the clock. The full gate passed after the fix: fmt, check, clippy with `-D warnings`, **66 tests**, release build, link parser, and Markdown links |
+| 2026-11-11 | Live theming and geometry | A config reload changed the width to 700 and the orientation to top. The running dock moved to the top. Restoring 560 and bottom moved it back. Unit tests cover top placement, the top trigger, opacity scaling, and size bounds. 100% DPI |
+| 2026-11-11 | Settings window | Opened from `--settings` and from the tray. Apply saved the new schema through the atomic writer. The external-edit prompt, invalid-field messages, and pinned add/remove/reorder were not exercised |
+| 2026-11-11 | Tray | Icon visible in the notification area. Right-click showed Settings, Reload config, Start with Windows, Restore taskbar, and Quit. The Settings item opened the settings window |
+| 2026-11-11 | Full gate | `scripts/check.ps1` passed on the current source: fmt, check, clippy with `-D warnings`, **78 tests**, release build, link parser self-test (16 cases), and 30 Markdown links in 12 files |
+| 2026-11-11 | Installer | `installer/dockwind.iss`, `scripts/build-installer.ps1`, and `scripts/bump-version.ps1` produced `dist\Dockwind-0.1.0-setup.exe` with Inno Setup 6.7.3. Silent install exited 0, the installed app started with a tray icon, and silent uninstall exited 0. The install directory was removed and the config was preserved. Not a clean profile; upgrade was not exercised |
+| 2026-11-11 | Build resources | `build.rs` injects the package version into the manifest and embeds the manifest and icon. The release build passed |
 | 2026-11-10 | Build warning | Baseline `proc-macro-error2` v2.0.1 warning remains |
 | 2026-11-10 | Earlier debug startup smoke | 4 seconds on Windows 10 build 19045, 1920x1080, 100% DPI, `hide_native_taskbar = false`. Logs showed config load, hotkey registration, placement, transparent styles. Process was force-killed |
 
@@ -185,53 +208,72 @@ Not verified on the review-cleared integrated code:
 - Panic restore.
 - Console-control restore.
 - `--restore-taskbar` recovery CLI.
-- GUI smoke after the lifecycle fixes.
+- Settings external-edit prompt, invalid-field messages, and pinned app editing.
+- Clean-profile install, upgrade, and Start Menu and desktop shortcut checks.
+- Hosted CI and the tag release workflow.
 - Windows 11 behavior.
 - Mica or Acrylic.
 - Real multi-DPI desktop.
 
-The final full gate passed on 2026-11-10. The evidence above applies to the
-current review-cleared source.
+The full gate passed on 2026-11-11. The evidence above applies to the current
+source.
 
 ## Pending Work
 
 Order is a recommendation, not a commitment.
 
-1. **Manual desktop checks.** Normal quit, taskbar hide and restore, real Explorer
+1. **Clean-profile and upgrade installer check.** Run the built installer on a
+   fresh Windows profile, confirm the Start Menu shortcut and optional desktop
+   shortcut, upgrade over the same path, and confirm config preservation. The
+   basic install, launch, and uninstall path passed on 2026-11-11. See PRD P08 to
+   P13 and `docs/RELEASE.md`.
+2. **Hosted CI.** Push the workflows and confirm the gate and tag release run on
+   GitHub Actions. See PRD P14.
+3. **Manual desktop checks.** Normal quit, taskbar hide and restore, real Explorer
    restart, panic, console control, and `--restore-taskbar`. Confirm the taskbar is
    visible afterward. See PRD U06.
-2. **AppBar `reserve_space`.** Implement `SHAppBarMessage` registration,
+4. **Settings follow-up checks.** Toggle `hide_native_taskbar` and confirm the
+   restart notice, exercise the external-edit prompt, invalid field messages, and
+   pinned app add/remove/reorder. See PRD P02 to P06.
+5. **Automatic geometry.** Recompute placement on DPI change, display change, and
+   taskbar hide or restore. Config geometry is already live. See PRD U02.
+6. **AppBar `reserve_space`.** Implement `SHAppBarMessage` registration,
    `ABN_POSCHANGED`, `ABN_FULLSCREENAPP`, and `ABM_REMOVE` on shutdown. See PRD
    U01.
-3. **Live geometry.** Recompute placement on DPI change, display change, and
-   taskbar hide or restore. See PRD U02.
-4. **App-list polish.** Middle-click launch, tooltips, scrolling, and overflow.
+7. **App-list polish.** Middle-click launch, tooltips, scrolling, and overflow.
    See PRD U03.
-5. **UWP identity.** Map `ApplicationFrameHost.exe` windows to the real app, or
+8. **UWP identity.** Map `ApplicationFrameHost.exe` windows to the real app, or
    document a supported alternative. See PRD U04.
-6. **Windows 11 blur.** Exercise Mica and Acrylic on Windows 11 22H2 or newer.
+9. **Windows 11 blur.** Exercise Mica and Acrylic on Windows 11 22H2 or newer.
    See PRD U05.
-7. **Multi-DPI UI.** Exercise the running UI at 125%, 150%, and 200%. See PRD U07.
-8. **Shutdown latency.** Profile teardown if the several-second exit remains.
-   See PRD U08.
-9. **Settings UI.** Future work. See PRD P01 to P07.
-10. **Installer.** Future work. See PRD P08 to P13.
-11. **Hosted CI.** Deferred until a host is selected. See PRD P14.
+10. **Multi-DPI UI.** Exercise the running UI at 125%, 150%, and 200%. See PRD U07.
+11. **Shutdown latency.** Profile teardown if the several-second exit remains.
+    See PRD U08.
+12. **Settings polish.** Inline field validation, comment and unknown-key
+    preservation, and coordination between multiple settings processes.
+13. **Code signing.** The installer and binary are unsigned. Add signing only with
+    a certificate and a recorded decision.
 
 ## Known Limitations
 
 The detailed list is in `docs/PRD.md` section 5 and `docs/ARCHITECTURE.md`
 section 9. The short version:
 
-- Placement is computed once at startup.
+- Config geometry is live. Automatic DPI, display, and work-area changes still
+  need a restart.
 - `reserve_space` does nothing.
-- The app list does not scroll.
+- The app list does not scroll, show tooltips, or support middle-click launch.
 - UWP windows are skipped.
 - `clock.locale` is unused.
 - Mica and Acrylic are unverified on Windows 11.
 - The running UI was exercised at 100% DPI only.
 - Manual desktop recovery cases are unverified.
-- Settings and installer do not exist.
+- The installer is built and the basic install and uninstall path passed. A clean
+  Windows profile and upgrade were not tested. The installer is unsigned and the
+  GitHub workflows have not run yet.
+- A settings save drops comments and unknown keys. The native window has message
+  box errors, not inline field errors. The taskbar toggle needs a restart.
+- A missing tray icon is logged and does not block the dock.
 
 ## Documentation Map
 
@@ -242,6 +284,7 @@ section 9. The short version:
 | [docs/ARCHITECTURE.md](ARCHITECTURE.md) | Target modules, ownership, lifetimes, invariants |
 | [DESIGN.md](../DESIGN.md) | UI and window patterns |
 | [docs/CONFIGURATION.md](CONFIGURATION.md) | Config schema, validation, reload, save contract |
+| [docs/RELEASE.md](RELEASE.md) | Versioning, installer, and GitHub Actions |
 | [docs/engineering.spec.md](engineering.spec.md) | Rust and verification conventions |
 | [docs/decisions.md](decisions.md) | D001 onward, including the organization decisions |
 | [docs/HANDOFF.md](HANDOFF.md) | This handoff: state, pending work, dated evidence |
@@ -256,11 +299,13 @@ section 9. The short version:
    `docs/CONFIGURATION.md`, and recent entries in `docs/decisions.md`.
 2. Read Native Lifecycle Contract before touching source.
 3. Run `git status` and `.\scripts\check.ps1` before changing anything. The
-   2026-11-10 final gate applies to that source. Later runs are gate evidence for
-   your own changes, not that source.
+   2026-11-11 gate applies to that source. Later runs are gate evidence for your
+   own changes, not that source.
 4. Launch with `hide_native_taskbar = false` and `auto_hide = false` for a
    predictable UI. Enable auto-hide only when testing it.
-5. Pick one pending item. Write a pure test where possible. Verify manually.
-6. Update the canonical doc and this handoff with dated evidence.
-7. Never leave the taskbar hidden. Use the restore command and a watchdog during
+5. Open the settings window with `--settings` or the tray. The tray and settings
+   window are safe to use with the taskbar visible.
+6. Pick one pending item. Write a pure test where possible. Verify manually.
+7. Update the canonical doc and this handoff with dated evidence.
+8. Never leave the taskbar hidden. Use the restore command and a watchdog during
    any taskbar-hiding test.

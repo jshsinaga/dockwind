@@ -3,10 +3,11 @@
 Status: active. This document defines what Dockwind builds and why. It owns scope
 and acceptance criteria. It does not own architecture or configuration details.
 
-Last updated: 2026-11-10
-Current code: integrated and review-cleared
-Current stage: final full gate passed on 2026-11-10. Manual desktop cases remain
-unverified.
+Last updated: 2026-11-11
+Current code: integrated, review-cleared, and extended with settings, tray, theming,
+and release delivery
+Current stage: full gate on 2026-11-10 after the settings, tray, and live geometry
+work. Taskbar recovery and installer checks remain manual.
 Historical baseline: `482bd7a`
 
 ## 1. Product Definition
@@ -101,8 +102,20 @@ A behavior is not Verified only because a code path exists. Evidence lives in
 |---|---|---|---|
 | R28 | Provide a native right-click menu | Verified | The menu opens, Escape dismisses it, config reload works, autostart toggles, and Restore taskbar and Quit exits |
 | R29 | Support per-user autostart | Verified | The menu and `--enable-autostart` / `--disable-autostart` create and remove the HKCU Run value |
-| R30 | Keep the existing CLI contract | Implemented | The binary supports `--restore-taskbar`, `--enable-autostart`, and `--disable-autostart`. No new flags are required. The integrated recovery CLI has not been manually re-tested |
+| R30 | Keep the CLI usable | Implemented | The binary supports `--restore-taskbar`, `--enable-autostart`, `--disable-autostart`, and `--settings`. The recovery command remains first and bypasses the single-instance check |
 | R31 | Keep file locations stable | Verified | Config stays at `%APPDATA%\Dockwind\config.toml`. Logs stay at `%LOCALAPPDATA%\Dockwind\logs` |
+
+### 4.7 Theming, Settings, Tray, and Delivery
+
+| ID | Requirement | Status | Acceptance criteria |
+|---|---|---|---|
+| R32 | Configure dock geometry and orientation | Implemented | `width`, `height`, `offset`, and `orientation` (top or bottom) are validated. Config changes reposition and resize the running dock without a restart. Top and bottom placement are manually checked at 100% DPI |
+| R33 | Configure transparency and appearance | Implemented | `opacity` multiplies the background alpha from 10 to 100. Background, radius, icon size, padding, and opacity apply live. Invalid values are sanitized and logged |
+| R34 | Provide a settings window | Implemented | A separate focusable window edits appearance, behavior, clock, and pinned apps. Apply validates and saves atomically. Close discards unsaved edits. External file changes prompt before overwrite. The window is native Win32, not GPUI |
+| R35 | Provide a tray icon | Implemented | A tray icon exists while the dock runs. Its menu opens settings, reloads config, toggles autostart, restores the taskbar, and quits. Double-click opens settings. The icon returns after `TaskbarCreated` |
+| R36 | Manage displayed apps | Implemented | The settings window adds, removes, and reorders pinned apps. `show_running_apps = false` hides running-only apps |
+| R37 | Package a release | Implemented | An Inno Setup script builds a per-user installer with Start Menu and optional desktop shortcuts. Uninstall restores the taskbar and disables autostart. Built and smoke-tested on 2026-11-11. A clean profile and upgrade are not checked |
+| R38 | Provide hosted CI and release automation | Implemented | GitHub Actions runs the local gate on Windows for pushes and pull requests. A `vX.Y.Z` tag checks the version, builds the installer, and publishes a GitHub release. The workflows have not run in the hosted environment yet |
 
 ## 5. Accepted Unfinished Dock Features
 
@@ -112,65 +125,77 @@ are not proposed new features.
 | ID | Feature | Current state | Acceptance criteria |
 |---|---|---|---|
 | U01 | AppBar `reserve_space` | `reserve_space` exists in config but is unused. `SHAppBarMessage` is not implemented | With `reserve_space = true` and auto-hide off, maximized windows do not cover the dock. `ABM_REMOVE` runs on shutdown |
-| U02 | Live work-area and display changes | Placement is computed once at startup. Hiding the taskbar does not update `rcWork` | DPI change, display change, and taskbar hide or restore reposition the dock without a restart. The trigger strip is rechecked |
-| U03 | App-list polish | No middle-click launch, tooltips, scrolling, or overflow | Middle-click launches a second instance for pinned apps. Tooltips show the app name. A long app list remains usable within the fixed window |
+| U02 | Live work-area and display changes | Config geometry changes are live. Automatic DPI, display, and taskbar work-area changes still need a restart | DPI change, display change, and taskbar hide or restore reposition the dock without a restart. The trigger strip is rechecked |
+| U03 | App-list polish | Pinned app management and `show_running_apps` exist. Middle-click launch, tooltips, scrolling, and overflow do not | Middle-click launches a second instance for pinned apps. Tooltips show the app name. A long app list remains usable within the fixed window |
 | U04 | UWP identity | `ApplicationFrameHost.exe` windows are skipped | A UWP app shows its real identity and icon, or the limitation is documented with a supported alternative |
 | U05 | Windows 11 blur verification | Mica and Acrylic code exists and is gated on build 22621. It is not verified on Windows 11 | Mica and Acrylic are exercised on Windows 11 22H2 or newer. The radius behavior in those modes is recorded |
 | U06 | Manual robustness coverage | Some Win32 paths are unit-tested or simulated, not exercised for real | A real Explorer restart, panic restore, console-control restore, and fullscreen app are tested with the taskbar visible again afterward |
 | U07 | Multi-DPI UI coverage | Running UI was exercised at 100% only. Conversions are unit-tested to 200% | The running UI is checked at 125%, 150%, and 200% with correct size and placement |
 | U08 | Shutdown latency | Quit works, but the process can exit several seconds after the request | Shutdown completes in a bounded time. Teardown is profiled if the delay remains |
 
-## 6. Proposed New Features
+## 6. Implemented Development Features
 
-These features are future work. They are not approved for the current release and
-must not be implemented without a new decision.
+These features were proposed after the original plan and are now implemented.
+`Implemented` still means at least one manual or environment check is missing.
+The installer and hosted workflows need execution evidence before they are called
+verified.
 
 ### 6.1 Settings UI
 
-| ID | Requirement | Acceptance criteria |
-|---|---|---|
-| P01 | Provide a settings window | A separate, focusable GPUI window edits the shared config. The dock remains a non-activating tool window |
-| P02 | Use draft, Apply, and Cancel | Edits stay in a draft until Apply. Cancel discards. Apply validates before saving |
-| P03 | Show validation and errors | Invalid fields show inline errors. A failed save leaves the previous file intact and reports the failure |
-| P04 | Show restart notices | Changing `hide_native_taskbar`, `quit_hotkey`, or `margin_bottom` shows a restart-required notice |
-| P05 | Share one config owner | The settings window and the dock do not write the file concurrently. One owner serializes writes and reloads |
-| P06 | Save safely | Saves use atomic replacement in the same directory. External edits are detected and never silently overwritten. User content is preserved where the format allows |
-| P07 | Avoid new CLI behavior | The settings window does not add CLI flags. Existing commands keep their behavior |
+| ID | Requirement | Status | Acceptance criteria |
+|---|---|---|---|
+| P01 | Provide a settings window | Implemented | A separate, focusable native Win32 window edits the shared config. The dock remains a non-activating tool window. This deliberately deviates from the original GPUI wording, see D031 |
+| P02 | Use draft, Apply, and Close | Implemented | Controls hold the draft. Apply validates and saves. Close discards unsaved edits |
+| P03 | Show validation and errors | Implemented | Invalid fields show a message box naming the failure. A failed save leaves the previous file intact and reports the failure. Inline field errors are not implemented |
+| P04 | Show restart notices | Implemented | Changing `hide_native_taskbar` or `quit_hotkey` shows a restart-required notice. `offset` is live, so it no longer needs a restart |
+| P05 | Share one config owner | Implemented with limitation | One settings window per process. The dock never writes the file. A `--settings` process can coexist with the dock and the watcher reloads its save. Multiple settings processes are not coordinated |
+| P06 | Save safely | Implemented with limitation | Saves use atomic replacement in the same directory. External edits are detected and prompt before overwrite. Comments and unknown keys are not preserved |
+| P07 | Avoid new CLI behavior | Superseded | `--settings` was added so the window can open without the dock. Existing commands keep their behavior |
 
 The save contract is defined in `docs/CONFIGURATION.md`.
 
 ### 6.2 Installer
 
-| ID | Requirement | Acceptance criteria |
-|---|---|---|
-| P08 | Choose an install scope | User-scope installation is the recommendation. A machine-wide scope needs a separate decision |
-| P09 | Use a stable install path | The path is recorded in a decision before implementation. Upgrades use the same path |
-| P10 | Offer optional autostart | The installer can enable autostart through the existing HKCU Run key, but does not force it |
-| P11 | Preserve the taskbar on upgrade and uninstall | Upgrade and uninstall stop Dockwind through a path that restores the taskbar. A killed installer does not leave the taskbar hidden |
-| P12 | Define the user-data policy | Uninstall states whether config and logs are removed, kept, or offered as a choice. The default preserves user content |
-| P13 | Do not guess the packaging tool | The packaging format and tool are selected in a decision before implementation |
+| ID | Requirement | Status | Acceptance criteria |
+|---|---|---|---|
+| P08 | Choose an install scope | Implemented | Per-user install with `PrivilegesRequired=lowest` and `{autopf}\Dockwind`. No administrator prompt |
+| P09 | Use a stable install path | Implemented | The per-user `{autopf}\Dockwind` path and fixed AppId are recorded in D033. Upgrades reuse them |
+| P10 | Offer optional autostart | Implemented | The installer does not force autostart. The app and tray expose it through the existing HKCU Run key |
+| P11 | Preserve the taskbar on upgrade and uninstall | Implemented with limitation | Uninstall runs `--disable-autostart` and `--restore-taskbar` before removing files. The installer closes a running Dockwind through Inno Setup's close-application support. The uninstall path ran while the taskbar was visible; the taskbar-hidden case is not exercised |
+| P12 | Define the user-data policy | Implemented | Uninstall preserves `%APPDATA%\Dockwind\config.toml` and logs. The installer does not delete user data |
+| P13 | Do not guess the packaging tool | Implemented | Inno Setup 6 is selected in D033. The script is in `installer/dockwind.iss` |
+
+The installer was built with Inno Setup 6.7.3 on 2026-11-11 and a silent install
+and uninstall passed. A clean Windows profile and an upgrade were not tested. The
+release workflow installs Inno Setup before building.
 
 ### 6.3 Delivery
 
-| ID | Requirement | Acceptance criteria |
-|---|---|---|
-| P14 | Add hosted CI | Hosting is selected first. CI runs the same gates as `scripts/check.ps1` on Windows |
+| ID | Requirement | Status | Acceptance criteria |
+|---|---|---|---|
+| P14 | Add hosted CI | Implemented | GitHub Actions on `windows-latest` runs `scripts/check.ps1` for pushes and pull requests. A tag workflow builds the installer and publishes a release. The workflows have not run in the hosted environment yet |
 
 ## 7. Release Criteria
 
 The current release is ready when all of these are true:
 
-1. Independent review is cleared. This is complete.
-2. The final `scripts/check.ps1` run passes from the repository root. Earlier
-   runs are intermediate.
-3. Existing config keys, file locations, and CLI behavior still work.
-4. Manual checks confirm the native taskbar is restored after normal quit, panic,
+1. The full `scripts/check.ps1` run passes from the repository root. Earlier runs
+   are intermediate.
+2. Existing config keys, file locations, and CLI behavior still work.
+3. Manual checks confirm the native taskbar is restored after normal quit, panic,
    console control, and the recovery command. A real Explorer restart is checked
    or explicitly recorded as unverified.
-5. The dock does not take focus from the foreground app.
-6. The documented limitations match the code. No limitation is silently removed
+4. The dock does not take focus from the foreground app.
+5. The settings window opens, saves, rejects invalid values, prompts on an
+   external edit, and applies live geometry. The restart-only fields are checked.
+6. The tray icon appears, its menu opens, and its settings, reload, autostart,
+   restore, and quit actions are checked.
+7. The installer builds, installs on a clean profile, starts the dock, upgrades
+   over the same path, and uninstalls with the taskbar visible.
+8. Hosted CI passes on a pull request and the tag workflow publishes an installer.
+9. The documented limitations match the code. No limitation is silently removed
    from the docs without evidence.
-7. `docs/HANDOFF.md` lists the pending work and the dated evidence that exists.
+10. `docs/HANDOFF.md` lists the pending work and the dated evidence that exists.
 
 ## 8. Non-Goals
 
@@ -180,8 +205,11 @@ The current release is ready when all of these are true:
   `SetWindowCompositionAttribute` path.
 - A plugin system, theme marketplace, or scripting surface.
 - A database. Dockwind has no ERD.
-- A settings UI or installer in the current release.
-- New CLI flags or product features during documentation work.
+- A machine-wide installer, code signing, auto-updater, or delta updates in this
+  release.
+- Per-field inline validation in the native settings window.
+- New features during documentation-only work. `--settings` is part of the
+  settings feature, not a standalone expansion.
 
 ## 9. Constraints
 
@@ -189,7 +217,12 @@ The current release is ready when all of these are true:
 - GPUI pinned to `=0.2.2`.
 - `windows` crate 0.61.
 - Windows 10 and 11, x64.
+- The settings window uses native Win32 controls. This is recorded in D031.
+- The installer uses Inno Setup 6 and a per-user install. This is recorded in
+  D033.
+- Hosted CI uses GitHub Actions on `windows-latest`. This is recorded in D034.
 - Existing TOML keys, file locations, and CLI behavior stay compatible.
+  `margin_bottom` remains an alias for `offset`.
 - Targeted lints are active: `unsafe_op_in_unsafe_fn = "deny"` and
   `clippy::undocumented_unsafe_blocks = "deny"`. Global `unwrap` and `expect`
   denies are not used; production-only denies live at crate scope.

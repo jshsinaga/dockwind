@@ -1,11 +1,11 @@
 # Dockwind Configuration
 
 Status: active. This document owns the config schema, validation, reload behavior,
-and the future save contract. It does not own product scope or architecture.
+and the settings save contract. It does not own product scope or architecture.
 
-Last updated: 2026-11-10
-Code: integrated, review-cleared, and the final full gate passed on 2026-11-10.
-Historical baseline: `482bd7a`
+Last updated: 2026-11-11
+Code: settings window, tray, and live geometry integrated. Full gate evidence is
+in `docs/HANDOFF.md`.
 
 ## 1. Location and Lifecycle
 
@@ -16,11 +16,13 @@ Historical baseline: `482bd7a`
 | Created | On first run, from defaults |
 | Encoding | UTF-8 TOML |
 | Hot reload | `notify` watcher with a 200 ms debounce |
+| Settings entry | Dock context menu, tray menu, or `dockwind --settings` |
 
 If the file is missing, Dockwind writes a default file with every field. If the
 file is corrupt at startup, Dockwind logs a warning and uses defaults. If the file
 is corrupt during hot reload, Dockwind logs an error and keeps the last valid
-config. Dockwind does not overwrite a corrupt user file.
+config. Dockwind does not overwrite a corrupt user file unless the user saves from
+the settings window and confirms the overwrite.
 
 ## 2. Schema
 
@@ -31,7 +33,11 @@ corner_radius = 16
 blur = "none"
 icon_size = 40
 padding = 8
-margin_bottom = 12
+width = 560
+height = 92
+offset = 12
+orientation = "bottom"
+opacity = 100
 
 [behavior]
 auto_hide = true
@@ -41,6 +47,7 @@ animation_ms = 180
 reserve_space = false
 hide_native_taskbar = false
 hide_in_fullscreen = true
+show_running_apps = true
 quit_hotkey = "Ctrl+Alt+Shift+Q"
 
 [clock]
@@ -58,6 +65,9 @@ All sections and fields are optional. Missing values use defaults. Unknown keys
 are ignored on load. A duplicate pinned path is not rejected and produces a
 duplicate item.
 
+`margin_bottom` is accepted as a legacy alias for `offset`. New files use
+`offset`.
+
 ## 3. Field Reference
 
 ### 3.1 `[appearance]`
@@ -67,17 +77,30 @@ duplicate item.
 | `background` | string | `#1E1E2ECC` | `#RRGGBB` or `#RRGGBBAA` | Live |
 | `corner_radius` | integer | 16 | Capped at half of `icon_size + 2 * padding` | Live |
 | `blur` | enum | `none` | `none`, `mica`, or `acrylic` | Live |
-| `icon_size` | integer | 40 | 16 to 128 | Live |
-| `padding` | integer | 8 | Only a value that makes `padding * 2 + icon_size` unrepresentable in `u32` is replaced | Live |
-| `margin_bottom` | integer | 12 | None | Startup only |
+| `icon_size` | integer | 40 | 16 to 128, and no more than `height - 16` | Live |
+| `padding` | integer | 8 | Fits in `height` with `icon_size`; checked arithmetic | Live |
+| `width` | integer | 560 | 200 to 4096 | Live |
+| `height` | integer | 92 | 48 to 400 | Live |
+| `offset` | integer | 12 | 0 to 512. Alias `margin_bottom` | Live |
+| `orientation` | enum | `bottom` | `bottom` or `top` | Live |
+| `opacity` | integer | 100 | 10 to 100 | Live |
+
+`background` alpha is written in the color. `opacity` is a percentage multiplier
+on that alpha. At `opacity = 100`, the background is exactly the written value. At
+`opacity = 50`, a `#1E1E2ECC` background becomes `#1E1E2E66`.
+
+`width`, `height`, and `offset` are live. Changing them from the settings window
+or by editing the file repositions and resizes the dock without a restart.
+
+`orientation = "top"` places the dock at the top of the work area and moves the
+auto-hide trigger to the top edge. `orientation = "bottom"` is the default.
 
 `padding` uses checked arithmetic. If `padding * 2 + icon_size` overflows `u32`,
-Dockwind replaces `padding` with 8 and logs a warning. There is no lower or upper
-limit for a representable padding value.
+Dockwind replaces `padding` with 8 and logs a warning. It is then capped so the
+content fits inside `height`.
 
 `corner_radius` is replaced with `min(default, max_radius)` when it exceeds the
-cap. The cap is half of `icon_size + 2 * padding`, not half of the full window
-height.
+cap. The cap is half of `icon_size + 2 * padding`.
 
 `blur = "mica"` and `blur = "acrylic"` need Windows 11 build 22621 or newer. On an
 older build, Dockwind logs that the backdrop is unavailable and keeps the
@@ -94,18 +117,25 @@ transparent surface. This is an explicit, logged degradation.
 | `reserve_space` | bool | false | None | No effect |
 | `hide_native_taskbar` | bool | false | None | Startup only |
 | `hide_in_fullscreen` | bool | true | None | Live |
-| `quit_hotkey` | string | `Ctrl+Alt+Shift+Q` | Parsed at startup | Startup only |
+| `show_running_apps` | bool | true | None | Live |
+| `quit_hotkey` | string | `Ctrl+Alt+Shift+Q` | Parsed at startup and by the settings window | Startup only |
+
+`auto_hide = false` keeps the dock permanently visible. The settings window shows
+this as the unchecked "Auto-hide when not used" box.
+
+`show_running_apps = false` hides running apps that are not pinned. Pinned apps
+still show whether they are running.
 
 `reserve_space` is accepted for compatibility but is not implemented. No AppBar
 registration, space reservation, or `ABM_REMOVE` exists. The field has no runtime
-effect.
+effect and the settings window disables it.
 
-`hide_native_taskbar` is read at startup. Changing it by hot reload does not apply
-until the next launch. When it is true, an invalid or unavailable `quit_hotkey`
-fails startup because the user would lose the safe quit path.
+`hide_native_taskbar` is read at startup. Changing it in the settings window saves
+the value and shows a restart notice. When it is true, an invalid or unavailable
+`quit_hotkey` fails startup because the user would lose the safe quit path.
 
-`margin_bottom` is used when the window is created. It is not part of the live
-appearance update, so changing it needs a restart.
+`quit_hotkey` is read at startup. Changing it saves the value, validates it, and
+shows a restart notice.
 
 ### 3.3 `[clock]`
 
@@ -131,24 +161,31 @@ merged into the pinned item. A missing `name` or `path` field is a parse failure
 An empty path string is not validated at load time. The launch action reports the
 error when clicked.
 
+The settings window can add, remove, and reorder pinned apps. It uses the file
+name as the display name and writes an empty argument list.
+
 ## 4. Validation Rules
 
-1. `icon_size` must be in `16..=128`. Otherwise it becomes 40 with a warning.
-2. `padding` must allow `padding * 2 + icon_size` to fit in `u32`. Otherwise it
-   becomes 8 with a warning. Representable values are accepted without an
-   arbitrary limit.
-3. `corner_radius` must not exceed `(icon_size + 2 * padding) / 2`. Otherwise it
+1. `width` must be in `200..=4096`. Otherwise it becomes 560 with a warning.
+2. `height` must be in `48..=400`. Otherwise it becomes 92 with a warning.
+3. `icon_size` must be in `16..=128`. Otherwise it becomes 40 with a warning. It
+   is then capped at `height - 16`.
+4. `padding` must allow `padding * 2 + icon_size` to fit in `u32`. Otherwise it
+   becomes 8 with a warning. It is then capped so the content fits in `height`.
+5. `opacity` must be in `10..=100`. Otherwise it becomes 100 with a warning.
+6. `offset` must be at most 512. Otherwise it becomes 12 with a warning.
+7. `corner_radius` must not exceed `(icon_size + 2 * padding) / 2`. Otherwise it
    becomes the smaller of the default and the cap, with a warning.
-4. `background` must be `#RRGGBB` or `#RRGGBBAA`. Otherwise it becomes the default,
+8. `background` must be `#RRGGBB` or `#RRGGBBAA`. Otherwise it becomes the default,
    with a warning.
-5. `time_format` and `date_format` must contain no `chrono` format errors.
+9. `time_format` and `date_format` must contain no `chrono` format errors.
    Otherwise each becomes its default, with a warning.
-6. `quit_hotkey` must parse at startup. A bad value is a startup error. If the
-   taskbar is not hidden, Dockwind logs a warning and runs without a global quit
-   hotkey.
-7. A TOML type error is a parse failure. Startup uses defaults with a warning.
-   Reload keeps the last valid config with an error.
-8. Unknown keys are ignored. They are not preserved by a rewrite.
+10. `quit_hotkey` must parse at startup. A bad value is a startup error. If the
+    taskbar is not hidden, Dockwind logs a warning and runs without a global quit
+    hotkey. The settings window rejects an invalid hotkey with a message.
+11. A TOML type error is a parse failure. Startup uses defaults with a warning.
+    Reload keeps the last valid config with an error.
+12. Unknown keys are ignored. They are not preserved by a rewrite.
 
 Validation never panics. The application must not crash because of a bad config
 value.
@@ -165,15 +202,20 @@ directory are ignored.
 The watcher drains matching events for 200 ms. A matching event extends the
 deadline. It then parses the file and sends a full `Config` to the dock.
 `ConfigWatcher::shutdown` is idempotent, stops the worker, and joins it. A failed
-path resolution returns `ConfigError::Resolve`. This section states the reload
-contract. Read `docs/HANDOFF.md` for current verification status. The following
-changes apply live:
+path resolution returns `ConfigError::Resolve`.
+
+The following changes apply live:
 
 - `appearance.background`
 - `appearance.corner_radius`
 - `appearance.blur`
 - `appearance.icon_size`
 - `appearance.padding`
+- `appearance.width`
+- `appearance.height`
+- `appearance.offset`
+- `appearance.orientation`
+- `appearance.opacity`
 - `clock.time_format`
 - `clock.date_format`
 - `behavior.auto_hide`
@@ -181,93 +223,88 @@ changes apply live:
 - `behavior.hide_delay_ms`
 - `behavior.animation_ms`
 - `behavior.hide_in_fullscreen`
+- `behavior.show_running_apps`
 - `[[pinned]]`
 
 The following changes need a restart or have no effect:
 
-- `appearance.margin_bottom`
-- `behavior.hide_native_taskbar`
-- `behavior.quit_hotkey`
+- `behavior.hide_native_taskbar` (restart)
+- `behavior.quit_hotkey` (restart)
 - `behavior.reserve_space` (no effect)
 - `clock.locale` (no effect)
 
 A config reload does not rewrite the file. The user's text, ordering, comments,
-and unknown keys stay on disk until the user or a future settings UI writes it.
+and unknown keys stay on disk until the user or the settings window writes it.
 
-## 6. Save Contract for the Future Settings UI
+## 6. Settings Save Behavior
 
-This contract is required before a settings UI ships. It is not implemented in the
-current release.
+The settings window is a native Win32 window on its own thread. It is not the
+GPUI dock window. The reason is recorded in `docs/decisions.md`.
 
 ### 6.1 One Writer
 
-- One shared config owner serializes all writes.
-- The settings window and the dock do not write the file concurrently.
-- The owner validates the draft before writing.
-- A failed write leaves the previous file intact.
+- The settings window is single-instance within a process.
+- The dock does not write the config file.
+- The watcher reads a settings save like any other external edit.
+- `dockwind --settings` opens a separate process when the dock is running. The
+  running dock reloads the file through the watcher.
 
-### 6.2 Atomic Replacement
+### 6.2 Apply and Close
+
+- Controls hold the draft.
+- Apply validates, saves, and updates the controls with sanitized values.
+- Close discards unsaved edits and closes the window.
+- Validation failures show a message box and do not write the file.
+- Autostart is applied immediately. It is not a config field.
+
+### 6.3 Atomic Replacement
 
 1. Serialize the complete config to a temporary file in the same directory.
 2. Flush the temporary file.
-3. Replace the target file in one rename or replace operation.
-4. Keep the previous file if any step fails.
-5. Report the failure. Do not fall back to a partial write.
+3. Replace the target file in one rename.
+4. Remove the temporary file on failure.
+5. Keep the previous file if a step fails.
 
 Do not write in place. A crash during an in-place write can leave a corrupt file.
 
-### 6.3 Watcher Feedback
-
-- A settings save and the file watcher must not fight each other.
-- The owner records the content hash or revision it wrote.
-- The watcher ignores its own save, or reports it as a no-op.
-- The dock updates from the owner's validated config, not from a second parse of
-  the same write.
-- An external save still reaches the dock through the normal watcher path.
-
 ### 6.4 External Edits and Conflicts
 
-- Capture the file revision or content hash when the settings draft opens.
-- Before Apply, check the current file revision.
-- If the file changed, do not overwrite it silently. Offer to reload or to
-  overwrite, and state which changes will be lost.
-- If the file was deleted, offer to recreate it from the draft or cancel.
-- If the file is corrupt, keep the draft and show the parse error.
+The settings window records the file contents when it opens. Before Apply it reads
+the file again. If the contents changed, it asks before overwriting. If the file
+was deleted, it asks before recreating it. A failed save leaves the existing file
+intact and reports the error.
 
-### 6.5 Preserving User Content
+The current writer does not merge external edits. Overwrite replaces the whole
+file after confirmation.
 
-- Keep existing keys, section order where practical, comments, and unknown keys.
-- Do not drop a key only because the current build does not use it.
-- Do not rename keys or change defaults as part of a settings save.
-- Preserve `[[pinned]]` order.
-- If the format cannot preserve a comment or unknown key, warn before writing.
+### 6.5 Preserved User Content
 
-The current loader ignores unknown keys and the current serializer would drop
-them. That is a known limitation of the current code, not the future contract.
+The current writer serializes the full known schema. Comments, key ordering, and
+unknown keys are not preserved by a settings save. This is a known limitation.
+Editing the file by hand preserves them until the settings window saves.
 
 ### 6.6 Restart Notices
 
-The settings UI must show a restart-required notice for:
+The settings window shows a restart notice after saving a change to:
 
 - `behavior.hide_native_taskbar`
 - `behavior.quit_hotkey`
-- `appearance.margin_bottom`
 
-`behavior.reserve_space` and `clock.locale` must be shown as unavailable, not as
-working settings.
+`behavior.reserve_space` is disabled and shown as not implemented. `clock.locale`
+has no control. `appearance.offset` is live, so it does not need a restart.
 
 ## 7. Compatibility Rules
 
-1. Existing keys keep their names, types, and meaning. Do not rename or remove a
-   key without a decision that records the migration.
+1. Existing keys keep their names, types, and meaning. `margin_bottom` remains
+   accepted as an alias for `offset`.
 2. Missing keys use defaults. A partial file remains valid.
-3. Unknown keys are ignored on load. A future writer should preserve them where
-   possible.
+3. Unknown keys are ignored on load. The writer does not preserve them.
 4. `reserve_space` and `clock.locale` remain accepted even though they have no
-   effect. Removing them would break existing files.
+   effect.
 5. The config path and log path stay stable.
-6. The CLI stays `--restore-taskbar`, `--enable-autostart`, and
-   `--disable-autostart`. The config work does not add flags.
+6. The CLI supports `--restore-taskbar`, `--enable-autostart`,
+   `--disable-autostart`, and `--settings`. The existing commands keep their
+   behavior.
 7. A config change must not change the taskbar restore contract or the startup
    order in `docs/ARCHITECTURE.md`.
 
@@ -281,8 +318,22 @@ Use these shapes when reporting config problems:
 | Corrupt startup file | State that defaults are active until the file is fixed |
 | Corrupt reload | State that the last valid config is still active |
 | Failed save | State that the existing file is unchanged |
+| External edit | State that the file changed and ask before overwriting |
 | Path resolution failed | Report `ConfigError::Resolve` with the path and source |
 | Watcher stopped | Report `ConfigError::WatcherPanicked` if the worker panicked |
 | Restart-only field | Name the field and state that a restart is required |
 
 Do not swallow a write or parse error. Log it or show it to the user.
+
+## 9. Settings and Tray Entry Points
+
+| Entry | Action |
+|---|---|
+| Dock right-click | Settings..., Reload config, autostart toggle, Restore taskbar & Quit |
+| Tray right-click | Settings..., Reload config, Start with Windows, Restore taskbar, Quit |
+| Tray double-click | Open settings |
+| `dockwind --settings` | Open the settings window and wait for it to close |
+
+The tray icon is created by a dedicated worker thread. It is removed on normal
+shutdown and re-added if Explorer broadcasts `TaskbarCreated`. A missing tray icon
+is logged and does not block the dock.

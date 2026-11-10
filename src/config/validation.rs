@@ -7,12 +7,37 @@ impl Config {
         let defaults = Config::default();
         let mut warnings = Vec::new();
 
+        if !(200..=4096).contains(&self.appearance.width) {
+            warnings.push(format!(
+                "width {} is outside 200..=4096; using {}",
+                self.appearance.width, defaults.appearance.width
+            ));
+            self.appearance.width = defaults.appearance.width;
+        }
+
+        if !(48..=400).contains(&self.appearance.height) {
+            warnings.push(format!(
+                "height {} is outside 48..=400; using {}",
+                self.appearance.height, defaults.appearance.height
+            ));
+            self.appearance.height = defaults.appearance.height;
+        }
+
         if !(16..=128).contains(&self.appearance.icon_size) {
             warnings.push(format!(
                 "icon_size {} is outside 16..=128; using {}",
                 self.appearance.icon_size, defaults.appearance.icon_size
             ));
             self.appearance.icon_size = defaults.appearance.icon_size;
+        }
+
+        let max_icon_for_height = self.appearance.height.saturating_sub(16).max(16);
+        if self.appearance.icon_size > max_icon_for_height {
+            warnings.push(format!(
+                "icon_size {} does not fit height {}; using {}",
+                self.appearance.icon_size, self.appearance.height, max_icon_for_height
+            ));
+            self.appearance.icon_size = max_icon_for_height;
         }
 
         let paddings_fit = self
@@ -26,6 +51,38 @@ impl Config {
                 self.appearance.padding, self.appearance.icon_size, defaults.appearance.padding
             ));
             self.appearance.padding = defaults.appearance.padding;
+        }
+
+        let max_padding = self
+            .appearance
+            .height
+            .saturating_sub(self.appearance.icon_size)
+            / 2;
+        if self.appearance.padding > max_padding {
+            warnings.push(format!(
+                "padding {} does not fit height {} with icon_size {}; using {}",
+                self.appearance.padding,
+                self.appearance.height,
+                self.appearance.icon_size,
+                max_padding
+            ));
+            self.appearance.padding = max_padding;
+        }
+
+        if !(10..=100).contains(&self.appearance.opacity) {
+            warnings.push(format!(
+                "opacity {} is outside 10..=100; using {}",
+                self.appearance.opacity, defaults.appearance.opacity
+            ));
+            self.appearance.opacity = defaults.appearance.opacity;
+        }
+
+        if self.appearance.offset > 512 {
+            warnings.push(format!(
+                "offset {} is greater than 512; using {}",
+                self.appearance.offset, defaults.appearance.offset
+            ));
+            self.appearance.offset = defaults.appearance.offset;
         }
 
         let dock_height = self.appearance.icon_size + self.appearance.padding * 2;
@@ -148,6 +205,52 @@ mod tests {
         let loaded = config.sanitize();
         assert_eq!(loaded.config.appearance.corner_radius, 8);
         assert_eq!(loaded.warnings.len(), 1);
+    }
+
+    #[test]
+    fn invalid_size_values_fall_back_with_warnings() {
+        let mut config = Config::default();
+        config.appearance.width = 10;
+        config.appearance.height = 1000;
+        let loaded = config.sanitize();
+        assert_eq!(loaded.config.appearance.width, 560);
+        assert_eq!(loaded.config.appearance.height, 92);
+        assert_eq!(loaded.warnings.len(), 2);
+    }
+
+    #[test]
+    fn padding_is_capped_to_fit_the_height() {
+        let mut config = Config::default();
+        config.appearance.height = 64;
+        config.appearance.icon_size = 40;
+        config.appearance.padding = 20;
+        let loaded = config.sanitize();
+        assert_eq!(loaded.config.appearance.padding, 12);
+        assert_eq!(loaded.config.appearance.height, 64);
+        assert_eq!(loaded.warnings.len(), 1);
+    }
+
+    #[test]
+    fn icon_is_capped_to_fit_the_height() {
+        let mut config = Config::default();
+        config.appearance.height = 64;
+        config.appearance.icon_size = 96;
+        config.appearance.padding = 0;
+        let loaded = config.sanitize();
+        assert_eq!(loaded.config.appearance.icon_size, 48);
+        assert_eq!(loaded.config.appearance.height, 64);
+        assert_eq!(loaded.warnings.len(), 1);
+    }
+
+    #[test]
+    fn opacity_and_offset_are_bounded() {
+        let mut config = Config::default();
+        config.appearance.opacity = 5;
+        config.appearance.offset = 900;
+        let loaded = config.sanitize();
+        assert_eq!(loaded.config.appearance.opacity, 100);
+        assert_eq!(loaded.config.appearance.offset, 12);
+        assert_eq!(loaded.warnings.len(), 2);
     }
 
     #[test]

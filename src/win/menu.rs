@@ -19,9 +19,11 @@ use crate::win::autostart;
 const CMD_RELOAD: usize = 1;
 const CMD_AUTOSTART: usize = 2;
 const CMD_RESTORE_QUIT: usize = 3;
+const CMD_SETTINGS: usize = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuAction {
+    OpenSettings,
     ReloadConfig,
     ToggleAutostart,
     RestoreAndQuit,
@@ -39,6 +41,8 @@ pub fn show(hwnd: isize) -> Result<Option<MenuAction>> {
         // SAFETY: `menu` is a live popup menu. Each appended string is a temporary
         // HSTRING that lives until AppendMenuW has copied it.
         unsafe {
+            AppendMenuW(menu, MF_STRING, CMD_SETTINGS, &HSTRING::from("Settings..."))
+                .context("AppendMenuW(Settings) failed")?;
             AppendMenuW(menu, MF_STRING, CMD_RELOAD, &HSTRING::from("Reload config"))
                 .context("AppendMenuW(Reload config) failed")?;
             AppendMenuW(
@@ -99,6 +103,7 @@ pub fn show(hwnd: isize) -> Result<Option<MenuAction>> {
         }
 
         Ok(match command.0 as usize {
+            CMD_SETTINGS => Some(MenuAction::OpenSettings),
             CMD_RELOAD => Some(MenuAction::ReloadConfig),
             CMD_AUTOSTART => Some(MenuAction::ToggleAutostart),
             CMD_RESTORE_QUIT => Some(MenuAction::RestoreAndQuit),

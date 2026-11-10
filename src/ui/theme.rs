@@ -21,7 +21,10 @@ impl Theme {
                 appearance.background
             )
         })?;
-        let background = rgba(u32::from_be_bytes(color));
+        let alpha = ((color[3] as f32 * appearance.opacity as f32) / 100.0)
+            .round()
+            .clamp(0.0, 255.0) as u8;
+        let background = rgba(u32::from_be_bytes([color[0], color[1], color[2], alpha]));
         let text = if white_has_better_contrast([color[0], color[1], color[2]]) {
             rgba(0xFFFFFFFF)
         } else {
@@ -105,6 +108,19 @@ mod tests {
         assert_eq!(theme.radius, px(24.0));
         assert_eq!(theme.padding, px(10.0));
         assert_eq!(theme.running_indicator.a, 0.45);
+    }
+
+    #[test]
+    fn opacity_scales_the_background_alpha() {
+        let mut appearance = Config::default().appearance;
+        appearance.background = "#102030FF".to_string();
+        appearance.opacity = 50;
+        let theme = Theme::from_config(&appearance).expect("theme");
+        assert_eq!(theme.background, rgba(0x10203080));
+
+        appearance.opacity = 100;
+        let theme = Theme::from_config(&appearance).expect("theme");
+        assert_eq!(theme.background, rgba(0x102030FF));
     }
 
     #[test]

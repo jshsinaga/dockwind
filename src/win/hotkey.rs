@@ -49,6 +49,11 @@ impl Drop for HotkeyWorker {
 }
 
 /// Registers the global quit hotkey on a dedicated message-loop thread.
+/// Validates a configured hotkey without registering it.
+pub fn validate(value: &str) -> Result<(), String> {
+    parse_hotkey(value).map(|_| ())
+}
+
 pub fn spawn(value: &str) -> Result<(HotkeyWorker, UnboundedReceiver<()>)> {
     let hotkey = parse_hotkey(value).map_err(|error| anyhow!("invalid quit_hotkey: {error}"))?;
     let (sender, receiver) = unbounded();

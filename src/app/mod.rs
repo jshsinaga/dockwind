@@ -11,6 +11,7 @@ use tracing::{debug, error, info, warn};
 use crate::config::Config;
 use crate::dock::{self, DockItem};
 use crate::win;
+use crate::win::tray::TrayEvent;
 
 /// Owns the active configuration, the app list, and the application-level commands.
 /// The dock view renders this state and delegates commands back here.
@@ -28,6 +29,7 @@ impl AppController {
         mut config_updates: UnboundedReceiver<Config>,
         mut window_events: UnboundedReceiver<()>,
         hotkey_events: Option<UnboundedReceiver<()>>,
+        tray_events: Option<UnboundedReceiver<TrayEvent>>,
     ) -> Self {
         let mut this = Self {
             config,
@@ -77,11 +79,47 @@ impl AppController {
             .detach();
         }
 
+        if let Some(mut tray_events) = tray_events {
+            cx.spawn(async move |this, cx| {
+                while let Some(event) = tray_events.next().await {
+                    if this
+                        .update(cx, |this, cx| this.handle_tray_event(event, cx))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            })
+            .detach();
+        }
+
         this
+    }
+
+    fn handle_tray_event(&mut self, event: TrayEvent, cx: &mut Context<Self>) {
+        match event {
+            TrayEvent::OpenSettings => {
+                if let Err(error) = win::settings::open(self.config_path.clone()) {
+                    warn!(%error, "failed to open settings from the tray");
+                }
+            }
+            TrayEvent::ReloadConfig => self.reload_config(cx),
+            TrayEvent::ToggleAutostart => self.toggle_autostart(),
+            TrayEvent::RestoreTaskbar => {
+                if let Err(error) = win::taskbar::restore_native(false) {
+                    warn!(%error, "failed to restore the taskbar from the tray");
+                }
+            }
+            TrayEvent::Quit => self.restore_and_quit(cx),
+        }
     }
 
     pub fn config(&self) -> &Config {
         &self.config
+    }
+
+    pub fn config_path(&self) -> &std::path::Path {
+        &self.config_path
     }
 
     pub fn items(&self) -> &[DockItem] {
@@ -117,7 +155,11 @@ impl AppController {
         let started = std::time::Instant::now();
         match win::windows_enum::list_app_windows() {
             Ok(windows) => {
-                self.items = dock::merge(&self.config.pinned, &windows);
+                self.items = dock::merge(
+                    &self.config.pinned,
+                    &windows,
+                    self.config.behavior.show_running_apps,
+                );
                 debug!(
                     items = self.items.len(),
                     elapsed_ms = started.elapsed().as_millis(),

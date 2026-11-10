@@ -10,7 +10,7 @@ use super::app_item::render_app_item;
 use super::clock::ClockView;
 use super::theme::Theme;
 use crate::app::AppController;
-use crate::config::Config;
+use crate::config::{Config, DockEdge};
 use crate::dock::{AutoHide, AutoHideInput, AutoHideSettings, DockItem};
 use crate::win::menu::MenuAction;
 use crate::win::{self, icons::IconCache};
@@ -21,6 +21,7 @@ pub struct DockGeometry {
     pub trigger: Bounds<Pixels>,
     pub scale_factor: f32,
     pub hwnd: isize,
+    pub edge: DockEdge,
 }
 
 pub struct DockView {
@@ -119,6 +120,15 @@ impl DockView {
         };
 
         let blur_changed = self.applied_config.appearance.blur != config.appearance.blur;
+        let geometry_changed = [
+            self.applied_config.appearance.width != config.appearance.width,
+            self.applied_config.appearance.height != config.appearance.height,
+            self.applied_config.appearance.offset != config.appearance.offset,
+            self.applied_config.appearance.orientation != config.appearance.orientation,
+        ]
+        .into_iter()
+        .any(|changed| changed);
+
         self.theme = theme;
         self.icon_size = px(config.appearance.icon_size as f32);
         self.clock
@@ -127,6 +137,9 @@ impl DockView {
         if !config.behavior.auto_hide {
             self.progress = 1.0;
             self.set_click_through(false);
+        }
+        if geometry_changed {
+            self.apply_geometry(&config);
         }
         self.applied_config = config;
 
@@ -140,6 +153,37 @@ impl DockView {
             "dock appearance updated"
         );
         cx.notify();
+    }
+
+    fn apply_geometry(&mut self, config: &Config) {
+        let monitor = match win::monitors::MonitorInfo::primary() {
+            Ok(monitor) => monitor,
+            Err(error) => {
+                warn!(%error, "failed to read the primary monitor for a geometry update");
+                return;
+            }
+        };
+        let content_size = gpui::size(
+            px(config.appearance.width as f32),
+            px(config.appearance.height as f32),
+        );
+        let bounds = win::monitors::dock_rect(
+            &monitor,
+            content_size,
+            config.appearance.offset as f32,
+            config.appearance.orientation,
+        );
+        let trigger = win::monitors::trigger_rect(&monitor, config.appearance.orientation);
+
+        if let Err(error) = win::dwm::set_bounds(self.geometry.hwnd, bounds, monitor.scale_factor) {
+            warn!(%error, "failed to apply the dock geometry");
+            return;
+        }
+
+        self.geometry.bounds = bounds;
+        self.geometry.trigger = trigger;
+        self.geometry.scale_factor = monitor.scale_factor;
+        self.geometry.edge = config.appearance.orientation;
     }
 
     fn tick(&mut self, now: Duration, cx: &mut Context<Self>) {
@@ -231,6 +275,12 @@ impl DockView {
         };
 
         match action {
+            MenuAction::OpenSettings => {
+                let path = self.controller.read(cx).config_path().to_path_buf();
+                if let Err(error) = win::settings::open(path) {
+                    warn!(%error, "failed to open the settings window");
+                }
+            }
             MenuAction::ReloadConfig => {
                 self.controller
                     .update(cx, |controller, cx| controller.reload_config(cx));
@@ -261,7 +311,11 @@ impl DockView {
 
 impl Render for DockView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let offset = self.geometry.bounds.size.height * (1.0 - self.progress);
+        let direction = match self.geometry.edge {
+            DockEdge::Bottom => 1.0,
+            DockEdge::Top => -1.0,
+        };
+        let offset = self.geometry.bounds.size.height * (1.0 - self.progress) * direction;
         let icons = {
             let cache = &mut self.icons;
             self.items

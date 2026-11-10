@@ -2,16 +2,16 @@
 
 A floating dock bar for Windows 10 and 11, written in Rust. Dockwind hides the
 native taskbar instead of removing it, and draws its own dock with configurable
-transparency, corner radius, and colors.
+size, offset, orientation, transparency, corner radius, and color.
 
 Dockwind shows pinned and running apps, a clock and date, and optional auto-hide.
-It supports a native right-click menu, per-user autostart, a global quit hotkey,
-and a standalone taskbar restore command.
+It has a native settings window, a system tray icon, per-user autostart, a global
+quit hotkey, a standalone taskbar restore command, and an Inno Setup installer.
 
-Current build status: the final full gate passed on 2026-11-10. Manual desktop
-cases remain unverified. See
-[docs/HANDOFF.md](docs/HANDOFF.md) for dated evidence and the checks that are
-still open.
+Current build status: the full gate passes on the current source. Settings, tray,
+live geometry, and the basic installer path were manually checked on 2026-11-11.
+Taskbar recovery, a clean-profile install, and the hosted workflows are still
+open. See [docs/HANDOFF.md](docs/HANDOFF.md) for dated evidence.
 
 ## Documentation
 
@@ -20,7 +20,8 @@ still open.
 | [docs/PRD.md](docs/PRD.md) | Product scope, feature status, acceptance criteria |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Module ownership and lifetimes |
 | [DESIGN.md](DESIGN.md) | UI and window patterns |
-| [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Every config field, validation, and reload behavior |
+| [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Every config field, validation, reload, and save behavior |
+| [docs/RELEASE.md](docs/RELEASE.md) | Versioning, installer, and GitHub Actions |
 | [docs/HANDOFF.md](docs/HANDOFF.md) | Current state, pending work, and evidence |
 | [docs/decisions.md](docs/decisions.md) | Accepted decisions and trade-offs |
 
@@ -31,6 +32,8 @@ still open.
   `rustfmt`, `clippy`, and `x86_64-pc-windows-msvc`.
 - Visual Studio 2022 Build Tools with the C++ workload and a Windows SDK.
   The current build uses MSVC 14.44 and Windows SDK 10.0.26100.
+- Inno Setup 6 only for the local installer build. It is not needed for
+  `cargo build`.
 
 ## Build and Run
 
@@ -64,6 +67,81 @@ cargo test --locked
 cargo build --release --locked
 ```
 
+## Settings Window
+
+Open it from the dock's right-click menu, the tray menu, a tray double-click, or:
+
+```powershell
+dockwind --settings
+```
+
+The settings window is a native Win32 window on its own thread. It edits the same
+config file as the dock. Apply validates and saves atomically. Close discards
+unsaved edits. If the file changed on disk while the window was open, Apply asks
+before overwriting.
+
+The window covers:
+
+- Appearance: width, height, icon size, padding, corner radius, offset,
+  orientation (top or bottom), opacity, background color with a color picker.
+- Behavior: auto-hide, hide during fullscreen apps, show running apps, hide native
+  taskbar, autostart, quit hotkey.
+- Clock: time and date formats.
+- Pinned apps: add, remove, and reorder.
+
+`hide_native_taskbar` and `quit_hotkey` need a restart. The window shows a notice
+after saving a change to either. `reserve_space` is disabled until AppBar support
+lands.
+
+## Tray
+
+A Dockwind tray icon appears while the dock is running. Right-click it for:
+
+- Settings...
+- Reload config
+- Start with Windows
+- Restore taskbar
+- Quit
+
+Double-click opens settings. The tray icon is re-added after an Explorer restart
+and removed on normal shutdown.
+
+## Theming
+
+The dock reads its appearance from the config file and applies changes live:
+
+```toml
+[appearance]
+background = "#1E1E2ECC"
+corner_radius = 16
+blur = "none"
+icon_size = 40
+padding = 8
+width = 560
+height = 92
+offset = 12
+orientation = "bottom"
+opacity = 100
+```
+
+- `background` accepts `#RRGGBB` or `#RRGGBBAA`.
+- `opacity` multiplies the background alpha from 10 to 100 percent.
+- `orientation` is `bottom` or `top`. The auto-hide trigger follows the edge.
+- `width`, `height`, and `offset` reposition or resize the dock without a restart.
+- `margin_bottom` is accepted as a legacy alias for `offset`.
+
+Read [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for every field, its range,
+and its reload behavior.
+
+## App Management
+
+- Pinned apps keep their order and are merged with running windows from the same
+  executable.
+- Running-only apps appear after the pinned list.
+- `behavior.show_running_apps = false` hides running-only apps.
+- The settings window can add, remove, and reorder pinned apps.
+- Left-click activates, restores, minimizes, or launches an app.
+
 ## Restoring the Taskbar
 
 Dockwind only hides `Shell_TrayWnd` and `Shell_SecondaryTrayWnd`. It does not stop
@@ -75,21 +153,42 @@ dockwind --restore-taskbar
 ```
 
 The default quit hotkey is `Ctrl+Alt+Shift+Q`. Dockwind uses a named mutex to
-prevent multiple instances. `--restore-taskbar` runs even when another instance
-is active.
+prevent multiple dock instances. `--restore-taskbar` runs even when another
+instance is active.
 
 ## Autostart
 
-Autostart uses `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. Right-click
-the dock and choose Enable autostart or Disable autostart. The same operations are
-available from the command line:
+Autostart uses `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. Enable it
+from the tray, the settings window, or the command line:
 
 ```powershell
 dockwind --enable-autostart
 dockwind --disable-autostart
 ```
 
-## Configuration
+## Release and CI
+
+Versioning, local installer builds, and the GitHub Actions workflows are in
+[docs/RELEASE.md](docs/RELEASE.md).
+
+Local installer:
+
+```powershell
+.\scripts\build-installer.ps1
+```
+
+Output: `dist\Dockwind-<version>-setup.exe`.
+
+The installer is per-user, creates a Start Menu shortcut, offers an optional
+desktop shortcut, and does not force autostart. Uninstall runs
+`--disable-autostart` and `--restore-taskbar` before removing files. User config
+and logs are preserved. A silent install and uninstall passed on 2026-11-11. A
+clean Windows profile and upgrade were not tested.
+
+CI runs `scripts/check.ps1` on `windows-latest` for pushes and pull requests. A
+`vX.Y.Z` tag builds the installer and publishes a GitHub Release.
+
+## Configuration File
 
 The config file is created on first run at:
 
@@ -112,9 +211,6 @@ path = 'C:\Windows\System32\cmd.exe'
 args = []
 ```
 
-Read `docs/CONFIGURATION.md` for field types, defaults, validation, and which
-changes need a restart.
-
 ## Logs
 
 Logs are written daily under:
@@ -126,7 +222,7 @@ Logs are written daily under:
 Set `RUST_LOG` to change the filter, for example `RUST_LOG=dockwind=debug`.
 Logs also go to stdout.
 
-## Windows Manifest
+## Windows Manifest and Version
 
 GPUI's default manifest is disabled so Dockwind can own a single `RT_MANIFEST`
 resource. `assets/dockwind.manifest` sets:
@@ -136,35 +232,29 @@ resource. `assets/dockwind.manifest` sets:
 - Common Controls v6.
 - The Dockwind assembly identity.
 
-The embedded manifest is verified with `mt.exe` after building.
+`build.rs` injects the `Cargo.toml` version into the manifest and embeds the
+manifest and icon. The embedded resources are checked by the build.
 
 ## Known Limitations
 
-- The dock content is fixed at 560x92 logical pixels. Large app lists do not
-  scroll yet.
+- The app list does not scroll yet. A large app list can overflow the fixed dock
+  width.
 - `reserve_space` is accepted in config but has no effect. AppBar reservation is
   not implemented.
 - `clock.locale` is accepted but unused. Clock text uses the process locale.
-- `hide_native_taskbar`, `quit_hotkey`, and `margin_bottom` are read at startup.
-  Changing them by hot reload does not apply until the next launch.
-- Placement is computed once at startup. A display change, DPI change, or taskbar
-  work-area change needs a restart.
+- `hide_native_taskbar` and `quit_hotkey` are read at startup. The settings window
+  shows a restart notice.
+- Placement updates live for config changes. Automatic DPI, display, and work-area
+  changes still need the next milestone.
 - The Mica and Acrylic backdrop branches need Windows 11 22H2 or newer and have
-  not been verified. The current machine is Windows 10 22H2. On Windows 10 the
-  dock logs that the backdrop is unavailable and stays transparent.
-- Monitor placement is verified in the running UI at 100% DPI. The physical to
-  logical conversion and dock rectangle are unit-tested at 100%, 125%, 150%, and
-  200% DPI. A real 125% to 200% desktop was not available for manual testing.
-- Auto-hide fullscreen suppression is unit-tested, but a real fullscreen game or
-  video was not exercised on this machine.
-- The native taskbar hide/restore path is tested for normal quit, forced process
-  kill plus `--restore-taskbar`, and a simulated `TaskbarCreated` broadcast. A
-  real `explorer.exe` restart was not performed.
-- UWP windows hosted by `ApplicationFrameHost.exe` are skipped because their real
-  app identity is not mapped yet.
-- Middle-click to launch a second instance, tooltips, and scrolling for large app
-  lists are not implemented yet.
-- There is no settings window and no installer. The settings and installer
-  requirements are future work in `docs/PRD.md`.
+  not been verified. The current machine is Windows 10 22H2.
+- The running UI was exercised at 100% DPI only. The physical to logical
+  conversion and dock rectangle are unit-tested at 100%, 125%, 150%, and 200%.
+- A real Explorer restart, panic restore, console-control restore, and fullscreen
+  app check are still pending.
+- UWP windows hosted by `ApplicationFrameHost.exe` are skipped.
+- Middle-click launch and app tooltips are not implemented yet.
+- The installer is unsigned. Windows SmartScreen may warn on first run.
+- The GitHub Actions workflows have not run in the hosted environment yet.
 - GPUI is pinned to `=0.2.2` because it is pre-1.0 and its API changes between
   releases.

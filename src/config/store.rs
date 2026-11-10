@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
@@ -81,6 +82,53 @@ impl Config {
         })?;
         Ok(config.sanitize())
     }
+
+    /// Writes a validated config through a same-directory temporary file and an
+    /// atomic replace. A failed write leaves the previous file untouched.
+    pub fn save_atomic(&self, path: &Path) -> Result<LoadedConfig, ConfigError> {
+        let loaded = self.clone().sanitize();
+        let body = toml::to_string_pretty(&loaded.config)?;
+        let contents = format!(
+            "# Dockwind configuration\n\
+             # Written by the Dockwind settings window. Edit and save to reload.\n\n{body}"
+        );
+
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|source| ConfigError::Write {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        }
+
+        let temporary = path.with_extension("toml.tmp");
+        let mut file = fs::File::create(&temporary).map_err(|source| ConfigError::Write {
+            path: temporary.clone(),
+            source,
+        })?;
+        let write_result = file
+            .write_all(contents.as_bytes())
+            .and_then(|()| file.sync_all())
+            .map_err(|source| ConfigError::Write {
+                path: temporary.clone(),
+                source,
+            });
+        drop(file);
+
+        if let Err(error) = write_result {
+            let _ = fs::remove_file(&temporary);
+            return Err(error);
+        }
+
+        if let Err(source) = fs::rename(&temporary, path) {
+            let _ = fs::remove_file(&temporary);
+            return Err(ConfigError::Write {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
+
+        Ok(loaded)
+    }
 }
 
 fn write_default(path: &Path, config: &Config) -> Result<(), ConfigError> {
@@ -135,5 +183,38 @@ mod tests {
             Config::load_existing(&path),
             Err(ConfigError::Parse { .. })
         ));
+    }
+
+    #[test]
+    fn save_atomic_round_trips_and_removes_the_temporary_file() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("config.toml");
+        let mut config = Config::default();
+        config.appearance.width = 720;
+        config.appearance.orientation = crate::config::DockEdge::Top;
+
+        let saved = config.save_atomic(&path).expect("save config");
+        assert_eq!(saved.config, config);
+        assert!(!directory.path().join("config.toml.tmp").exists());
+
+        let loaded = Config::load_existing(&path).expect("reload saved config");
+        assert_eq!(loaded.config, config);
+    }
+
+    #[test]
+    fn save_atomic_writes_sanitized_values() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("config.toml");
+        let mut config = Config::default();
+        config.appearance.width = 10;
+        config.appearance.opacity = 5;
+
+        let saved = config.save_atomic(&path).expect("save config");
+        assert_eq!(saved.config.appearance.width, 560);
+        assert_eq!(saved.config.appearance.opacity, 100);
+        assert_eq!(saved.warnings.len(), 2);
+
+        let loaded = Config::load_existing(&path).expect("reload saved config");
+        assert_eq!(loaded.config, saved.config);
     }
 }

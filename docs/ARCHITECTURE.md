@@ -1,10 +1,10 @@
 # Dockwind Architecture
 
 Status: active. The target layout is integrated and the native lifecycle contract
-is stable. Independent review is cleared. The final full gate passed on
-2026-11-10.
+is stable. Settings, tray, live config geometry, and release delivery are
+integrated. The final full gate passed on 2026-11-10 after those additions.
 
-Last updated: 2026-11-10
+Last updated: 2026-11-11
 Current code: review cleared, final full gate passed
 Historical baseline: `482bd7a` (pre-migration layout)
 
@@ -34,7 +34,7 @@ module exists only when it has code.
 | `src/config/mod.rs` | Public config exports used by consumers: types, path, color parser, watcher | Re-exports |
 | `src/config/model.rs` | Serde types, defaults, pinned app model | Config data shape |
 | `src/config/validation.rs` | Sanitization, color parsing, clock format checks | Validation rules |
-| `src/config/store.rs` | Default path, load, create, `ConfigError` | Config file I/O |
+| `src/config/store.rs` | Default path, load, create, atomic save, `ConfigError` | Config file I/O |
 | `src/config/watch.rs` | Absolute path resolution, parent-directory watch, debounce, reload, shutdown | Watcher thread and receiver |
 | `src/dock/mod.rs` | Dock domain boundary and coordination | Dock domain exports |
 | `src/dock/model.rs` | `DockItem`, pinned and running merge, grouping | Pure dock model |
@@ -44,8 +44,10 @@ module exists only when it has code.
 | `src/ui/app_item.rs` | App icon and running or active indicator | Item rendering |
 | `src/ui/clock.rs` | Clock and date formatting, boundary timer | Clock entity |
 | `src/ui/theme.rs` | Color, contrast, radius, padding mapping | Derived theme |
-| `src/win/worker.rs` | Manual-reset stop event and `MsgWaitForMultipleObjectsEx` cancellation shared by the event, taskbar, and hotkey workers | Worker cancellation primitive |
-| `src/win/*.rs` | Win32 wrappers for windows, DWM, monitors, icons, events, taskbar, hotkey, menu, autostart, single instance, cursor, launch | OS resources |
+| `src/win/worker.rs` | Manual-reset stop event and `MsgWaitForMultipleObjectsEx` cancellation shared by the event, taskbar, hotkey, and tray workers | Worker cancellation primitive |
+| `src/win/settings.rs` | Native Win32 settings window thread, controls, validation, atomic save, external-edit prompt | Settings window lifetime |
+| `src/win/tray.rs` | Tray icon worker, menu, `TaskbarCreated` recovery | Tray icon and menu |
+| `src/win/*.rs` | Win32 wrappers for windows, DWM, monitors, icons, events, taskbar, hotkey, menu, settings, tray, autostart, single instance, cursor, launch | OS resources |
 | `src/logging.rs` | Tracing setup and daily log file | Log worker guard |
 
 `src/win/` stays flat. It is a platform boundary, not a feature layer.
@@ -177,11 +179,18 @@ The order is part of the safety contract:
    watcher, and `TaskbarGuard` are installed in that order. Console handler
    registration is required and fails startup before the taskbar is hidden.
 7. The config watcher starts.
-8. The GPUI application runs and the runtime retains a strong `AppController`
+8. The tray icon worker starts. A failure is logged and does not block the dock.
+9. The GPUI application runs and the runtime retains a strong `AppController`
    reference for the whole event loop.
+10. The dock window is created hidden. GPUI draws the first frame, then the window
+    is shown without activation and its visibility is read back.
 
 `TaskbarGuard` must stay alive through `Application::run`. The taskbar watcher
 must exist before the guard hides the taskbar.
+
+The settings window is not part of startup. It starts on demand from the dock
+menu, the tray, or `--settings`. It runs on its own thread and owns only its
+window and controls.
 
 ### Shutdown Order
 
@@ -191,9 +200,10 @@ must exist before the guard hides the taskbar.
 3. Stop the taskbar watcher.
 4. Stop the config watcher.
 5. Stop the window event worker and the hotkey worker.
-6. Report cleanup errors without masking the startup error.
-7. Release the single-instance mutex.
-8. Drop the logging guard last so cleanup diagnostics are flushed.
+6. Stop the tray icon worker and remove the icon.
+7. Report cleanup errors without masking the startup error.
+8. Release the single-instance mutex.
+9. Drop the logging guard last so cleanup diagnostics are flushed.
 
 The runtime owns these steps and keeps the native worker owners available through
 error reporting and retries. The final full gate passed, but a manual normal quit
@@ -235,6 +245,8 @@ TaskbarCreated --> taskbar watcher --> hide again
 | `win-events` | WinEvent hooks and message loop | Callback is light. No allocation or I/O in the callback. Uses the stop-aware message reader |
 | `taskbar-watch` | Hidden window and message loop | Handles `WM_ENDSESSION`, `WM_CLOSE`, `TaskbarCreated`. Uses the stop-aware message reader |
 | `quit-hotkey` | `RegisterHotKey` and message loop | Owns the hotkey registration. Uses the stop-aware message reader |
+| `dockwind-tray` | Hidden window, tray callback, menu | Owns the tray icon and menu. Uses the stop-aware message reader |
+| `dockwind-settings` | Settings window and controls | Edits the config file on its own thread. It does not touch GPUI state |
 | `config-watch` | `notify` events, debounce, parse | Sends a full config to the UI. Uses its own control channel and join handle |
 
 The native menu is modal. It must be called from a deferred task, not directly
@@ -267,6 +279,15 @@ starve cancellation. A sent-only wake leaves no posted message and does not bloc
 10. Config updates run on the GPUI thread.
 11. A failed config reload never replaces the last valid config.
 12. A taskbar recovery path never leaves the taskbar hidden after a handled exit.
+13. The dock window is not shown before GPUI has drawn its first frame. An empty
+    native surface must never be visible.
+14. The settings window validates before saving and writes through a same-directory
+    temporary file plus an atomic rename. A failed save leaves the previous file.
+15. The settings window prompts before overwriting an external edit or recreating a
+    deleted file.
+16. The tray icon is removed on normal shutdown and re-added after `TaskbarCreated`.
+17. The dock stays non-activating. The settings window is focusable and must not
+    change the dock's extended styles.
 13. The recovered latch is irreversible. Effective ownership is the hidden flag
     AND `!recovered`. Every hide checks the latch before and after each native
     effect. An in-flight hide that completes after recovery compensates by
@@ -286,10 +307,10 @@ These are current limits. Do not describe them as fixed.
 
 | Limit | Effect |
 |---|---|
-| Placement runs once at startup | DPI, display, and work-area changes need a restart |
+| Config geometry is live | `width`, `height`, `offset`, and `orientation` update without a restart. Automatic DPI, display, and work-area changes still need the next milestone |
 | Hiding the taskbar does not update `rcWork` | The dock stays above the old work-area edge |
 | `reserve_space` is accepted but unused | Maximized windows can cover the dock. No AppBar registration or `ABM_REMOVE` |
-| Content size is fixed at `560x92` | Large app lists do not scroll |
+| Content size defaults to `560x92` | Large app lists do not scroll |
 | `ApplicationFrameHost.exe` windows are skipped | UWP app identity is not mapped |
 | `clock.locale` is accepted but unused | Clock text uses the process locale |
 | Mica and Acrylic are gated on build 22621 and unverified | Windows 11 visual behavior is not proven on this machine |

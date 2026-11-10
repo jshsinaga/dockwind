@@ -32,7 +32,10 @@ the UI stack without an approved decision.
   validation, theme derivation, window filtering, app grouping, auto-hide state,
   dock geometry, and hotkey parsing.
 - Keep all `unsafe` and raw handle work under `src/win/`.
-- Keep UI state on the GPUI thread. Cross-thread input arrives through channels.
+- Keep dock UI state on the GPUI thread. Cross-thread input arrives through
+  channels.
+- The native settings window and tray run on their own threads. They do not reach
+  into GPUI state. Settings edits go through the config file and watcher.
 - `src/win/` stays a flat platform boundary. Do not turn it into a feature layer.
 
 ## 3. Error Handling
@@ -48,6 +51,8 @@ the UI stack without an approved decision.
   defined in `docs/CONFIGURATION.md`. No other silent fallback is allowed.
 - A failed save, restore, or native call must be logged or returned. Do not
   swallow it with `let _ =`.
+- Config saves are atomic: same-directory temporary file, flush, rename, and
+  cleanup on failure. Do not write the config in place.
 - Do not special-case a test to make it pass.
 
 ## 4. Unsafe and Native Code
@@ -140,9 +145,15 @@ Verification rules:
 - Do not claim "verified" from a code read alone.
 - Do not hide a failure caused by another worker's in-progress edit. Coordinate
   and report it.
-- The final full gate passed on 2026-11-10. Later runs apply to the changes that
+- The full gate passed on 2026-11-11. Later runs apply to the changes that
   followed, not to that source.
-- Hosted CI is deferred until a host is selected. Do not invent a CI provider.
+- Hosted CI uses GitHub Actions on `windows-latest` and runs `scripts/check.ps1`.
+  Do not add a second, divergent gate command set.
+- The release workflow requires a `vX.Y.Z` tag that matches `Cargo.toml`. Do not
+  hand-edit the manifest version; `build.rs` injects it.
+- The installer is Inno Setup 6. Build it with
+  `scripts/build-installer.ps1`; do not add a second packaging tool without a
+  decision.
 
 ## 8. Comments and Documentation
 

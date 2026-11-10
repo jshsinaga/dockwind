@@ -12,6 +12,7 @@ their content.
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Module ownership, data flow, thread and lifetime rules |
 | [DESIGN.md](DESIGN.md) | UI and window patterns |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Config fields, validation, reload, and save compatibility |
+| [docs/RELEASE.md](docs/RELEASE.md) | Versioning, installer, and hosted CI |
 | [docs/engineering.spec.md](docs/engineering.spec.md) | Rust conventions and verification rules |
 | [docs/HANDOFF.md](docs/HANDOFF.md) | Current state, pending work, and dated evidence |
 | [docs/decisions.md](docs/decisions.md) | Accepted decisions D001 onward |

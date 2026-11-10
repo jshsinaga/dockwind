@@ -18,6 +18,7 @@ use crate::win::{
     hotkey::HotkeyWorker,
     single_instance::SingleInstanceGuard,
     taskbar::{TaskbarGuard, TaskbarWatcher},
+    tray::{TrayEvent, TrayIcon},
 };
 
 pub fn run() -> Result<()> {
@@ -36,9 +37,11 @@ struct Runtime {
     config_updates: Option<UnboundedReceiver<Config>>,
     window_events: Option<UnboundedReceiver<()>>,
     hotkey_events: Option<UnboundedReceiver<()>>,
+    tray_events: Option<UnboundedReceiver<TrayEvent>>,
     config_watcher: Option<ConfigWatcher>,
     events: Option<EventWorker>,
     hotkey: Option<HotkeyWorker>,
+    tray: Option<TrayIcon>,
     taskbar_watcher: Option<TaskbarWatcher>,
     taskbar: Option<TaskbarGuard>,
     // Declared last so it is dropped last: fields drop in declaration order, and
@@ -96,6 +99,16 @@ impl Runtime {
 
         let (config_watcher, config_updates) = config::watch(&config_path, loaded.config.clone())?;
 
+        // A missing tray icon is a logged degradation. The dock and its config
+        // remain usable, so it must not fail startup.
+        let (tray, tray_events) = match win::tray::spawn() {
+            Ok((tray, events)) => (Some(tray), Some(events)),
+            Err(error) => {
+                warn!(%error, "tray icon unavailable");
+                (None, None)
+            }
+        };
+
         Ok(Self {
             _logging: logging,
             _single_instance: single_instance,
@@ -104,9 +117,11 @@ impl Runtime {
             config_updates: Some(config_updates),
             window_events: Some(window_events),
             hotkey_events,
+            tray_events,
             config_watcher: Some(config_watcher),
             events: Some(events),
             hotkey,
+            tray,
             taskbar_watcher,
             taskbar,
         })
@@ -127,6 +142,7 @@ impl Runtime {
 
         let config_path = self.config_path.clone();
         let hotkey_events = self.hotkey_events.take();
+        let tray_events = self.tray_events.take();
         let startup_error: Arc<Mutex<Option<anyhow::Error>>> = Arc::new(Mutex::new(None));
         let error_slot = Arc::clone(&startup_error);
         // Holds a strong controller reference for the whole event loop, independent of
@@ -144,6 +160,7 @@ impl Runtime {
                     config_updates,
                     window_events,
                     hotkey_events,
+                    tray_events,
                 )
             });
             *retained_controller.borrow_mut() = Some(controller.clone());
@@ -199,6 +216,12 @@ impl Runtime {
             && let Err(error) = hotkey.shutdown()
         {
             errors.push(error.context("hotkey worker shutdown failed"));
+        }
+
+        if let Some(mut tray) = self.tray.take()
+            && let Err(error) = tray.shutdown()
+        {
+            errors.push(error.context("tray icon shutdown failed"));
         }
 
         errors

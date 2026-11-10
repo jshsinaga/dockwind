@@ -1,5 +1,7 @@
 use anyhow::{Context as _, Result, bail};
 use gpui::{Bounds, Pixels, Size, point, px, size};
+
+use crate::config::DockEdge;
 use windows::Win32::{
     Foundation::RECT,
     Graphics::Gdi::{
@@ -66,24 +68,29 @@ impl MonitorInfo {
 pub fn dock_rect(
     monitor: &MonitorInfo,
     content_size: Size<Pixels>,
-    margin_bottom: f32,
+    offset: f32,
+    edge: DockEdge,
 ) -> Bounds<Pixels> {
-    let origin = point(
-        monitor.work_area.origin.x + (monitor.work_area.size.width - content_size.width) / 2.0,
-        monitor.work_area.origin.y + monitor.work_area.size.height
-            - content_size.height
-            - px(margin_bottom),
-    );
-    Bounds::new(origin, content_size)
+    let x = monitor.work_area.origin.x + (monitor.work_area.size.width - content_size.width) / 2.0;
+    let y = match edge {
+        DockEdge::Bottom => {
+            monitor.work_area.origin.y + monitor.work_area.size.height
+                - content_size.height
+                - px(offset)
+        }
+        DockEdge::Top => monitor.work_area.origin.y + px(offset),
+    };
+    Bounds::new(point(x, y), content_size)
 }
 
-pub fn trigger_rect(monitor: &MonitorInfo) -> Bounds<Pixels> {
+pub fn trigger_rect(monitor: &MonitorInfo, edge: DockEdge) -> Bounds<Pixels> {
     let height = px(2.0);
+    let y = match edge {
+        DockEdge::Bottom => monitor.work_area.origin.y + monitor.work_area.size.height - height,
+        DockEdge::Top => monitor.work_area.origin.y,
+    };
     Bounds::new(
-        point(
-            monitor.work_area.origin.x,
-            monitor.work_area.origin.y + monitor.work_area.size.height - height,
-        ),
+        point(monitor.work_area.origin.x, y),
         size(monitor.work_area.size.width, height),
     )
 }
@@ -143,9 +150,36 @@ mod tests {
             work_area: Bounds::new(point(px(0.0), px(0.0)), size(px(1920.0), px(1040.0))),
             scale_factor: 1.0,
         };
-        let bounds = dock_rect(&monitor, size(px(560.0), px(92.0)), 12.0);
+        let bounds = dock_rect(&monitor, size(px(560.0), px(92.0)), 12.0, DockEdge::Bottom);
         assert_eq!(bounds.origin, point(px(680.0), px(936.0)));
         assert_eq!(bounds.size, size(px(560.0), px(92.0)));
+    }
+
+    #[test]
+    fn top_orientation_places_the_dock_at_the_work_area_top() {
+        let monitor = MonitorInfo {
+            bounds: Bounds::new(point(px(0.0), px(0.0)), size(px(1920.0), px(1080.0))),
+            work_area: Bounds::new(point(px(0.0), px(0.0)), size(px(1920.0), px(1040.0))),
+            scale_factor: 1.0,
+        };
+        let bounds = dock_rect(&monitor, size(px(560.0), px(92.0)), 12.0, DockEdge::Top);
+        assert_eq!(bounds.origin, point(px(680.0), px(12.0)));
+    }
+
+    #[test]
+    fn trigger_follows_the_selected_edge() {
+        let monitor = MonitorInfo {
+            bounds: Bounds::new(point(px(0.0), px(0.0)), size(px(1920.0), px(1080.0))),
+            work_area: Bounds::new(point(px(0.0), px(0.0)), size(px(1920.0), px(1040.0))),
+            scale_factor: 1.0,
+        };
+        let bottom = trigger_rect(&monitor, DockEdge::Bottom);
+        assert_eq!(bottom.origin, point(px(0.0), px(1038.0)));
+        assert_eq!(bottom.size, size(px(1920.0), px(2.0)));
+
+        let top = trigger_rect(&monitor, DockEdge::Top);
+        assert_eq!(top.origin, point(px(0.0), px(0.0)));
+        assert_eq!(top.size, size(px(1920.0), px(2.0)));
     }
 
     #[test]
@@ -155,7 +189,7 @@ mod tests {
             work_area: Bounds::new(point(px(1920.0), px(0.0)), size(px(1920.0), px(1040.0))),
             scale_factor: 1.0,
         };
-        let bounds = dock_rect(&monitor, size(px(560.0), px(92.0)), 12.0);
+        let bounds = dock_rect(&monitor, size(px(560.0), px(92.0)), 12.0, DockEdge::Bottom);
         assert_eq!(bounds.origin, point(px(2600.0), px(936.0)));
     }
 }

@@ -19,20 +19,37 @@ state and evidence.
 |---|---|---|
 | GPUI window kind | `WindowKind::PopUp` | Creates a tool window without a taskbar button |
 | Decoration | Borderless, transparent, no title bar | The dock draws its own surface |
-| Size | Fixed `560x92` logical pixels | Content is a single row with a clock |
-| Position | Bottom center of the primary work area | Keeps the dock above the taskbar until taskbar hiding is enabled |
-| Bottom margin | `appearance.margin_bottom`, default 12 | Visual separation from the work-area edge |
+| Size | `appearance.width x height`, default `560x92` | Content is a single row with a clock |
+| Position | Top or bottom center of the primary work area | `appearance.orientation` selects the edge |
+| Offset | `appearance.offset`, default 12 | Visual separation from the work-area edge |
 | Extended style | `WS_EX_TOOLWINDOW`, `WS_EX_TOPMOST`, `WS_EX_NOACTIVATE` | No taskbar button, stays above normal windows, does not take focus |
 | App window style | `WS_EX_APPWINDOW` cleared | No Alt+Tab entry |
 | Focus | `focus: false` plus restore of the previous foreground window | Clicks reach the dock without stealing focus |
 | Move, resize, minimize | Disabled | The dock is a fixed control surface |
 | Hidden state | `WS_EX_TRANSPARENT` at zero progress | The invisible topmost window does not catch clicks |
 | Backdrop | `none` by default | Windows 10 has no supported DWM backdrop |
-| Placement | Computed once at startup | Live display and work-area changes need a restart |
+| Placement | Live for config changes | DPI, display, and work-area changes still need the next milestone |
 
 Placement uses the primary monitor work area. The full display bounds are not
 used while the native taskbar is visible. This is a known limitation, not a
 design choice for the final state.
+
+## Settings and Tray
+
+The settings window is a separate, focusable native Win32 window. It uses
+standard controls and the system dialog font. It does not reuse the dock surface
+or the dock's non-activating styles. The dock stays a tool window; the settings
+window is a normal application window.
+
+The settings window groups controls in this order: Appearance, Behavior, Clock,
+Pinned apps, then Apply and Close. Appearance starts with size, padding, radius,
+offset, opacity, background, and orientation. Behavior keeps auto-hide and the
+fullscreen setting above the startup-only taskbar and hotkey settings. Destructive
+or startup-only fields carry a short inline note.
+
+The tray icon uses the Dockwind icon. Its menu is a standard native popup with the
+same actions as the dock menu plus a Start with Windows check item. The tray does
+not draw custom chrome.
 
 ## Layout
 
@@ -47,20 +64,24 @@ design choice for the final state.
 - App items take the left and center space.
 - The clock is right-aligned in two lines: time above, date below.
 - Content padding comes from `appearance.padding`, default 8.
-- The dock does not scroll. A large app list overflows the fixed content width.
+- The dock does not scroll. A large app list overflows the configured width.
+- A top-oriented dock mirrors the layout vertically: the hidden state slides up
+  and the trigger sits on the top work-area edge.
 
 ## Visual Tokens
 
 | Token | Default | Rule |
 |---|---|---|
-| Background | `#1E1E2ECC` | RGBA hex, 6 or 8 digits |
+| Background | `#1E1E2ECC` | RGBA hex, 6 or 8 digits. `opacity` multiplies the alpha |
 | Text | White or black | Chosen by relative luminance and contrast ratio against the background |
 | Running indicator | Text color at 45% alpha | Small `18x3` rounded bar under the icon |
 | Active indicator | Text color at full alpha | Same bar, stronger than the running state |
 | Corner radius | 16 | Capped at half of `icon_size + 2 * padding` |
 | Padding | 8 | Applied inside the dock surface |
 | Icon size | 40 | Allowed range 16 to 128 |
-| Bottom margin | 12 | Used at window creation |
+| Offset | 12 | Distance from the selected work-area edge |
+| Width and height | 560 and 92 | Configurable and live |
+| Opacity | 100 | Percentage multiplier on the background alpha |
 | Border | 1 px white at 20% alpha | Separates the dock from a light background |
 | Hover | White at 8% alpha | Applies to an app item |
 

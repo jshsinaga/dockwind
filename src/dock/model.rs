@@ -30,7 +30,11 @@ impl DockItem {
     }
 }
 
-pub fn merge(pinned: &[PinnedApp], running: &[WindowInfo]) -> Vec<DockItem> {
+pub fn merge(
+    pinned: &[PinnedApp],
+    running: &[WindowInfo],
+    show_running_apps: bool,
+) -> Vec<DockItem> {
     let mut pinned_keys = HashSet::new();
     let mut items = Vec::new();
 
@@ -62,6 +66,10 @@ pub fn merge(pinned: &[PinnedApp], running: &[WindowInfo]) -> Vec<DockItem> {
             is_running: !windows.is_empty(),
             is_active: active.is_some(),
         });
+    }
+
+    if !show_running_apps {
+        return items;
     }
 
     let mut remaining: BTreeMap<String, (PathBuf, Vec<&WindowInfo>)> = BTreeMap::new();
@@ -146,7 +154,7 @@ mod tests {
             window(1, r"C:\Windows\System32\notepad.exe", true),
             window(2, r"C:\Windows\System32\cmd.exe", false),
         ];
-        let items = merge(&pinned, &running);
+        let items = merge(&pinned, &running, true);
 
         assert_eq!(items.len(), 3);
         assert_eq!(items[0].name, "Terminal");
@@ -166,7 +174,7 @@ mod tests {
             window(10, r"C:\Apps\Editor.exe", false),
             window(11, r"C:\Apps\editor.exe", true),
         ];
-        let items = merge(&[], &running);
+        let items = merge(&[], &running, true);
 
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].windows, vec![10, 11]);
@@ -178,9 +186,23 @@ mod tests {
     fn path_comparison_is_case_insensitive() {
         let pinned = vec![pinned("Terminal", r"C:\WINDOWS\System32\CMD.EXE")];
         let running = vec![window(5, r"c:\windows\system32\cmd.exe", false)];
-        let items = merge(&pinned, &running);
+        let items = merge(&pinned, &running, true);
 
         assert_eq!(items.len(), 1);
+        assert!(items[0].is_running);
+    }
+
+    #[test]
+    fn running_only_apps_can_be_hidden() {
+        let pinned = vec![pinned("Terminal", r"C:\Windows\System32\cmd.exe")];
+        let running = vec![
+            window(1, r"C:\Windows\System32\notepad.exe", true),
+            window(2, r"C:\Windows\System32\cmd.exe", false),
+        ];
+        let items = merge(&pinned, &running, false);
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].name, "Terminal");
         assert!(items[0].is_running);
     }
 }

@@ -17,7 +17,14 @@ pub struct Appearance {
     pub blur: BlurMode,
     pub icon_size: u32,
     pub padding: u32,
-    pub margin_bottom: u32,
+    pub width: u32,
+    pub height: u32,
+    #[serde(alias = "margin_bottom")]
+    pub offset: u32,
+    pub orientation: DockEdge,
+    /// Opacity percentage applied to the configured background alpha. 100 keeps
+    /// the background exactly as written.
+    pub opacity: u8,
 }
 
 impl Default for Appearance {
@@ -28,9 +35,21 @@ impl Default for Appearance {
             blur: BlurMode::None,
             icon_size: 40,
             padding: 8,
-            margin_bottom: 12,
+            width: 560,
+            height: 92,
+            offset: 12,
+            orientation: DockEdge::Bottom,
+            opacity: 100,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum DockEdge {
+    #[default]
+    Bottom,
+    Top,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -52,6 +71,7 @@ pub struct Behavior {
     pub reserve_space: bool,
     pub hide_native_taskbar: bool,
     pub hide_in_fullscreen: bool,
+    pub show_running_apps: bool,
     pub quit_hotkey: String,
 }
 
@@ -65,6 +85,7 @@ impl Default for Behavior {
             reserve_space: false,
             hide_native_taskbar: false,
             hide_in_fullscreen: true,
+            show_running_apps: true,
             quit_hotkey: "Ctrl+Alt+Shift+Q".to_string(),
         }
     }
@@ -125,7 +146,31 @@ mod tests {
         .expect("parse partial");
         assert_eq!(config.appearance.background, "#FF000080");
         assert_eq!(config.appearance.corner_radius, 16);
+        assert_eq!(config.appearance.width, 560);
+        assert_eq!(config.appearance.orientation, DockEdge::Bottom);
         assert_eq!(config.behavior.hide_delay_ms, 400);
         assert_eq!(config.clock.time_format, "%H:%M");
+    }
+
+    #[test]
+    fn legacy_margin_bottom_maps_to_offset() {
+        let config: Config = toml::from_str(
+            r##"
+            [appearance]
+            margin_bottom = 24
+            "##,
+        )
+        .expect("parse legacy margin_bottom");
+        assert_eq!(config.appearance.offset, 24);
+    }
+
+    #[test]
+    fn orientation_parses_top_and_bottom() {
+        let bottom: Config =
+            toml::from_str("[appearance]\norientation = \"bottom\"\n").expect("bottom orientation");
+        let top: Config =
+            toml::from_str("[appearance]\norientation = \"top\"\n").expect("top orientation");
+        assert_eq!(bottom.appearance.orientation, DockEdge::Bottom);
+        assert_eq!(top.appearance.orientation, DockEdge::Top);
     }
 }

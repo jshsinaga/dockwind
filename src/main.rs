@@ -34,6 +34,21 @@ fn main() {
         return;
     }
 
+    if std::env::args().any(|argument| argument == "--settings") {
+        let path = match config::default_path() {
+            Ok(path) => path,
+            Err(error) => {
+                eprintln!("failed to resolve the config path: {error:#}");
+                std::process::exit(1);
+            }
+        };
+        if let Err(error) = win::settings::open_blocking(path) {
+            eprintln!("failed to open settings: {error:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     if let Err(error) = app::runtime::run() {
         eprintln!("dockwind failed: {error:#}");
         std::process::exit(1);

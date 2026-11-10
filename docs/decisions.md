@@ -615,3 +615,131 @@ shutdown ownership. The fixes make the failure paths explicit and testable.
 
 Trade-off: The source is review-cleared and the full gate passed, but manual
 desktop behavior is not verified until dated checks exist.
+
+## D030: Show the dock after the first GPUI frame
+
+Date: 2026-11-10
+
+A release run exposed an empty white rectangle at the dock position. The window
+was created with `show: true`, so Windows could display the native surface before
+GPUI presented its first frame. Once the dock repainted, it rendered correctly.
+The hidden auto-hide state was also transparent when the first frame completed.
+
+Decision: create the dock window with `show: false`. After `cx.open_window`
+returns, GPUI has drawn once. Show the window with `SW_SHOWNOACTIVATE` and verify
+`IsWindowVisible`. A show failure aborts startup instead of leaving an invisible
+dock.
+
+Trade-off: startup now performs one explicit native show call. The window is not
+visible until the first frame is ready, which removes the white surface but adds
+a small delay before the dock can appear.
+
+Evidence: the 2026-11-10 release run logged `dock window shown after first frame`.
+The hidden state was invisible and the shown state rendered icons and the clock.
+
+Superseded by D031 and D033 on 2026-11-11. The settings window and installer are
+now implemented.
+
+## D031: Settings window uses native Win32 controls
+
+Date: 2026-11-11
+
+The settings window is a native Win32 window on a dedicated thread. It is not a
+second GPUI window. Standard edit, button, combo box, list box, and dialog
+controls hold the draft. Apply validates and writes the config atomically. The
+existing file watcher applies the result to the dock.
+
+Reason: Standard controls give a reliable form without building a form toolkit on
+top of GPUI. A separate thread isolates a blocked file dialog or a settings
+failure from the dock event loop. The watcher already provides the live-apply
+path, so the window does not need GPUI state.
+
+Trade-off: The settings window does not share the dock's visual language. Field
+errors are message boxes, not inline text. The window is more native code than a
+GPUI form would be. This deviates from the original GPUI wording in PRD P01.
+
+## D032: Config geometry is live and orientation is top or bottom
+
+Date: 2026-11-11
+
+`appearance.width`, `height`, `offset`, and `orientation` are live. A config
+reload recomputes the primary work area rect and calls `SetWindowPos` with
+physical pixels. The auto-hide trigger moves to the selected edge and the hide
+animation direction follows it. `margin_bottom` remains an alias for `offset`.
+
+Reason: A settings window that needs a restart for size or placement is a poor
+configuration surface. The live path also supplies the geometry primitive needed
+by later DPI and display work.
+
+Trade-off: Automatic `WM_DPICHANGED`, display change, and taskbar work-area
+changes are still not handled. Those events need their own message source and
+tests.
+
+## D033: Inno Setup per-user installer
+
+Date: 2026-11-11
+
+The installer uses Inno Setup 6, a fixed AppId, and a per-user install under
+`{autopf}\Dockwind` with `PrivilegesRequired=lowest`. It creates a Start Menu
+shortcut and an optional desktop shortcut. It does not force autostart. Uninstall
+runs `--disable-autostart` and `--restore-taskbar` before removing files. Config
+and logs are preserved.
+
+Reason: A per-user install needs no administrator prompt and matches the HKCU
+autostart model. Inno Setup produces one readable EXE and is available on the
+Windows CI runner.
+
+Trade-off: The installer and binary are unsigned. SmartScreen can warn. A
+machine-wide install, code signing, and auto-update are out of scope for this
+release. Inno Setup is an external build tool and was not installed on the
+development machine, so the installer was not built locally.
+
+## D034: GitHub Actions CI and tag releases
+
+Date: 2026-11-11
+
+GitHub Actions on `windows-latest` runs `scripts/check.ps1` for pushes to `main`,
+pull requests, and manual dispatch. A `vX.Y.Z` tag workflow verifies the tag
+against `Cargo.toml`, builds the release, installs Inno Setup, builds the
+installer, uploads the artifact, and publishes a GitHub Release.
+
+Reason: The repository already lives on GitHub. The local gate is a PowerShell
+script, so the hosted job can reuse the exact same commands. A tag check prevents
+an installer whose version does not match the source.
+
+Trade-off: The workflows depend on the hosted runner, Chocolatey, and network
+access to install Inno Setup. They have not run in the hosted environment yet.
+
+## D035: Tray icon runs on its own worker thread
+
+Date: 2026-11-11
+
+The tray icon uses `Shell_NotifyIconW` on a hidden window in a dedicated
+`dockwind-tray` thread. The window procedure handles the callback message,
+`TaskbarCreated`, and the tray menu. Menu actions are sent to `AppController`
+through an unbounded channel. A missing tray icon is logged and does not block
+the dock.
+
+Reason: The tray needs its own window and message loop. Keeping it off the GPUI
+thread avoids blocking the dock on a modal menu. The shared stop-aware message
+reader gives the thread the same cancellation contract as the other workers.
+
+Trade-off: Another native thread and hidden window. The tray icon is a second
+surface that can fail independently. The failure is non-fatal by design.
+
+## D036: Add a --settings CLI entry point
+
+Date: 2026-11-11
+
+`dockwind --settings` opens the settings window and keeps the process alive until
+the window closes. It runs before the single-instance check, like
+`--restore-taskbar`, so it can be used while the dock is running. It focuses an
+existing settings window in the same process.
+
+Reason: The dock may be hidden, the tray icon may be missing, and a user may want
+to open settings without a dock interaction. A CLI entry also makes the window
+testable in isolation.
+
+Trade-off: This is a new CLI flag, so PRD P07 is superseded. A second process can
+open a second settings window. Coordination between settings processes is future
+work.
