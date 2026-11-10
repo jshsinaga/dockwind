@@ -5,11 +5,6 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "Existing tag to release (vX.Y.Z)"
-        required: true
-        type: string
 
 permissions:
   contents: write
@@ -21,7 +16,6 @@ jobs:
       - name: Check out
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
           fetch-depth: 0
 
       - name: Install the pinned Rust toolchain
@@ -35,20 +29,24 @@ jobs:
         id: version
         shell: pwsh
         run: |
-          $tag = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { '${{ inputs.tag }}' }
-          if ($tag -notmatch '^v\d+\.\d+\.\d+$') {
-              throw "Tag '$tag' must look like vMAJOR.MINOR.PATCH"
-          }
-          $version = $tag.Substring(1)
           $match = Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"'
           if (-not $match) {
               throw "Cargo.toml does not contain a package version"
           }
           $cargoVersion = $match.Matches[0].Groups[1].Value
-          if ($version -ne $cargoVersion) {
-              throw "Tag $tag does not match Cargo.toml version $cargoVersion"
+          if ($cargoVersion -notmatch '^\d+\.\d+\.\d+$') {
+              throw "Cargo.toml version '$cargoVersion' must look like MAJOR.MINOR.PATCH"
           }
-          "version=$version" >> $env:GITHUB_OUTPUT
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+              $tag = $env:GITHUB_REF_NAME
+              if ($tag -notmatch '^v\d+\.\d+\.\d+$') {
+                  throw "Tag '$tag' must look like vMAJOR.MINOR.PATCH"
+              }
+              if ($tag.Substring(1) -ne $cargoVersion) {
+                  throw "Tag $tag does not match Cargo.toml version $cargoVersion"
+              }
+          }
+          "version=$cargoVersion" >> $env:GITHUB_OUTPUT
 
       - name: Build the releases
         shell: pwsh
@@ -69,9 +67,10 @@ jobs:
           path: dist/Dockwind-${{ steps.version.outputs.version }}-setup.exe
 
       - name: Publish the GitHub release
+        if: github.event_name == 'push' && github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}
+          tag_name: ${{ github.ref_name }}
           name: Dockwind ${{ steps.version.outputs.version }}
           files: dist/Dockwind-${{ steps.version.outputs.version }}-setup.exe
           generate_release_notes: true
