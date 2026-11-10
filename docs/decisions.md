@@ -232,8 +232,8 @@ state machine is testable without GPUI or Win32.
 
 Trade-off: During the fade there is still a live window at the bottom edge. The
 fullscreen check is unit-tested through `force_hidden`, but a real fullscreen
-game was not exercised on this machine. Context menus are not implemented, so
-the `pinned_open` input is always false.
+game was not exercised on this machine. Context menus are implemented in M7;
+`menu_open` pins the dock while the menu is open.
 
 ## D015: Auto-hide trigger is the work-area edge
 
@@ -300,18 +300,36 @@ taskbar guard mid-run adds failure paths without being required by M6.
 Trade-off: Changing either setting requires restarting Dockwind. This is noted
 in the README.
 
-## D019: Autostart is exposed through CLI flags
+## D019: Autostart is exposed through the native menu and CLI
 
 Date: 2026-11-10
 
-Add `--enable-autostart` and `--disable-autostart`, backed by a value under
-`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+Right-clicking the dock opens a native Win32 popup with Reload config, an
+autostart toggle, and Restore taskbar & Quit. The same autostart operations are
+available through `--enable-autostart` and `--disable-autostart`.
 
-Reason: GPUI 0.2.2 has no native context-menu API. The plan's menu entry would
-require a custom popup window or a blocking Win32 `TrackPopupMenu` call on the
-dock thread. The CLI keeps the feature usable without adding an unverified
-popup path.
+Reason: GPUI 0.2.2 has no context-menu API, so the menu is built with
+`CreatePopupMenu` and `TrackPopupMenu`. The CLI remains useful for setup and
+recovery when the dock is not running.
 
-Trade-off: This deviates from the plan's context-menu interaction and is
-recorded here. The autostart value is machine-user scoped and can be removed
-with `--disable-autostart` or Registry Editor.
+Trade-off: The autostart value is user-scoped under
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. Removing it manually is
+also possible with Registry Editor.
+
+## D020: Native menu is deferred and pins the dock
+
+Date: 2026-11-10
+
+The right-click handler spawns a foreground task that yields once before calling
+`TrackPopupMenu`. The task sets `menu_open` before the blocking call and clears it
+afterward; auto-hide treats `menu_open` as `pinned_open`.
+
+Reason: Calling the modal native menu directly inside a GPUI mouse handler
+caused a re-entrant `RefCell already borrowed` panic when the menu loop
+dispatched queued GPUI tasks. Deferring the call leaves no active app borrow
+while the menu runs. The `menu_open` flag keeps the dock visible while the menu
+is open.
+
+Trade-off: The menu blocks the GPUI thread for the duration of the popup, but
+the deferred task is outside the borrow guard and the auto-hide task can still
+observe `menu_open`.

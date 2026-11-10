@@ -65,7 +65,6 @@ pub fn open_dock_window(
             if let Err(error) = win::dwm::apply_backdrop(window, blur) {
                 warn!(%error, "backdrop configuration failed; keeping transparent");
             }
-            let window_handle = window.window_handle();
             let hwnd = win::dwm::window_hwnd(window).expect("failed to read the dock HWND");
             let geometry = DockGeometry {
                 bounds,
@@ -77,7 +76,6 @@ pub fn open_dock_window(
                 DockView::new(
                     cx,
                     theme,
-                    window_handle,
                     geometry,
                     config,
                     config_updates,

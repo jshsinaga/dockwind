@@ -3,8 +3,9 @@ use windows::{
     Win32::{
         Foundation::ERROR_FILE_NOT_FOUND,
         System::Registry::{
-            HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey,
-            RegCreateKeyExW, RegDeleteValueW, RegSetValueExW,
+            HKEY, HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE,
+            REG_SZ, RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW,
+            RegSetValueExW,
         },
     },
     core::HSTRING,
@@ -44,6 +45,31 @@ pub fn disable() -> Result<()> {
         bail!("RegDeleteValueW failed with status {}", status.0);
     }
     Ok(())
+}
+
+pub fn is_enabled() -> Result<bool> {
+    let mut key = HKEY::default();
+    let subkey = HSTRING::from(RUN_KEY);
+    let status =
+        unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, &subkey, None, KEY_QUERY_VALUE, &mut key) };
+    if status == ERROR_FILE_NOT_FOUND {
+        return Ok(false);
+    }
+    if status.0 != 0 {
+        bail!("RegOpenKeyExW failed with status {}", status.0);
+    }
+
+    let name = HSTRING::from(VALUE_NAME);
+    let query = unsafe { RegQueryValueExW(key, &name, None, None, None, None) };
+    let _ = unsafe { RegCloseKey(key) };
+
+    if query == ERROR_FILE_NOT_FOUND {
+        Ok(false)
+    } else if query.0 != 0 {
+        bail!("RegQueryValueExW failed with status {}", query.0);
+    } else {
+        Ok(true)
+    }
 }
 
 fn open_run_key() -> Result<HKEY> {

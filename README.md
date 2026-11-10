@@ -19,7 +19,7 @@ replacement are not implemented yet.
 | M4: app list, icons, launch, activate/minimize | Implemented. |
 | M5: auto-hide, cursor trigger, click-through | Implemented. |
 | M6: native taskbar hide/restore, quit hotkey, single instance | Implemented. |
-| M7: release, autostart, docs | Release and autostart CLI done; context menu and AppBar reservation remain. |
+| M7: release, autostart, context menu, docs | Release, autostart, and context menu done; AppBar and minor interaction polish remain. |
 
 ## Requirements
 
@@ -67,15 +67,14 @@ is active.
 
 ## Autostart
 
-Autostart uses `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`:
+Autostart uses `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. Right-click
+the dock and choose Enable autostart or Disable autostart. The same operations are
+available from the command line:
 
 ```powershell
 dockwind --enable-autostart
 dockwind --disable-autostart
 ```
-
-The context-menu toggle described in the implementation plan is not implemented;
-the CLI flags are the current interface.
 
 ## Configuration
 
@@ -142,10 +141,8 @@ The embedded manifest is verified with `mt.exe` after building.
   pending.
 - UWP windows hosted by `ApplicationFrameHost.exe` are skipped in v1 because
   their real app identity is not mapped yet.
-- Middle-click to launch a second instance, tooltips, and context menus are not
-  implemented yet.
-- Autostart is available through `--enable-autostart` and `--disable-autostart`,
-  not the context menu described in the plan.
+- Middle-click to launch a second instance, tooltips, and scrolling for large
+  app lists are not implemented yet.
 - `hide_native_taskbar` and `quit_hotkey` are read at startup. Changing them by
   hot reload does not apply until the next launch.
 - GPUI is pinned to `=0.2.2` because it is pre-1.0 and its API changes between

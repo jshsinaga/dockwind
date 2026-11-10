@@ -5,6 +5,7 @@ pub mod events;
 pub mod hotkey;
 pub mod icons;
 pub mod launch;
+pub mod menu;
 pub mod monitors;
 pub mod single_instance;
 pub mod taskbar;

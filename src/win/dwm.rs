@@ -158,6 +158,11 @@ fn restore_foreground(dock: HWND, previous: HWND) -> bool {
 
 pub fn apply_backdrop(window: &Window, mode: BlurMode) -> Result<()> {
     let hwnd = raw_hwnd(window)?;
+    apply_backdrop_to_hwnd(hwnd.0 as isize, mode)
+}
+
+pub fn apply_backdrop_to_hwnd(hwnd: isize, mode: BlurMode) -> Result<()> {
+    let hwnd = HWND(hwnd as *mut c_void);
     let build = windows_build()?;
 
     match mode {
