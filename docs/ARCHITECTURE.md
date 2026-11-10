@@ -46,7 +46,7 @@ module exists only when it has code.
 | `src/ui/theme.rs` | Color, contrast, radius, padding mapping | Derived theme |
 | `src/win/worker.rs` | Manual-reset stop event and `MsgWaitForMultipleObjectsEx` cancellation shared by the event, taskbar, hotkey, and tray workers | Worker cancellation primitive |
 | `src/win/appbar.rs` | AppBar registration, reserved rect, callback window thread, remove on release | AppBar reservation |
-| `src/win/settings.rs` | Native Win32 settings window thread, controls, validation, comment-preserving atomic save, external-edit prompt | Settings window lifetime |
+| `src/win/settings.rs` | Native Win32 settings window thread, controls, validation, comment-preserving atomic save, external-edit prompt, session-wide named mutex | Settings window lifetime |
 | `src/win/tray.rs` | Tray icon worker, menu, `TaskbarCreated` recovery, two-second visible-taskbar icon check | Tray icon and menu |
 | `src/win/*.rs` | Win32 wrappers for windows, DWM, monitors, icons, events, taskbar, appbar, hotkey, menu, settings, tray, autostart, single instance, cursor, launch | OS resources |
 | `src/logging.rs` | Tracing setup and daily log file | Log worker guard |
@@ -266,7 +266,7 @@ taskbar watch timer (2 s) --> taskbar watcher --> refresh hide
 | `taskbar-watch` | Hidden window and message loop | Handles `WM_ENDSESSION`, `WM_CLOSE`, `TaskbarCreated`, and a two-second `WM_TIMER` refresh. Uses the stop-aware message reader |
 | `quit-hotkey` | `RegisterHotKey` and message loop | Owns the hotkey registration. Uses the stop-aware message reader |
 | `dockwind-tray` | Hidden window, tray callback, menu | Owns the tray icon and menu. A two-second timer verifies the icon while the taskbar is visible. Uses the stop-aware message reader |
-| `dockwind-settings` | Settings window and controls | Edits the config file on its own thread. It does not touch GPUI state |
+| `dockwind-settings` | Settings window and controls | Holds the session-wide settings mutex, edits the config file on its own thread, and does not touch GPUI state |
 | `dockwind-appbar` | Hidden AppBar callback window and message loop | Owns the callback window. AppBar setpos and remove calls come from the GPUI thread |
 | `config-watch` | `notify` events, debounce, parse | Sends a full config to the UI. Uses its own control channel and join handle |
 
@@ -333,6 +333,9 @@ starve cancellation. A sent-only wake leaves no posted message and does not bloc
     fights an explicit restore of unchanged handles.
 23. The runtime holds the strong `AppController` reference for the whole event
     loop. The logger drops last.
+24. The settings window holds `Local\DockwindSettings` for its lifetime. A second
+    process focuses the existing window after a short retry, or takes over an
+    abandoned mutex; it never opens a duplicate window.
 15. The event, taskbar, and hotkey workers use the stop-aware message reader. The
     reader polls the stop event, consumes one posted message with `PeekMessageW`,
     and returns `None` for stop or `WM_QUIT`.

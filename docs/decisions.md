@@ -876,3 +876,29 @@ Evidence: unit tests on 2026-11-11 preserved a top-level comment, an unknown
 top-level key, an unknown table, and a comment on `width` while changing width to
 700. A legacy alias was removed, pinned entries round-tripped, and an invalid file
 was rejected without modification. The full gate covers these tests.
+
+## D042: Allow one settings window per user session
+
+Date: 2026-11-11
+
+The settings entry points create or open the named `Local\DockwindSettings`
+mutex. A zero-time wait obtains ownership for the settings thread. When the wait
+times out, the process retries `FindWindowW("DockwindSettings")` for up to two
+seconds, restores and focuses the existing window, and exits successfully.
+`WAIT_ABANDONED` takes ownership so a crashed settings process does not block the
+next one. A guard releases the mutex and closes the handle when the settings
+thread ends.
+
+Reason: a second settings window can overwrite the first window's draft from a
+stale baseline. The per-process `SETTINGS_OPEN` flag only coordinated windows
+inside one process. The mutex makes the single-writer contract explicit across
+the dock, tray, and `--settings` processes.
+
+Trade-off: settings windows are per session, not machine-wide, because the mutex
+is in the `Local` namespace. A second process can wait up to two seconds while
+the first window is being created. If the mutex is held but no window is found,
+the second process logs a warning and exits without opening a duplicate.
+
+Evidence: on 2026-11-11, the first `--settings` process owned one
+`DockwindSettings` window. A second process exited 0 and the window count stayed
+one. After the first closed, a third process opened a new window.

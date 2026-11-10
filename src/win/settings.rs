@@ -1,16 +1,21 @@
 use std::ffi::c_void;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use tracing::{error, info, warn};
 use windows::{
     Win32::{
         Foundation::{
-            COLORREF, ERROR_CLASS_ALREADY_EXISTS, GetLastError, HINSTANCE, HWND, LPARAM, WPARAM,
+            COLORREF, CloseHandle, ERROR_CLASS_ALREADY_EXISTS, GetLastError, HANDLE, HINSTANCE,
+            HWND, LPARAM, WAIT_ABANDONED, WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM,
         },
         Graphics::Gdi::{COLOR_WINDOW, DEFAULT_GUI_FONT, GetStockObject, HBRUSH},
-        System::LibraryLoader::GetModuleHandleW,
+        System::{
+            LibraryLoader::GetModuleHandleW,
+            Threading::{CreateMutexW, ReleaseMutex, WaitForSingleObject},
+        },
         UI::{
             Controls::Dialogs::{
                 CC_FULLOPEN, CC_RGBINIT, CHOOSECOLORW, ChooseColorW, CommDlgExtendedError,
@@ -42,6 +47,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use crate::config::{Config, DockEdge, parse_rgba_hex};
 
 const CLASS_NAME: PCWSTR = w!("DockwindSettings");
+const SETTINGS_MUTEX_NAME: PCWSTR = w!("Local\\DockwindSettings");
 const WINDOW_WIDTH: i32 = 640;
 const WINDOW_HEIGHT: i32 = 880;
 
@@ -152,23 +158,75 @@ pub fn open_blocking(config_path: PathBuf) -> Result<()> {
     result
 }
 
-fn focus_existing() {
+fn focus_existing() -> bool {
     // SAFETY: FindWindowW is a read-only lookup by class name. A null result means
     // no window exists.
     let Ok(hwnd) = (unsafe { FindWindowW(CLASS_NAME, PCWSTR::null()) }) else {
-        return;
+        return false;
     };
     if hwnd.0.is_null() {
-        return;
+        return false;
     }
     // SAFETY: `hwnd` is a live window owned by the settings thread.
     unsafe {
         let _ = ShowWindow(hwnd, SW_RESTORE);
         let _ = SetForegroundWindow(hwnd);
     }
+    true
+}
+
+struct SettingsMutex(HANDLE);
+
+impl Drop for SettingsMutex {
+    fn drop(&mut self) {
+        // SAFETY: this guard owns the mutex handle and releases it exactly once.
+        unsafe {
+            let _ = ReleaseMutex(self.0);
+            let _ = CloseHandle(self.0);
+        }
+    }
+}
+
+fn acquire_settings_mutex() -> Result<Option<SettingsMutex>> {
+    // SAFETY: the name is a static null-terminated string and no security
+    // attributes are requested.
+    let handle = unsafe { CreateMutexW(None, false, SETTINGS_MUTEX_NAME) }
+        .context("CreateMutexW(DockwindSettings) failed")?;
+    // SAFETY: `handle` is the live mutex handle returned above.
+    match unsafe { WaitForSingleObject(handle, 0) } {
+        WAIT_OBJECT_0 | WAIT_ABANDONED => Ok(Some(SettingsMutex(handle))),
+        WAIT_TIMEOUT => {
+            // SAFETY: the handle is live and is closed once.
+            unsafe {
+                let _ = CloseHandle(handle);
+            }
+            Ok(None)
+        }
+        result => {
+            // SAFETY: the handle is live and is closed once.
+            unsafe {
+                let _ = CloseHandle(handle);
+            }
+            Err(anyhow!(
+                "unexpected settings mutex wait result: 0x{:X}",
+                result.0
+            ))
+        }
+    }
 }
 
 fn run(config_path: PathBuf) -> Result<()> {
+    let Some(_settings_mutex) = acquire_settings_mutex()? else {
+        for _ in 0..20 {
+            if focus_existing() {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        warn!("another settings instance owns the mutex but no window was found");
+        return Ok(());
+    };
+
     let loaded = Config::load_or_create(&config_path)?;
     for warning in &loaded.warnings {
         warn!("{warning}");

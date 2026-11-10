@@ -25,7 +25,7 @@ work, and dated evidence. It does not repeat the architecture. Read
 | Intermediate gate | Historical: 59 tests passed before the lifecycle fixes. Superseded by the final gate |
 | Release binary | `target\release\dockwind.exe` |
 | Lints | `unsafe_op_in_unsafe_fn` and `clippy::undocumented_unsafe_blocks` are `deny`. Production-only `unwrap_used` and `expect_used` are denied outside tests |
-| Settings | Native Win32 window on its own thread. Atomic save and external-edit prompt. Validation, restart notice, Close discard, and pinned add/remove/reorder passed on 2026-11-11. A valid file keeps comments, ordering, and unknown keys; pinned entries are rewritten |
+| Settings | Native Win32 window on its own thread. One window per user session through a named mutex. Atomic save, external-edit prompt, and TOML preservation. Validation, restart notice, Close discard, and pinned add/remove/reorder passed on 2026-11-11. A valid file keeps comments, ordering, and unknown keys; pinned entries are rewritten |
 | Tray | Icon, menu, settings, reload, autostart, restore, quit, TaskbarCreated recovery, and a two-second visible-taskbar icon check |
 | Installer | Inno Setup 6. Built and smoke-tested on 2026-11-11. Upgrade 0.1.0 to 0.2.0 passed. The Start Menu shortcut was created and removed. Clean profile is still pending |
 | CI | GitHub Actions gate and installer artifact passed on 2026-11-11. Runs 42878351738 on `189ef25`, 42884752869 on `f8ed473`, 42889880818 on `85e4067`, 42892342420 on `c2984b5`, 42902593790 on `fc65aa3`, 42904347913 on `73ebf42`, 42906568724 on `dfd88e8`, and 42911029970 on `639f945` completed the `gate` and `installer` jobs. The tag release workflow has not run |
@@ -218,6 +218,7 @@ Historical evidence does not automatically verify the integrated code.
 | 2026-11-11 | Live theming and geometry | A config reload changed the width to 700 and the orientation to top. The running dock moved to the top. Restoring 560 and bottom moved it back. Unit tests cover top placement, the top trigger, opacity scaling, and size bounds. 100% DPI |
 | 2026-11-11 | Settings window | Opened through `--settings`; every field matched the config. Apply saved a valid width. Close discarded a draft width of 700 and left the file at 560. Width `abc` produced `width must be a whole number: invalid digit found in string` and left the file unchanged. A new quit hotkey saved and showed `Restart Dockwind to apply the new quit hotkey.` |
 | 2026-11-11 | Settings external edit | With the settings window open, the file was changed to width 620 with an extra comment. Apply showed `The config file changed on disk. Overwrite it?`. No preserved the external file. A second Apply and Yes overwrote it with 560 and dropped the comment |
+| 2026-11-11 | Settings single window | The first `--settings` process owned one `DockwindSettings` window. A second `--settings` process exited 0 without creating a window, leaving one window. After the first closed, a third process opened a new window. This repeated across separate processes |
 | 2026-11-11 | Settings save preservation | Unit tests wrote comments, an unknown top-level key, and an unknown table. Apply changed width to 700 and preserved all of them. A legacy `margin_bottom` was removed when `offset` was written, pinned entries round-tripped, and an invalid existing TOML was rejected without changing the file |
 | 2026-11-11 | Settings pinned apps | Added `notepad.exe` through the file picker, then Apply wrote one pinned entry. With two entries, Down reordered them and Apply wrote Calculator first. Selecting the first entry and Remove left one Notepad entry |
 | 2026-11-11 | App list and auto geometry | Horizontal scrolling and middle-click launch were added. A one-second monitor poll repositions the dock on work-area, display, or DPI changes. The dock still rendered at a 300 px width. Resolution and DPI changes and the middle-click gesture were not manually exercised |
@@ -282,8 +283,7 @@ Order is a recommendation, not a commitment.
 9. **Multi-DPI UI.** Exercise the running UI at 125%, 150%, and 200%. See PRD U07.
 10. **Shutdown latency.** Profile teardown if the several-second exit remains.
     See PRD U08.
-11. **Settings polish.** Inline field validation and coordination between
-    multiple settings processes.
+11. **Settings polish.** Inline field validation.
 12. **Code signing.** The installer and binary are unsigned. Add signing only with
     a certificate and a recorded decision.
 
@@ -312,9 +312,9 @@ section 9. The short version:
   and the release workflow has not run yet.
 - A settings save preserves comments, ordering, and unknown keys for a valid
   file, but rewrites `pinned` entries. An invalid TOML file is not overwritten.
-  The native window has message box errors, not inline field errors. Multiple
-  settings processes are not coordinated. The taskbar toggle is live and the
-  settings checks passed.
+  The native window has message box errors, not inline field errors. A second
+  settings process focuses the existing window. The taskbar toggle is live and
+  the settings checks passed.
 - A missing tray icon is logged and does not block the dock.
 
 ## Documentation Map

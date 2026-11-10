@@ -18,6 +18,7 @@ in `docs/HANDOFF.md`.
 | Encoding | UTF-8 TOML |
 | Hot reload | `notify` watcher with a 200 ms debounce |
 | Settings entry | Dock context menu, tray menu, or `dockwind --settings` |
+| Settings instances | One window per user session through `Local\DockwindSettings`; a second launch focuses the existing window |
 
 If the file is missing, Dockwind writes a default file with every field. If the
 file is corrupt at startup, Dockwind logs a warning and uses defaults. If the file

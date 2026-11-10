@@ -78,9 +78,11 @@ dockwind --settings
 ```
 
 The settings window is a native Win32 window on its own thread. It edits the same
-config file as the dock. Apply validates and saves atomically. Close discards
-unsaved edits. If the file changed on disk while the window was open, Apply asks
-before overwriting.
+config file as the dock. Apply validates and saves atomically. A valid file keeps
+its comments, ordering, and unknown keys; pinned entries are rewritten. Close
+discards unsaved edits. If the file changed on disk while the window was open,
+Apply asks before overwriting. Only one settings window is open per session;
+launching settings again focuses it.
 
 The window covers:
 
