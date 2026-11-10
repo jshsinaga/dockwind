@@ -185,8 +185,10 @@ desktop shortcut, and does not force autostart. Uninstall runs
 and logs are preserved. A silent install and uninstall passed on 2026-11-11. A
 clean Windows profile and upgrade were not tested.
 
-CI runs `scripts/check.ps1` on `windows-latest` for pushes and pull requests. A
-`vX.Y.Z` tag builds the installer and publishes a GitHub Release.
+CI runs `scripts/check.ps1` on `windows-latest` for pushes and pull requests. On
+push and manual runs, a second job builds the installer and uploads the
+`Dockwind-installer` artifact. A `vX.Y.Z` tag builds the installer and publishes a
+GitHub Release.
 
 ## Configuration File
 

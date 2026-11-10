@@ -27,3 +27,33 @@ jobs:
       - name: Run the canonical quality gate
         shell: pwsh
         run: ./scripts/check.ps1
+
+  installer:
+    needs: gate
+    if: github.event_name != 'pull_request'
+    runs-on: windows-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Install the pinned Rust toolchain
+        shell: pwsh
+        run: rustup show
+
+      - name: Cache Rust build output
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Build the installer
+        shell: pwsh
+        run: ./scripts/build-installer.ps1
+
+      - name: Upload the installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dockwind-installer
+          path: dist/Dockwind-*-setup.exe
+          if-no-files-found: error

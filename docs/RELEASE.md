@@ -83,8 +83,10 @@ clean reset is intended.
 ## 4. Hosted CI
 
 `.github/workflows/ci.yml` runs on every push to `main`, every pull request, and
-manual dispatch. It runs `scripts/check.ps1` on `windows-latest` with the pinned
-toolchain and Rust cache.
+manual dispatch. The gate job runs `scripts/check.ps1` on `windows-latest` with
+the pinned toolchain and Rust cache. On non-pull-request runs, an `installer` job
+depends on the gate, installs Inno Setup, builds the installer, and uploads it as
+the `Dockwind-installer` workflow artifact.
 
 `.github/workflows/release.yml` runs on a `v*` tag or manual dispatch with an
 existing tag. It:

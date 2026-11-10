@@ -27,7 +27,7 @@ work, and dated evidence. It does not repeat the architecture. Read
 | Settings | Native Win32 window on its own thread. Atomic save and external-edit prompt |
 | Tray | Icon, menu, settings, reload, autostart, restore, quit, TaskbarCreated recovery |
 | Installer | Inno Setup 6. Built and smoke-tested on 2026-11-11. Clean profile and upgrade are still pending |
-| CI | GitHub Actions gate passed on 2026-11-11 for `adb2206` and `42421fc`. The tag release workflow has not run |
+| CI | GitHub Actions gate passed on 2026-11-11 for `adb2206` and `42421fc`. The gate workflow now also builds and uploads the installer. The tag release workflow has not run |
 | Final status | Full gate passed on 2026-11-11. Settings, tray, live geometry, and the basic installer path manually checked. Taskbar recovery and clean-profile installer checks unverified |
 
 The original M0 feasibility spike is closed. Do not repeat it unless the UI stack
