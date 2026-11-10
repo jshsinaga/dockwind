@@ -103,6 +103,41 @@ Reason: Editors often emit several write events for one save. The debounce
 avoids repeated parses and reduces the chance of reading a partially written
 file.
 
-Trade-off: M1 only logs reloads. M2 will need to forward the new `Config` and
-`Theme` into the GPUI view, because the current watcher thread does not update
-the UI.
+Trade-off: The watcher forwards the new `Config` to the GPUI view over an
+unbounded channel. M2 consumes it in `DockView`, which updates the theme and
+applies a changed blur mode through the stored window handle.
+
+## D008: Position against the monitor work area
+
+Date: 2026-11-10
+
+Use `MonitorFromWindow(GetDesktopWindow(), MONITOR_DEFAULTTOPRIMARY)`,
+`GetMonitorInfoW`, and `GetDpiForMonitor(MDT_EFFECTIVE_DPI)` to build a
+`MonitorInfo` for the primary display. `dock_rect` is a pure function over
+logical pixels.
+
+Reason: `PlatformDisplay::bounds()` gives the full monitor rectangle but not the
+work area. Using `rcWork` keeps the dock above the visible taskbar until M6
+hides it. Converting physical pixels to logical pixels with the effective DPI
+keeps GPUI's window bounds correct.
+
+Trade-off: The UI is only placed once at startup. A display change or taskbar
+work-area change requires a restart until M5/M6 add recalculation. The running
+UI was verified at 100% DPI; 125%, 150%, and 200% are unit-tested conversions
+only on this machine.
+
+## D009: Apply blur and corner changes through the dock window handle
+
+Date: 2026-11-10
+
+Capture `Window::window_handle()` during window creation and pass it to
+`DockView`. When the watcher delivers a config with a different blur mode, use
+`AsyncApp::update_window` to call `win::dwm::apply_backdrop`.
+
+Reason: The `DockView` itself has no direct handle to its platform window during
+render, and blur is a DWM property rather than a GPUI style. The stored GPUI
+handle lets the update run on the UI thread with the real `Window`.
+
+Trade-off: A closed window makes the update fail; the failure is logged and the
+config update for the theme is still retained. DWM backdrop remains gated on
+Windows 11 build 22621 and is not validated on this Windows 10 machine.

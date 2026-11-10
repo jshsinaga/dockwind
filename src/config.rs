@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use futures::channel::mpsc::{UnboundedReceiver, unbounded};
 use notify::Watcher;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -253,8 +254,9 @@ fn write_default(path: &Path, config: &Config) -> Result<(), ConfigError> {
     })
 }
 
-pub fn watch(path: &Path, initial: Config) -> Result<(), ConfigError> {
+pub fn watch(path: &Path, initial: Config) -> Result<UnboundedReceiver<Config>, ConfigError> {
     let watch_path = path.to_path_buf();
+    let (config_sender, config_receiver) = unbounded();
     let (sender, receiver) = std::sync::mpsc::channel();
     let mut watcher = notify::recommended_watcher(move |event| {
         let _ = sender.send(event);
@@ -287,6 +289,9 @@ pub fn watch(path: &Path, initial: Config) -> Result<(), ConfigError> {
                         }
                         last_valid = loaded.config;
                         info!(config = ?last_valid, "config reloaded");
+                        if config_sender.unbounded_send(last_valid.clone()).is_err() {
+                            return;
+                        }
                     }
                     Err(load_error) => {
                         error!(
@@ -299,7 +304,7 @@ pub fn watch(path: &Path, initial: Config) -> Result<(), ConfigError> {
             }
         })?;
 
-    Ok(())
+    Ok(config_receiver)
 }
 
 #[cfg(test)]

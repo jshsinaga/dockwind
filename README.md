@@ -14,7 +14,8 @@ replacement are not implemented yet.
 |---|---|
 | M0: GPUI window spike | Passed on Windows 10 22H2. See `docs/spike-m0.md`. |
 | M1: scaffold, config, theme, logging | Implemented. |
-| M2 onward | Not started. |
+| M2: shell window, monitor/DPI placement, live appearance | Implemented. |
+| M3 onward | Not started. |
 
 ## Requirements
 
@@ -87,11 +88,17 @@ The embedded manifest is verified with `mt.exe` after building.
 
 ## Known Limitations
 
+- The shell window is fixed at 560x92 logical pixels. The app list and clock
+  layout arrive in M3 and M4, and the content size will then follow the config.
 - The Mica and Acrylic backdrop branches need Windows 11 22H2 or newer and have
-  not been verified. The current machine is Windows 10 22H2.
+  not been verified. The current machine is Windows 10 22H2. On Windows 10 the
+  dock logs that the backdrop is unavailable and stays transparent.
+- Monitor placement is verified in the running UI at 100% DPI. The physical to
+  logical conversion and dock rectangle are unit-tested at 100%, 125%, 150%,
+  and 200% DPI; a real 125% to 200% desktop was not available for manual testing.
 - The native taskbar is not hidden yet. `--restore-taskbar` is not implemented;
   do not enable taskbar hiding by hand.
-- The dock currently shows a spike label and a cross-thread tick counter. App
-  icons, the clock, auto-hide, and autostart arrive in later milestones.
+- The dock currently shows a shell label. App icons, the clock, auto-hide, and
+  autostart arrive in later milestones.
 - GPUI is pinned to `=0.2.2` because it is pre-1.0 and its API changes between
   releases.
