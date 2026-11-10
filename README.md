@@ -4,9 +4,13 @@ A floating dock bar for Windows 10 and 11, written in Rust. Dockwind hides the
 native taskbar instead of removing it, and draws its own dock with configurable
 transparency, corner radius, and colors.
 
-The project is in early development. The current code proves the window and
-configuration foundation; the app list, clock, auto-hide, and taskbar
-replacement are not implemented yet.
+Dockwind implements the M0 through M7 scope plus the dock context menu. The
+remaining gaps are AppBar reservation, UWP identity, middle-click/tooltips, and
+Windows 11 visual verification.
+
+For the current state, architecture, verification evidence, and next steps, read
+`docs/HANDOFF.md`. For design decisions and deviations, read
+`docs/decisions.md`.
 
 ## Current Status
 
