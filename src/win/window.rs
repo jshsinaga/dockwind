@@ -3,6 +3,7 @@ use std::ffi::c_void;
 use anyhow::{Context as _, Result, ensure};
 use gpui::Window;
 use raw_window_handle::RawWindowHandle;
+use tracing::info;
 use windows::Win32::{
     Foundation::HWND,
     Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmSetWindowAttribute},
@@ -64,9 +65,14 @@ pub fn configure_dock_window(window: &Window, previous_foreground: HWND) -> Resu
             "window is missing WS_EX_NOACTIVATE"
         );
 
-        println!(
-            "M0 hwnd=0x{:X} ex_style=0x{bits:08X} toolwindow=true appwindow=false topmost=true noactivate=true",
-            hwnd.0 as isize
+        info!(
+            hwnd = %format!("0x{:X}", hwnd.0 as isize),
+            ex_style = %format!("0x{bits:08X}"),
+            toolwindow = true,
+            appwindow = false,
+            topmost = true,
+            noactivate = true,
+            "dock window styles applied"
         );
 
         if !previous_foreground.0.is_null() {
@@ -94,7 +100,7 @@ fn probe_backdrop(hwnd: HWND) {
     };
 
     match result {
-        Ok(()) => println!("M0 DWM backdrop probe: attribute 38 accepted"),
-        Err(error) => println!("M0 DWM backdrop probe: attribute 38 rejected: {error}"),
+        Ok(()) => info!("DWM backdrop attribute 38 accepted"),
+        Err(error) => info!(%error, "DWM backdrop attribute 38 rejected"),
     }
 }

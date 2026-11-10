@@ -22,7 +22,7 @@ Status: PASS for the Windows 10 required criteria; Windows 11 DWM backdrop remai
 
 Use the published `gpui` 0.2.2 crate with an exact `=0.2.2` pin, not a moving Git branch. Use `windows = "0.61"` to match the version GPUI already depends on and avoid duplicate Win32 types.
 
-This decision is recorded here because `docs/decisions.md` is scheduled for M1.
+This decision is recorded in `docs/decisions.md` as D001.
 
 ## Spike Scope
 
@@ -89,7 +89,7 @@ The blur plus radius conflict remains open for Windows 11:
 
 ## Notes for Later Milestones
 
-1. M1 should move the pin decision into `docs/decisions.md` and replace `println!` diagnostics with `tracing`.
+1. M1 replaced the `println!` diagnostics with `tracing` and recorded the pin in `docs/decisions.md` as D001.
 2. M2 must use the monitor work area, not only full display bounds, and must handle the GPUI border offset at non-100% DPI.
 3. M2 must repeat the backdrop test on Windows 11 22H2 or newer before treating the Mica/Acrylic contract as valid.
 4. `WS_EX_NOACTIVATE` means the dock has no keyboard focus. Context menus and any keyboard-driven dock action need explicit testing in M5/M6.

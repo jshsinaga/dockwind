@@ -1,3 +1,6 @@
+mod config;
+mod logging;
+mod theme;
 mod win;
 
 use std::time::Duration;
@@ -8,18 +11,19 @@ use gpui::{
     WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, div, point, prelude::*,
     px, rgba, size,
 };
+use theme::Theme;
 
 const DOCK_WIDTH: f32 = 560.0;
 const DOCK_HEIGHT: f32 = 92.0;
 const DOCK_MARGIN_BOTTOM: f32 = 12.0;
-const CORNER_RADIUS: f32 = 20.0;
 
 struct SpikeView {
+    theme: Theme,
     tick: u64,
 }
 
 impl SpikeView {
-    fn new(cx: &mut Context<Self>) -> Self {
+    fn new(cx: &mut Context<Self>, theme: Theme) -> Self {
         let (tx, mut rx) = futures::channel::mpsc::unbounded();
 
         std::thread::Builder::new()
@@ -49,7 +53,7 @@ impl SpikeView {
         })
         .detach();
 
-        Self { tick: 0 }
+        Self { theme, tick: 0 }
     }
 }
 
@@ -58,21 +62,22 @@ impl Render for SpikeView {
         div().size_full().child(
             div()
                 .size_full()
-                .rounded(px(CORNER_RADIUS))
-                .bg(rgba(0x1E1E2EE6))
+                .rounded(self.theme.radius)
+                .bg(self.theme.background)
                 .border_1()
                 .border_color(rgba(0xFFFFFF33))
                 .flex()
                 .items_center()
                 .justify_center()
                 .gap_4()
-                .text_color(rgba(0xFFFFFFFF))
+                .p(self.theme.padding)
+                .text_color(self.theme.text)
                 .child(div().size(px(48.)).rounded(px(12.)).bg(rgba(0x4C9AFFFF)))
                 .child(
                     div()
                         .flex()
                         .flex_col()
-                        .child("Dockwind M0")
+                        .child("Dockwind M1")
                         .child(format!("UI wake tick: {}", self.tick)),
                 ),
         )
@@ -80,7 +85,30 @@ impl Render for SpikeView {
 }
 
 fn main() {
-    Application::new().run(|cx: &mut App| {
+    if let Err(error) = run() {
+        eprintln!("dockwind failed: {error:#}");
+        std::process::exit(1);
+    }
+}
+
+fn run() -> anyhow::Result<()> {
+    let _log_guard = logging::init()?;
+    let config_path = config::default_path()?;
+    let loaded = config::Config::load_or_create(&config_path)?;
+
+    for warning in &loaded.warnings {
+        tracing::warn!("{warning}");
+    }
+
+    let theme = Theme::from_config(&loaded.config.appearance)?;
+    tracing::info!(
+        path = %config_path.display(),
+        config = ?loaded.config,
+        "config loaded"
+    );
+    config::watch(&config_path, loaded.config.clone())?;
+
+    Application::new().run(move |cx: &mut App| {
         let display = cx.primary_display().expect("no primary display");
         let display_bounds = display.bounds();
         let dock_size = size(px(DOCK_WIDTH), px(DOCK_HEIGHT));
@@ -97,7 +125,7 @@ fn main() {
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(dock_bounds)),
                 titlebar: Some(TitlebarOptions {
-                    title: Some(SharedString::from("Dockwind M0")),
+                    title: Some(SharedString::from("Dockwind M1")),
                     appears_transparent: true,
                     ..Default::default()
                 }),
@@ -112,10 +140,12 @@ fn main() {
             },
             |window, cx| {
                 win::configure_dock_window(window, previous_foreground)
-                    .expect("failed to apply M0 window styles");
-                cx.new(SpikeView::new)
+                    .expect("failed to apply window styles");
+                cx.new(|cx| SpikeView::new(cx, theme))
             },
         )
-        .expect("failed to open M0 window");
+        .expect("failed to open dock window");
     });
+
+    Ok(())
 }
