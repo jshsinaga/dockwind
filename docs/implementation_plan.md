@@ -1,5 +1,12 @@
 # Rencana Implementasi: Dockwind (Dock Bar Pengganti Taskbar Windows 10/11 dengan Rust)
 
+> Status: historical. This is the original plan, preserved for context. It is not
+> current scope. Read `docs/PRD.md` for current requirements,
+> `docs/ARCHITECTURE.md` for current structure, `docs/CONFIGURATION.md` for the
+> config contract, and `docs/HANDOFF.md` for current state and pending work.
+> Decisions that changed this plan are in `docs/decisions.md`. Do not use this
+> file as the source of truth for status, paths, or milestones.
+
 Dockwind adalah dock bar mengambang untuk Windows 10/11 yang menampilkan daftar aplikasi (pinned dan yang sedang berjalan), jam dan tanggal, serta auto hide/show. Tampilannya bisa transparan/translucent, radius sudut dan warna background bisa diatur lewat file konfigurasi. Dockwind menggantikan taskbar bawaan dengan cara menyembunyikannya, bukan menghapusnya.
 
 ---

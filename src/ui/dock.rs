@@ -1,19 +1,17 @@
 use std::time::{Duration, Instant};
 
-use futures::StreamExt;
-use futures::channel::mpsc::UnboundedReceiver;
 use gpui::{
-    Bounds, ClickEvent, Context, Entity, MouseButton, Pixels, Render, Timer, Window, div,
+    Bounds, ClickEvent, Context, Entity, MouseButton, Pixels, Point, Render, Timer, Window, div,
     prelude::*, px, rgba,
 };
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 use super::app_item::render_app_item;
 use super::clock::ClockView;
-use crate::app_state::{self, DockItem};
-use crate::autohide::{AutoHide, AutoHideSettings};
+use super::theme::Theme;
+use crate::app::AppController;
 use crate::config::Config;
-use crate::theme::Theme;
+use crate::dock::{AutoHide, AutoHideInput, AutoHideSettings, DockItem};
 use crate::win::menu::MenuAction;
 use crate::win::{self, icons::IconCache};
 
@@ -26,18 +24,16 @@ pub struct DockGeometry {
 }
 
 pub struct DockView {
+    controller: Entity<AppController>,
+    applied_config: Config,
     theme: Theme,
-    blur: crate::config::BlurMode,
     clock: Entity<ClockView>,
-    pinned: Vec<crate::config::PinnedApp>,
     items: Vec<DockItem>,
     icons: IconCache,
     icon_size: Pixels,
     geometry: DockGeometry,
     auto_hide: AutoHide,
     auto_hide_settings: AutoHideSettings,
-    auto_hide_enabled: bool,
-    hide_in_fullscreen: bool,
     menu_open: bool,
     progress: f32,
 }
@@ -45,75 +41,38 @@ pub struct DockView {
 impl DockView {
     pub fn new(
         cx: &mut Context<Self>,
-        theme: Theme,
+        controller: Entity<AppController>,
         geometry: DockGeometry,
-        config: Config,
-        mut config_updates: UnboundedReceiver<Config>,
-        mut window_events: UnboundedReceiver<()>,
-        hotkey_events: Option<UnboundedReceiver<()>>,
+        theme: Theme,
     ) -> Self {
+        let (config, items) = {
+            let controller = controller.read(cx);
+            (controller.config().clone(), controller.items().to_vec())
+        };
         let clock = cx.new(|cx| ClockView::new(cx, &config.clock));
-        let auto_hide_enabled = config.behavior.auto_hide;
-        let auto_hide = AutoHide::new(auto_hide_enabled);
+        let auto_hide = AutoHide::new(config.behavior.auto_hide);
         let progress = auto_hide.progress();
-        let mut this = Self {
+        let this = Self {
+            controller,
+            applied_config: config.clone(),
             theme,
-            blur: config.appearance.blur,
             clock,
-            pinned: config.pinned.clone(),
-            items: Vec::new(),
+            items,
             icons: IconCache::default(),
             icon_size: px(config.appearance.icon_size as f32),
             geometry,
             auto_hide,
             auto_hide_settings: auto_hide_settings(&config),
-            auto_hide_enabled,
-            hide_in_fullscreen: config.behavior.hide_in_fullscreen,
             menu_open: false,
             progress,
         };
         this.set_click_through(progress <= 0.001);
-        this.refresh();
 
-        cx.spawn(async move |this, cx| {
-            while let Some(config) = config_updates.next().await {
-                if this
-                    .update(cx, |this, cx| this.apply_config(config, cx))
-                    .is_err()
-                {
-                    break;
-                }
-            }
+        let controller = this.controller.clone();
+        cx.observe(&controller, |this, controller, cx| {
+            this.sync_controller(&controller, cx);
         })
         .detach();
-
-        cx.spawn(async move |this, cx| {
-            while window_events.next().await.is_some() {
-                Timer::after(Duration::from_millis(120)).await;
-                while window_events.try_recv().is_ok() {}
-
-                let updated = this.update(cx, |this, cx| {
-                    this.refresh();
-                    cx.notify();
-                });
-                if updated.is_err() {
-                    break;
-                }
-            }
-        })
-        .detach();
-
-        if let Some(mut hotkey_events) = hotkey_events {
-            cx.spawn(async move |_this, cx| {
-                if hotkey_events.next().await.is_some() {
-                    info!("quit hotkey received");
-                    if let Err(error) = cx.update(|cx| cx.quit()) {
-                        warn!(%error, "failed to request application quit");
-                    }
-                }
-            })
-            .detach();
-        }
 
         let start = Instant::now();
         cx.spawn(async move |this, cx| {
@@ -133,23 +92,54 @@ impl DockView {
         this
     }
 
-    fn refresh(&mut self) {
-        let started = std::time::Instant::now();
-        match win::windows_enum::list_app_windows() {
-            Ok(windows) => {
-                let mut items = app_state::merge(&self.pinned, &windows);
-                for item in &mut items {
-                    item.icon = self.icons.get(&item.key, item.target_window());
-                }
-                self.items = items;
-                debug!(
-                    items = self.items.len(),
-                    elapsed_ms = started.elapsed().as_millis(),
-                    "app list refreshed"
-                );
-            }
-            Err(error) => error!(%error, "failed to enumerate app windows"),
+    /// Reads the controller state. Config-derived view state is only recomputed when
+    /// the active configuration actually changed.
+    fn sync_controller(&mut self, controller: &Entity<AppController>, cx: &mut Context<Self>) {
+        let (config, items) = {
+            let controller = controller.read(cx);
+            (controller.config().clone(), controller.items().to_vec())
+        };
+        self.items = items;
+
+        if config == self.applied_config {
+            cx.notify();
+            return;
         }
+
+        self.apply_config(config, cx);
+    }
+
+    fn apply_config(&mut self, config: Config, cx: &mut Context<Self>) {
+        let theme = match Theme::from_config(&config.appearance) {
+            Ok(theme) => theme,
+            Err(error) => {
+                error!(%error, "config appearance update rejected");
+                return;
+            }
+        };
+
+        let blur_changed = self.applied_config.appearance.blur != config.appearance.blur;
+        self.theme = theme;
+        self.icon_size = px(config.appearance.icon_size as f32);
+        self.clock
+            .update(cx, |clock, cx| clock.set_config(&config.clock, cx));
+        self.auto_hide_settings = auto_hide_settings(&config);
+        if !config.behavior.auto_hide {
+            self.progress = 1.0;
+            self.set_click_through(false);
+        }
+        self.applied_config = config;
+
+        if blur_changed {
+            self.apply_backdrop();
+        }
+
+        info!(
+            corner_radius = self.applied_config.appearance.corner_radius,
+            background = %self.applied_config.appearance.background,
+            "dock appearance updated"
+        );
+        cx.notify();
     }
 
     fn tick(&mut self, now: Duration, cx: &mut Context<Self>) {
@@ -161,17 +151,17 @@ impl DockView {
             }
         };
 
-        let force_hidden = self.hide_in_fullscreen && win::cursor::fullscreen_active();
-        let progress = self.auto_hide.update(
+        let force_hidden =
+            self.applied_config.behavior.hide_in_fullscreen && win::cursor::fullscreen_active();
+        let input = AutoHideInput {
             now,
-            cursor,
-            self.geometry.bounds,
-            self.geometry.trigger,
-            self.auto_hide_settings,
-            self.auto_hide_enabled,
+            pointer_in_dock: contains(self.geometry.bounds, cursor),
+            pointer_in_trigger: contains(self.geometry.trigger, cursor),
+            enabled: self.applied_config.behavior.auto_hide,
             force_hidden,
-            self.menu_open,
-        );
+            pinned_open: self.menu_open,
+        };
+        let progress = self.auto_hide.update(input, self.auto_hide_settings);
 
         if (progress - self.progress).abs() > f32::EPSILON {
             self.progress = progress;
@@ -181,7 +171,7 @@ impl DockView {
     }
 
     fn poll_interval(&self) -> Duration {
-        if self.auto_hide_enabled && self.progress > 0.001 {
+        if self.applied_config.behavior.auto_hide && self.progress > 0.001 {
             Duration::from_millis(16)
         } else {
             Duration::from_millis(100)
@@ -194,86 +184,12 @@ impl DockView {
         }
     }
 
-    fn apply_config(&mut self, config: Config, cx: &mut Context<Self>) {
-        let theme = match Theme::from_config(&config.appearance) {
-            Ok(theme) => theme,
-            Err(error) => {
-                error!(%error, "config appearance update rejected");
-                return;
-            }
-        };
-
-        let blur_changed = self.blur != config.appearance.blur;
-        self.blur = config.appearance.blur;
-        self.theme = theme;
-        self.icon_size = px(config.appearance.icon_size as f32);
-        self.clock
-            .update(cx, |clock, cx| clock.set_config(&config.clock, cx));
-
-        if self.pinned != config.pinned {
-            self.pinned = config.pinned.clone();
-            self.refresh();
-        }
-
-        self.auto_hide_enabled = config.behavior.auto_hide;
-        self.hide_in_fullscreen = config.behavior.hide_in_fullscreen;
-        self.auto_hide_settings = auto_hide_settings(&config);
-        if !config.behavior.auto_hide {
-            self.progress = 1.0;
-            self.set_click_through(false);
-        }
-
-        if blur_changed
-            && let Err(error) = win::dwm::apply_backdrop_to_hwnd(self.geometry.hwnd, self.blur)
-        {
+    fn apply_backdrop(&self) {
+        if let Err(error) = win::dwm::apply_backdrop_to_hwnd(
+            self.geometry.hwnd,
+            self.applied_config.appearance.blur,
+        ) {
             warn!(%error, "backdrop update failed; keeping transparent");
-        }
-
-        info!(
-            corner_radius = config.appearance.corner_radius,
-            background = %config.appearance.background,
-            "dock appearance updated"
-        );
-        cx.notify();
-    }
-
-    fn reload_config(&mut self, cx: &mut Context<Self>) {
-        let path = match crate::config::default_path() {
-            Ok(path) => path,
-            Err(error) => {
-                error!(%error, "failed to resolve the config path");
-                return;
-            }
-        };
-
-        match Config::load_existing(&path) {
-            Ok(loaded) => {
-                for warning in &loaded.warnings {
-                    warn!("{warning}");
-                }
-                self.apply_config(loaded.config, cx);
-            }
-            Err(error) => error!(%error, "config reload failed; keeping the last valid config"),
-        }
-    }
-
-    fn toggle_autostart(&mut self) {
-        let enabled = match win::autostart::is_enabled() {
-            Ok(enabled) => enabled,
-            Err(error) => {
-                warn!(%error, "failed to query autostart state");
-                return;
-            }
-        };
-
-        let result = if enabled {
-            win::autostart::disable()
-        } else {
-            win::autostart::enable()
-        };
-        match result {
-            Ok(()) => info!(enabled = !enabled, "autostart updated"),
-            Err(error) => warn!(%error, "failed to update autostart"),
         }
     }
 
@@ -305,17 +221,28 @@ impl DockView {
         result: anyhow::Result<Option<MenuAction>>,
         cx: &mut Context<Self>,
     ) {
-        match result {
-            Ok(Some(MenuAction::ReloadConfig)) => self.reload_config(cx),
-            Ok(Some(MenuAction::ToggleAutostart)) => self.toggle_autostart(),
-            Ok(Some(MenuAction::RestoreAndQuit)) => {
-                if let Err(error) = win::taskbar::restore_native(true) {
-                    warn!(%error, "failed to restore the taskbar before quitting");
-                }
-                cx.quit();
+        let action = match result {
+            Ok(Some(action)) => action,
+            Ok(None) => return,
+            Err(error) => {
+                warn!(%error, "failed to show the dock menu");
+                return;
             }
-            Ok(None) => {}
-            Err(error) => warn!(%error, "failed to show the dock menu"),
+        };
+
+        match action {
+            MenuAction::ReloadConfig => {
+                self.controller
+                    .update(cx, |controller, cx| controller.reload_config(cx));
+            }
+            MenuAction::ToggleAutostart => {
+                self.controller
+                    .update(cx, |controller, _| controller.toggle_autostart());
+            }
+            MenuAction::RestoreAndQuit => {
+                self.controller
+                    .update(cx, |controller, cx| controller.restore_and_quit(cx));
+            }
         }
     }
 
@@ -326,31 +253,22 @@ impl DockView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(item) = self.items.get(index) else {
-            return;
-        };
-
-        if item.is_running {
-            if let Some(hwnd) = item.target_window()
-                && let Err(error) = win::windows_enum::activate_or_minimize(hwnd)
-            {
-                warn!(%error, app = %item.name, "failed to activate app");
-            }
-        } else if item.is_pinned {
-            let path = item.key.to_string_lossy();
-            if let Err(error) = win::launch::launch(&path, &item.args) {
-                warn!(%error, app = %item.name, "failed to launch app");
-            }
-        }
-
-        self.refresh();
-        cx.notify();
+        self.controller.update(cx, |controller, cx| {
+            controller.activate_or_launch(index, cx)
+        });
     }
 }
 
 impl Render for DockView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let offset = self.geometry.bounds.size.height * (1.0 - self.progress);
+        let icons = {
+            let cache = &mut self.icons;
+            self.items
+                .iter()
+                .map(|item| cache.get(&item.key, item.target_window()))
+                .collect::<Vec<_>>()
+        };
 
         div().size_full().child(
             div()
@@ -372,17 +290,31 @@ impl Render for DockView {
                     MouseButton::Right,
                     cx.listener(|this, _event, _window, cx| this.on_context_menu(cx)),
                 )
-                .child(div().flex().items_center().gap_1().children(
-                    self.items.iter().enumerate().map(|(index, item)| {
-                        let on_click = cx.listener(move |this, event: &ClickEvent, window, cx| {
-                            this.on_item_click(index, event, window, cx);
-                        });
-                        render_app_item(item, &self.theme, self.icon_size, on_click)
-                    }),
-                ))
+                .child(
+                    div().flex().items_center().gap_1().children(
+                        self.items
+                            .iter()
+                            .zip(icons)
+                            .enumerate()
+                            .map(|(index, (item, icon))| {
+                                let on_click =
+                                    cx.listener(move |this, event: &ClickEvent, window, cx| {
+                                        this.on_item_click(index, event, window, cx);
+                                    });
+                                render_app_item(item, icon, &self.theme, self.icon_size, on_click)
+                            }),
+                    ),
+                )
                 .child(self.clock.clone()),
         )
     }
+}
+
+fn contains(bounds: Bounds<Pixels>, point: Point<Pixels>) -> bool {
+    point.x >= bounds.origin.x
+        && point.x < bounds.origin.x + bounds.size.width
+        && point.y >= bounds.origin.y
+        && point.y < bounds.origin.y + bounds.size.height
 }
 
 fn auto_hide_settings(config: &Config) -> AutoHideSettings {

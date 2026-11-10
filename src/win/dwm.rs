@@ -27,6 +27,8 @@ use windows::{
 use crate::config::BlurMode;
 
 pub fn foreground_window() -> HWND {
+    // SAFETY: GetForegroundWindow has no preconditions and returns null when no window
+    // holds the foreground.
     unsafe { GetForegroundWindow() }
 }
 
@@ -37,6 +39,9 @@ pub fn window_hwnd(window: &Window) -> Result<isize> {
 pub fn set_click_through(hwnd: isize, enabled: bool) -> Result<()> {
     let hwnd = HWND(hwnd as *mut c_void);
 
+    // SAFETY: `hwnd` belongs to the live dock window. The extended style is updated
+    // and read back on the same handle; a zero return from SetWindowLongPtrW is a
+    // valid previous value, so success is checked by comparing the style bits.
     unsafe {
         let mut ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
         if enabled {
@@ -70,6 +75,9 @@ pub fn set_click_through(hwnd: isize, enabled: bool) -> Result<()> {
 pub fn apply_dock_styles(window: &Window, previous_foreground: HWND) -> Result<()> {
     let hwnd = raw_hwnd(window)?;
 
+    // SAFETY: `hwnd` is the live dock window. SetWindowLongPtrW returns the previous
+    // value, not success, so the required styles are read back afterwards. The
+    // SetWindowPos call uses only size/position flags and no activation.
     unsafe {
         let mut ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
         ex_style |= WS_EX_TOOLWINDOW.0 as isize;
@@ -130,6 +138,9 @@ fn restore_foreground(dock: HWND, previous: HWND) -> bool {
         return true;
     }
 
+    // SAFETY: both handles were returned by user32. AttachThreadInput is only called
+    // with thread ids obtained from live windows, and the attachment is released
+    // again before returning.
     unsafe {
         if GetForegroundWindow().0 != dock.0 {
             return true;
@@ -148,8 +159,8 @@ fn restore_foreground(dock: HWND, previous: HWND) -> bool {
 
         let restored = SetForegroundWindow(previous).as_bool();
 
-        if attached {
-            let _ = AttachThreadInput(current_thread, foreground_thread, false);
+        if attached && !AttachThreadInput(current_thread, foreground_thread, false).as_bool() {
+            warn!("failed to detach the foreground input queue");
         }
 
         restored
@@ -205,6 +216,8 @@ pub fn windows_build() -> Result<u32> {
         dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as u32,
         ..Default::default()
     };
+    // SAFETY: with a valid dwOSVersionInfoSize, RtlGetVersion writes into `version`
+    // and returns an NTSTATUS. Unlike GetVersionExW it is not manifest-shimmed.
     let status = unsafe { RtlGetVersion(&mut version) };
     ensure!(
         status.0 >= 0,
@@ -240,6 +253,8 @@ fn set_dwm_attribute(
     value: *const c_void,
     size: u32,
 ) -> Result<()> {
+    // SAFETY: `value` points to a stack value of `size` bytes in every caller, and
+    // `hwnd` is the live dock window. DWM copies the value during the call.
     unsafe { DwmSetWindowAttribute(hwnd, attribute, value, size) }
         .context("DwmSetWindowAttribute failed")
 }

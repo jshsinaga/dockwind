@@ -45,6 +45,9 @@ impl IconCache {
 
 fn icon_from_window(hwnd: HWND) -> Option<Arc<RenderImage>> {
     let mut result = 0usize;
+    // SAFETY: `result` receives an HICON-sized value; the message is sent with a
+    // timeout so a hung target cannot block the dock. Zero means timeout or refusal,
+    // in which case the documented fallback chain continues.
     let sent = unsafe {
         SendMessageTimeoutW(
             hwnd,
@@ -63,6 +66,8 @@ fn icon_from_window(hwnd: HWND) -> Option<Arc<RenderImage>> {
         return Some(image);
     }
 
+    // SAFETY: read-only query for the window's class icon. The returned handle is
+    // borrowed from the class and is never destroyed by this module.
     let class_icon = unsafe { GetClassLongPtrW(hwnd, GCLP_HICON) };
     if class_icon != 0
         && let Some(image) = icon_to_render_image(HICON(class_icon as *mut c_void), false)
@@ -76,6 +81,9 @@ fn icon_from_window(hwnd: HWND) -> Option<Arc<RenderImage>> {
 fn icon_from_path(path: &Path) -> Option<Arc<RenderImage>> {
     let path = HSTRING::from(path.as_os_str());
     let mut info = SHFILEINFOW::default();
+    // SAFETY: the path is a live null-terminated HSTRING and `info` has the size
+    // passed to the API. The returned icon is owned by the caller and destroyed in
+    // `icon_to_render_image`.
     let result = unsafe {
         SHGetFileInfoW(
             PCWSTR(path.as_ptr()),
@@ -95,7 +103,11 @@ fn icon_from_path(path: &Path) -> Option<Arc<RenderImage>> {
 fn icon_to_render_image(icon: HICON, destroy: bool) -> Option<Arc<RenderImage>> {
     let image = convert_icon(icon);
     if destroy {
-        let _ = unsafe { DestroyIcon(icon) };
+        // SAFETY: only icons obtained from SHGetFileInfoW set `destroy`, and each is
+        // an owned copy that is destroyed exactly once here.
+        if let Err(error) = unsafe { DestroyIcon(icon) } {
+            tracing::debug!(%error, "failed to destroy an extracted shell icon");
+        }
     }
     image
 }
@@ -106,17 +118,22 @@ fn convert_icon(icon: HICON) -> Option<Arc<RenderImage>> {
     }
 
     let mut info = ICONINFO::default();
+    // SAFETY: `info` is a valid ICONINFO and the icon is a live icon handle. The
+    // colour and mask bitmaps returned in `info` are owned by the caller and released
+    // below.
     if unsafe { GetIconInfo(icon, &mut info) }.is_err() {
         return None;
     }
 
     let result = convert_icon_info(&info);
+    // SAFETY: GetIconInfo succeeded, so both bitmap handles are owned by this call.
+    // Each non-null handle is deleted exactly once.
     unsafe {
-        if !info.hbmColor.0.is_null() {
-            let _ = DeleteObject(HGDIOBJ(info.hbmColor.0));
+        if !info.hbmColor.0.is_null() && !DeleteObject(HGDIOBJ(info.hbmColor.0)).as_bool() {
+            tracing::debug!("failed to delete an icon colour bitmap");
         }
-        if !info.hbmMask.0.is_null() {
-            let _ = DeleteObject(HGDIOBJ(info.hbmMask.0));
+        if !info.hbmMask.0.is_null() && !DeleteObject(HGDIOBJ(info.hbmMask.0)).as_bool() {
+            tracing::debug!("failed to delete an icon mask bitmap");
         }
     }
     result
@@ -133,6 +150,8 @@ fn convert_icon_info(info: &ICONINFO) -> Option<Arc<RenderImage>> {
     }
 
     let mut bitmap = BITMAP::default();
+    // SAFETY: `bitmap` is a valid BITMAP of the size passed; the handle is one of the
+    // icon bitmaps owned by the caller.
     let copied = unsafe {
         GetObjectW(
             HGDIOBJ(bitmap_handle.0),
@@ -150,6 +169,7 @@ fn convert_icon_info(info: &ICONINFO) -> Option<Arc<RenderImage>> {
         return None;
     }
 
+    // SAFETY: a memory DC with no bitmap selected is created and released below.
     let dc = unsafe { CreateCompatibleDC(None) };
     if dc.0.is_null() {
         return None;
@@ -158,6 +178,8 @@ fn convert_icon_info(info: &ICONINFO) -> Option<Arc<RenderImage>> {
     let mut pixels = vec![0u8; width as usize * height as usize * 4];
     if !info.hbmColor.0.is_null() {
         let mut bitmap_info = bitmap_info(width, height, 32);
+        // SAFETY: the DIB buffer is large enough for 32 bits per pixel, the bitmap is
+        // live, and the DC is compatible with the display.
         let lines = unsafe {
             GetDIBits(
                 dc,
@@ -170,7 +192,10 @@ fn convert_icon_info(info: &ICONINFO) -> Option<Arc<RenderImage>> {
             )
         };
         if lines == 0 {
-            let _ = unsafe { DeleteDC(dc) };
+            // SAFETY: `dc` was created above and has no selected objects.
+            if !unsafe { DeleteDC(dc) }.as_bool() {
+                tracing::debug!("failed to delete an icon memory DC");
+            }
             return None;
         }
     }
@@ -179,6 +204,7 @@ fn convert_icon_info(info: &ICONINFO) -> Option<Arc<RenderImage>> {
     let mut mask = vec![0u8; mask_stride * height as usize];
     let mut mask_info = bitmap_info(width, height, 1);
     let mask_lines = if !info.hbmMask.0.is_null() {
+        // SAFETY: the mask buffer is sized for a 1-bit DIB of this width and height.
         unsafe {
             GetDIBits(
                 dc,
@@ -193,7 +219,10 @@ fn convert_icon_info(info: &ICONINFO) -> Option<Arc<RenderImage>> {
     } else {
         0
     };
-    let _ = unsafe { DeleteDC(dc) };
+    // SAFETY: `dc` was created above and is released exactly once here.
+    if !unsafe { DeleteDC(dc) }.as_bool() {
+        tracing::debug!("failed to delete an icon memory DC");
+    }
 
     let has_alpha = pixels.as_chunks::<4>().0.iter().any(|pixel| pixel[3] != 0);
     if !has_alpha {

@@ -20,6 +20,9 @@ pub struct MonitorInfo {
 
 impl MonitorInfo {
     pub fn primary() -> Result<Self> {
+        // SAFETY: the desktop window is returned by the system and is always valid;
+        // MONITOR_DEFAULTTOPRIMARY cannot leave a null monitor unless no display
+        // exists, which is checked below.
         let monitor = unsafe { MonitorFromWindow(GetDesktopWindow(), MONITOR_DEFAULTTOPRIMARY) };
         if !is_valid(monitor) {
             bail!("no primary monitor is available");
@@ -29,6 +32,7 @@ impl MonitorInfo {
             cbSize: std::mem::size_of::<MONITORINFO>() as u32,
             ..Default::default()
         };
+        // SAFETY: `info` has the required cbSize and the monitor handle is live.
         if !unsafe { GetMonitorInfoW(monitor, &mut info) }.as_bool() {
             return Err(anyhow::anyhow!(
                 "GetMonitorInfoW failed: {}",
@@ -38,6 +42,7 @@ impl MonitorInfo {
 
         let mut dpi_x = 0u32;
         let mut dpi_y = 0u32;
+        // SAFETY: both DPI pointers are valid and the monitor handle is live.
         unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) }
             .context("GetDpiForMonitor failed")?;
 

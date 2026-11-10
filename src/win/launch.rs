@@ -19,6 +19,9 @@ pub fn launch(path: &str, args: &[String]) -> Result<()> {
     );
     let directory = HSTRING::new();
 
+    // SAFETY: every string is a live null-terminated HSTRING for the duration of the
+    // call. Path and arguments are passed separately so no shell command string is
+    // constructed.
     let result = unsafe {
         ShellExecuteW(
             None,

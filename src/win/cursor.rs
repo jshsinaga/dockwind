@@ -18,6 +18,7 @@ pub fn cursor_pos(scale_factor: f32) -> Result<Point<gpui::Pixels>> {
     }
 
     let mut cursor = POINT::default();
+    // SAFETY: `cursor` is a valid POINT written by the API.
     unsafe { GetCursorPos(&mut cursor) }.context("GetCursorPos failed")?;
     Ok(point(
         px(cursor.x as f32 / scale_factor),
@@ -26,6 +27,9 @@ pub fn cursor_pos(scale_factor: f32) -> Result<Point<gpui::Pixels>> {
 }
 
 pub fn fullscreen_active() -> bool {
+    // SAFETY: SHQueryUserNotificationState has no preconditions and returns a state
+    // value. Query failures are logged and treated as "not fullscreen" so the dock
+    // keeps working rather than staying hidden forever.
     match unsafe { SHQueryUserNotificationState() } {
         Ok(state) => matches!(
             state,

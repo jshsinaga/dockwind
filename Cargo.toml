@@ -46,3 +46,9 @@ tempfile = "3"
 lto = "thin"
 codegen-units = 1
 strip = true
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"

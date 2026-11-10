@@ -10,3 +10,4 @@ pub mod monitors;
 pub mod single_instance;
 pub mod taskbar;
 pub mod windows_enum;
+pub mod worker;

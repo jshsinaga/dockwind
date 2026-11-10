@@ -1,90 +1,179 @@
 # Engineering Spec
 
-Extracted from `AGENTS.md` and adapted to the current Dockwind project state.
+Status: active. This document defines Rust conventions and verification rules for
+Dockwind. It does not define product scope, architecture, or current state.
 
-- Source: https://github.com/jshsinaga/agents.md (`AGENTS.md`)
-- Extracted: 2026-11-10
-- Status: active
-- Authority: `AGENTS.md` remains authoritative. This document applies its rules to this repository and does not replace it.
+- Workflow rules: `AGENTS.md`
+- Scope and acceptance criteria: `docs/PRD.md`
+- Module ownership and lifetimes: `docs/ARCHITECTURE.md`
+- Config schema: `docs/CONFIGURATION.md`
+- Current state and evidence: `docs/HANDOFF.md`
 
-The source contains engineering-workflow rules, not framework API rules. The enforceable rules are extracted in section 2 and mapped to the Dockwind stack. Project constraints that shape those rules are in section 3.
+## 1. Toolchain and Dependencies
 
-## 1. Current Project State
-
-See `docs/HANDOFF.md` for the authoritative current state, architecture,
-verification evidence, runtime safety rules, and remaining work.
-
-| Item | State |
+| Item | Rule |
 |---|---|
-| Code | Rust binary crate with `src/`, `assets/`, and 36 passing tests. |
-| Existing docs | `AGENTS.md`, `README.md`, `docs/HANDOFF.md`, `docs/implementation_plan.md`, `docs/decisions.md`, `docs/spike-m0.md`, and this spec. |
-| VCS | Git repository on `main`; M0 through M7 milestone commits exist. |
-| Product | Dockwind, a floating Windows 10/11 dock bar written in Rust. |
-| UI stack | GPUI 0.2.2, pinned exactly; Windows-only native integration. |
-| System integration | `windows` crate 0.61, matching GPUI's Windows dependency. |
-| Delivery order | M0 through M6 complete; M7 implemented except AppBar, middle-click, tooltips, and UWP identity. |
+| Edition | Rust 2024 |
+| Toolchain | Pinned to the verified release in `rust-toolchain.toml` |
+| Target | `x86_64-pc-windows-msvc` |
+| Lockfile | Commit `Cargo.lock`. Verification uses `--locked` |
+| GPUI | Exact pin `=0.2.2`. No wildcard, range, or moving branch |
+| `windows` crate | 0.61, aligned with the version GPUI uses. Check with `cargo tree -d` |
+| New dependencies | Only when the current request needs them. Record the reason in `docs/decisions.md` if the choice is not obvious |
 
-`docs/implementation_plan.md` remains at its current path and is the scope source.
-`docs/HANDOFF.md` records the current implementation state and next steps. No files
-were moved when the documentation was updated.
+Do not update dependency versions as part of an unrelated change. Do not replace
+the UI stack without an approved decision.
 
-### Missing specs referenced by AGENTS.md
+## 2. Module Boundaries
 
-`DESIGN.md`, `docs/PRD.md`, `docs/ARCHITECTURE.md`, and `docs/ERD.md` do not exist.
+- Follow the target layout in `docs/ARCHITECTURE.md`. Do not create empty feature
+  directories.
+- Keep pure logic independent of GPUI and Win32. This includes config parsing and
+  validation, theme derivation, window filtering, app grouping, auto-hide state,
+  dock geometry, and hotkey parsing.
+- Keep all `unsafe` and raw handle work under `src/win/`.
+- Keep UI state on the GPUI thread. Cross-thread input arrives through channels.
+- `src/win/` stays a flat platform boundary. Do not turn it into a feature layer.
 
-Do not create, rename, move, or delete files to satisfy those references without
-user approval. Until the user decides how to map them, use
-`docs/implementation_plan.md` for scope and `docs/HANDOFF.md` for current
-architecture and state. If a task needs one of the missing specs, stop and ask.
+## 3. Error Handling
 
-## 2. Extracted Rules and Local Application
+- Use `anyhow::Result` at binary and application boundaries.
+- Use `thiserror` for typed config or domain errors that callers inspect.
+- Propagate with `?`. Do not convert an error into a silent default.
+- Do not use `unwrap()` or `expect()` in production paths. `build.rs` and tests
+  are the current exceptions. Do not add new production uses.
+- Panic only for a violated internal invariant that cannot be reported. Prefer a
+  returned error.
+- Invalid config and unsupported blur are explicit, logged degradations. They are
+  defined in `docs/CONFIGURATION.md`. No other silent fallback is allowed.
+- A failed save, restore, or native call must be logged or returned. Do not
+  swallow it with `let _ =`.
+- Do not special-case a test to make it pass.
 
-| ID | Rule from AGENTS.md | Application in Dockwind |
+## 4. Unsafe and Native Code
+
+- Wrap `unsafe` in a small safe function.
+- Put a `// SAFETY:` comment immediately before each unsafe block. State the
+  pointer, handle, lifetime, or thread condition that makes it valid.
+- Check handles for null or invalid values before use.
+- Convert `HWND`, `HICON`, and other handles to plain values at the boundary.
+- Keep recovery and cleanup paths explicit. `TaskbarGuard`, the panic hook, the
+  console handler, and `WM_ENDSESSION` must stay independent.
+- Do not add a broad `#[allow(...)]`. Prefer `#[expect(...)]` with a reason when a
+  lint is a true false positive.
+
+## 5. Linting
+
+Baseline:
+
+```powershell
+cargo clippy --all-targets --locked -- -D warnings
+```
+
+Rules:
+
+1. Fix the warning. Do not silence it.
+2. If a local exception is unavoidable, use `#[expect(clippy::lint_name)]` and
+   state why.
+3. Do not add crate-wide allowances.
+4. Native SAFETY coverage, `unwrap` and `expect` in tests, and `unwrap` and
+   `expect` in `build.rs` have different constraints. Coordinate before enabling
+   further warnings or denies in `Cargo.toml`.
+5. Keep the existing lockfile and dependency versions unless the request changes
+   them.
+
+### 5.1 Active targeted lint policy
+
+The integrator confirmed native coverage. These lints are active:
+
+| Scope | Lint | Level |
 |---|---|---|
-| E1 | Think before coding. State assumptions. If ambiguous, ask instead of choosing silently. List multiple interpretations. Mention a simpler approach before building a complex one. | State which milestone or plan section a change serves. Known unknowns must be resolved from evidence, not memory. GPUI capabilities were verified in M0; for future GPUI changes, verify against the pinned source. Do not choose a fallback UI stack without approval. |
-| E2 | Simplicity (KISS + YAGNI). Minimum code. No unrequested features, hooks, config options, flags, or extras. No abstractions for single-use code. No handling for scenarios that cannot happen. | Implement only the current milestone. Do not add config keys, commands, UI features, or abstractions beyond `docs/implementation_plan.md`. v1 does not replace Start, system tray, notification center, or notification badges. Windows 10 blur is outside the MVP. |
-| E3 | Reuse (DRY). Search before writing a utility or helper. Reuse existing service layers. Do not duplicate logic. Extract on the third repeat, not before. | Search `src/config.rs`, `src/theme.rs`, `src/app_state.rs`, and `src/win/` before adding helpers. Reuse the Win32 wrappers and pure-logic modules instead of duplicating handle or DPI logic. |
-| E4 | No workarounds, no fallbacks. Fix the root cause. No silent fallbacks, swallowed errors, or defaults that mask failures. Fail loudly and report blockers. Never special-case tests. | Do not ship silent taskbar-restore failures, swallowed Win32 errors, or undocumented defaults. Explicit, logged degradation is allowed only where the plan requires it: invalid config uses the last valid value or defaults with a warning; unsupported blur falls back to `none` with an info log. If M0 fails, stop, write `docs/spike-m0.md`, and report. Do not silently switch UI frameworks. |
-| E5 | Surgical changes. Touch only what the request requires. Match existing style. No drive-by refactors, renames, or reformatting. Clean up only your own mess. Report unrelated issues without fixing them. | Keep diffs scoped to the milestone or request. Match the Rust and Win32 patterns established in `src/win/`. Do not move existing docs, rename plan files, or refactor unrelated modules. Report unrelated defects instead of fixing them in the same change. |
-| E6 | Goal-driven execution. Define success criteria first. Verify with tests, a build, or a run before saying done. Give a short plan with a check per step. Report what changed, what was verified, and what was not. | Use the milestone completion criteria and manual verification steps in `docs/implementation_plan.md`. Run `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, and `cargo build --release`. A milestone is not done until its criteria are met. Keep one commit per logical milestone or fix. |
+| `[lints.rust]` | `unsafe_op_in_unsafe_fn` | `deny` |
+| `[lints.clippy]` | `undocumented_unsafe_blocks` | `deny` |
 
-## 3. Project Constraints Used for Adaptation
+Do not add global `unwrap` or `expect` denies. Tests and `build.rs` use them as
+permitted fatal errors. Production-only `clippy::unwrap_used` and
+`clippy::expect_used` are denied at crate scope with `cfg(not(test))` in
+`src/main.rs`. Do not relax a lint to pass the gate. Report a lint failure to the
+integrator.
 
-These constraints come from `docs/implementation_plan.md` and are the current basis for applying the rules above.
+## 6. Testing
 
-1. Target is Windows 10/11, binary crate `dockwind`, target `x86_64-pc-windows-msvc`, Rust edition 2024.
-2. GPUI must be pinned to an exact version or git revision in `Cargo.toml`. Do not use `*` or a moving branch. Align the `windows` crate version with the one GPUI uses; check with `cargo tree -d`.
-3. Verify GPUI API names against the pinned source. Do not invent function names.
-4. All Win32 code and `unsafe` belong under `src/win/`. Wrap `unsafe` in small safe functions with `// SAFETY:` comments.
-5. Keep pure logic independent of Win32 so it can be tested: config parsing and validation, theme derivation, window filtering, app grouping, auto-hide state machine, dock rectangle and DPI calculations, hotkey parsing.
-6. The M0 gate has passed. Evidence is in `docs/spike-m0.md`; do not repeat the feasibility spike unless the UI stack changes.
-7. Taskbar hiding is only performed through `TaskbarGuard`, with the restore command and recovery handlers in place. Keep `--restore-taskbar` first in `main`.
-8. The native taskbar must always be restored on normal shutdown, panic, `WM_ENDSESSION`, and via the standalone restore command. Explorer restart must not leave the taskbar hidden.
-9. Invalid config values are logged and replaced by the last valid value or defaults. The application must not crash or silently ignore the error.
-10. Quality gates are required per milestone: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, and `cargo build --release`.
-11. Read `docs/HANDOFF.md` at the start of a new session. It is the authoritative current-state and continuation guide.
+- Add a unit test for every pure-logic change.
+- Test behavior, not implementation details. Prefer one behavior per test.
+- Use descriptive names. A name may state the condition and the expected result.
+- Use table-driven tests when the same rule covers several inputs.
+- Keep tests independent. Do not depend on a previous test's state.
+- Use temporary directories for file tests.
+- Do not test GPUI rendering or Win32 side effects through a mock that hides the
+  real contract. Use a manual verification step and record it.
+- A test that needs a real desktop, DPI, Explorer restart, or fullscreen app is a
+  manual check, not a unit test.
 
-## 4. Definition of Done for Any Change
+## 7. Verification
 
-1. Scope is traced to a milestone in `docs/implementation_plan.md` or to an explicit user request.
-2. Assumptions and interpretations are stated before implementation.
-3. The diff is minimal, and existing helpers were checked first.
-4. No failure is swallowed. Any permitted degradation is explicit in the plan and logged.
-5. Pure logic has unit tests. GUI and Win32 behavior has a manual verification step.
-6. Required quality gates pass, or the unverified parts are reported as unverified.
-7. The final report states what changed, what was verified, and what remains open.
+`scripts/check.ps1` is the canonical local gate. It resolves the repository root
+from its own path, so it works from any directory.
 
-## 5. Conflict Handling
+The script runs, in order:
 
-- `AGENTS.md` overrides default habits.
-- `docs/implementation_plan.md` is the current scope source until the missing specs are resolved.
-- If a generic rule conflicts with an explicit plan behavior, ask before coding.
-- The plan's invalid-config behavior is an explicit, logged fallback, so it does not violate the ban on silent fallbacks.
-- If a task needs `DESIGN.md`, `docs/PRD.md`, `docs/ARCHITECTURE.md`, or `docs/ERD.md`, ask. Do not guess or create replacement files.
+```powershell
+cargo fmt --check
+cargo check --all-targets --locked
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --locked
+cargo build --release --locked
+```
 
-## 6. Change Log
+It stops at the first failed native command and reports that command and its exit
+code. It then checks local Markdown file links. The parser tracks fence character
+and run length, masks multiline code spans, and parses balanced labels and
+destinations. It skips external, plugin, and skill URIs. It ignores anchors when
+checking the file part. It does not create files to satisfy historical examples.
+The checker runs a built-in self-test with positive and negative cases before it
+scans the repository.
 
-| Date | Change |
-|---|---|
-| 2026-11-10 | Created from `AGENTS.md` and adapted to the Dockwind implementation plan. No files moved. |
-| 2026-11-10 | Updated current state after M0-M7 implementation and added `docs/HANDOFF.md` as the continuation guide. |
+Verification rules:
+
+- A change is not done until the gate passes, or the unverified part is reported.
+- A GUI or Win32 claim needs a dated manual check with the environment and result.
+- Do not claim "verified" from a code read alone.
+- Do not hide a failure caused by another worker's in-progress edit. Coordinate
+  and report it.
+- The final full gate passed on 2026-11-10. Later runs apply to the changes that
+  followed, not to that source.
+- Hosted CI is deferred until a host is selected. Do not invent a CI provider.
+
+## 8. Comments and Documentation
+
+- Use `//` comments for why: safety, workarounds, platform behavior, assumptions.
+- Use `///` doc comments for public APIs and non-obvious contracts.
+- Do not write a comment that restates the next line.
+- Do not leave a `// TODO` without a tracked issue or a decision reference. If
+  no issue tracker exists, record the item in `docs/HANDOFF.md` instead.
+- Use plain ASCII punctuation in project text. Use `->` or "to" instead of arrows.
+- Keep one source of truth. Link to the canonical doc instead of copying it.
+- When behavior changes, update the matching spec in the same change.
+
+## 9. Change Discipline
+
+1. Trace the change to a requirement, an accepted unfinished feature, or an
+   explicit user request.
+2. State assumptions before implementation.
+3. Check existing helpers before adding a new one.
+4. Keep the diff surgical. Match the surrounding style.
+5. Record a deviation in `docs/decisions.md` with the reason and trade-off.
+6. Update `docs/HANDOFF.md` with state and dated evidence.
+7. Report what changed, what passed, and what remains unverified.
+
+## 10. Definition of Done
+
+A change is done when:
+
+1. The scope is traceable to `docs/PRD.md`, a decision, or an explicit request.
+2. Pure logic has a test, and native or GUI behavior has a manual check or an
+   explicit unverified note.
+3. `scripts/check.ps1` passes, or the blocked part is reported honestly.
+4. No error is swallowed and no silent fallback is added.
+5. The canonical docs match the behavior.
+6. The final report lists changed paths, tests, blockers, and deviations.

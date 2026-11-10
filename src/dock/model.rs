@@ -1,18 +1,22 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-
-use gpui::RenderImage;
 
 use crate::config::PinnedApp;
-use crate::win::windows_enum::WindowInfo;
+
+#[derive(Debug, Clone)]
+pub struct WindowInfo {
+    pub hwnd: isize,
+    pub title: String,
+    pub exe_path: PathBuf,
+    pub is_minimized: bool,
+    pub is_foreground: bool,
+}
 
 #[derive(Debug, Clone)]
 pub struct DockItem {
     pub key: PathBuf,
     pub name: String,
     pub args: Vec<String>,
-    pub icon: Option<Arc<RenderImage>>,
     pub windows: Vec<isize>,
     pub active_window: Option<isize>,
     pub is_pinned: bool,
@@ -52,7 +56,6 @@ pub fn merge(pinned: &[PinnedApp], running: &[WindowInfo]) -> Vec<DockItem> {
             key: PathBuf::from(&app.path),
             name: app.name.clone(),
             args: app.args.clone(),
-            icon: None,
             windows: windows.iter().map(|window| window.hwnd).collect(),
             active_window: target,
             is_pinned: true,
@@ -96,7 +99,6 @@ pub fn merge(pinned: &[PinnedApp], running: &[WindowInfo]) -> Vec<DockItem> {
             key: path,
             name,
             args: Vec::new(),
-            icon: None,
             windows: windows.iter().map(|window| window.hwnd).collect(),
             active_window: target,
             is_pinned: false,

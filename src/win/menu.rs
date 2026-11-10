@@ -33,8 +33,11 @@ pub fn show(hwnd: isize) -> Result<Option<MenuAction>> {
         false
     });
 
+    // SAFETY: CreatePopupMenu has no preconditions; a null handle means failure.
     let menu = unsafe { CreatePopupMenu() }.context("CreatePopupMenu failed")?;
     let result = (|| -> Result<Option<MenuAction>> {
+        // SAFETY: `menu` is a live popup menu. Each appended string is a temporary
+        // HSTRING that lives until AppendMenuW has copied it.
         unsafe {
             AppendMenuW(menu, MF_STRING, CMD_RELOAD, &HSTRING::from("Reload config"))
                 .context("AppendMenuW(Reload config) failed")?;
@@ -61,11 +64,19 @@ pub fn show(hwnd: isize) -> Result<Option<MenuAction>> {
         }
 
         let mut cursor = POINT::default();
+        // SAFETY: `cursor` is a valid POINT written by the API.
         unsafe { GetCursorPos(&mut cursor) }.context("GetCursorPos failed")?;
+        // SAFETY: read-only foreground query; may return null.
         let previous_foreground = unsafe { GetForegroundWindow() };
         let dock = HWND(hwnd as *mut c_void);
+        // SAFETY: setting the dock as foreground owner is what lets the popup dismiss
+        // when the user clicks elsewhere. Failure is tolerated because TrackPopupMenu
+        // still runs and the foreground window is restored below when possible.
         let _ = unsafe { SetForegroundWindow(dock) };
 
+        // SAFETY: the menu is live, `dock` is the owner window, and the coordinates
+        // came from GetCursorPos. TPM_RETURNCMD makes this call synchronous without a
+        // posted WM_COMMAND.
         let command = unsafe {
             TrackPopupMenu(
                 menu,
@@ -78,9 +89,12 @@ pub fn show(hwnd: isize) -> Result<Option<MenuAction>> {
             )
         };
 
-        if unsafe { GetForegroundWindow().0 == dock.0 }
-            && !unsafe { SetForegroundWindow(previous_foreground) }.as_bool()
-        {
+        // SAFETY: both calls only read the foreground window and try to restore the
+        // previously active window. A denied restore is reported, not fatal.
+        let restored = unsafe {
+            GetForegroundWindow().0 != dock.0 || SetForegroundWindow(previous_foreground).as_bool()
+        };
+        if !restored {
             warn!("failed to restore the foreground window after the dock menu");
         }
 
@@ -92,6 +106,9 @@ pub fn show(hwnd: isize) -> Result<Option<MenuAction>> {
         })
     })();
 
-    let _ = unsafe { DestroyMenu(menu) };
+    // SAFETY: `menu` was created by this function and is destroyed exactly once.
+    if let Err(error) = unsafe { DestroyMenu(menu) } {
+        warn!(%error, "failed to destroy the dock popup menu");
+    }
     result
 }

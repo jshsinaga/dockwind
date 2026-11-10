@@ -1,7 +1,7 @@
 use std::ffi::c_void;
 use std::path::PathBuf;
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result, bail, ensure};
 use tracing::debug;
 use windows::Win32::{
     Foundation::{CloseHandle, HWND, LPARAM},
@@ -20,14 +20,7 @@ use windows::Win32::{
 use windows::core::BOOL;
 use windows::core::PWSTR;
 
-#[derive(Debug, Clone)]
-pub struct WindowInfo {
-    pub hwnd: isize,
-    pub title: String,
-    pub exe_path: PathBuf,
-    pub is_minimized: bool,
-    pub is_foreground: bool,
-}
+use crate::dock::WindowInfo;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WindowFlags {
@@ -42,6 +35,9 @@ pub struct WindowFlags {
 
 pub fn list_app_windows() -> Result<Vec<WindowInfo>> {
     let mut handles = Vec::new();
+    // SAFETY: the callback only appends to the vector behind `lparam`, which stays
+    // alive for the duration of EnumWindows. A false result means an error because
+    // the callback always returns TRUE.
     unsafe {
         EnumWindows(
             Some(enum_windows_proc),
@@ -50,7 +46,9 @@ pub fn list_app_windows() -> Result<Vec<WindowInfo>> {
     }
     .context("EnumWindows failed")?;
 
+    // SAFETY: both calls have no preconditions. GetCurrentProcessId never fails.
     let current_pid = unsafe { GetCurrentProcessId() };
+    // SAFETY: GetForegroundWindow is read-only and may return null.
     let foreground = unsafe { GetForegroundWindow() };
     let mut result = Vec::new();
 
@@ -83,6 +81,8 @@ pub fn list_app_windows() -> Result<Vec<WindowInfo>> {
             hwnd: hwnd.0 as isize,
             title,
             exe_path,
+            // SAFETY: `hwnd` came from EnumWindows in this call and may have closed
+            // since; IsIconic reports false for an invalid handle, which is harmless.
             is_minimized: unsafe { IsIconic(hwnd) }.as_bool(),
             is_foreground: hwnd.0 == foreground.0,
         });
@@ -105,14 +105,26 @@ pub fn activate_or_minimize(hwnd: isize) -> Result<()> {
         bail!("cannot activate an empty window handle");
     }
 
+    // SAFETY: every call accepts the handle made from a previously enumerated window.
+    // ShowWindow returns the previous visibility, not success, so the minimize result
+    // is verified with IsIconic. The foreground retry attaches input only for live
+    // thread ids and detaches them again.
     unsafe {
         if GetForegroundWindow().0 == hwnd.0 {
             let _ = ShowWindow(hwnd, SW_MINIMIZE);
+            ensure!(
+                IsIconic(hwnd).as_bool(),
+                "Windows did not minimize the foreground app"
+            );
             return Ok(());
         }
 
         if IsIconic(hwnd).as_bool() {
             let _ = ShowWindow(hwnd, SW_RESTORE);
+            ensure!(
+                !IsIconic(hwnd).as_bool(),
+                "Windows did not restore the minimized app"
+            );
         }
 
         if SetForegroundWindow(hwnd).as_bool() {
@@ -126,8 +138,8 @@ pub fn activate_or_minimize(hwnd: isize) -> Result<()> {
             && AttachThreadInput(current_thread, foreground_thread, true).as_bool();
 
         let restored = SetForegroundWindow(hwnd).as_bool();
-        if attached {
-            let _ = AttachThreadInput(current_thread, foreground_thread, false);
+        if attached && !AttachThreadInput(current_thread, foreground_thread, false).as_bool() {
+            debug!("failed to detach the foreground input queue");
         }
 
         if restored {
@@ -139,12 +151,18 @@ pub fn activate_or_minimize(hwnd: isize) -> Result<()> {
 }
 
 fn window_flags(hwnd: HWND, current_pid: u32) -> WindowFlags {
-    let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
-    let owner = unsafe { GetWindow(hwnd, GW_OWNER) }
-        .ok()
-        .is_some_and(|owner| !owner.0.is_null());
+    // SAFETY: all calls take a handle from EnumWindows. Style and owner queries are
+    // read-only; GetWindow(GW_OWNER) returns an error when the window has no owner.
+    let (ex_style, owner) = unsafe {
+        let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+        let owner = GetWindow(hwnd, GW_OWNER)
+            .ok()
+            .is_some_and(|owner| !owner.0.is_null());
+        (ex_style, owner)
+    };
 
     WindowFlags {
+        // SAFETY: read-only visibility query for an enumerated window.
         is_visible: unsafe { IsWindowVisible(hwnd) }.as_bool(),
         is_cloaked: is_cloaked(hwnd),
         has_owner: owner,
@@ -157,6 +175,9 @@ fn window_flags(hwnd: HWND, current_pid: u32) -> WindowFlags {
 
 fn is_cloaked(hwnd: HWND) -> bool {
     let mut cloaked = 0u32;
+    // SAFETY: `cloaked` is a valid u32 of the size passed. DWM copies the attribute
+    // into it. A failure means the attribute is unavailable, which is treated as not
+    // cloaked; the window filters still apply afterwards.
     let result = unsafe {
         DwmGetWindowAttribute(
             hwnd,
@@ -169,12 +190,14 @@ fn is_cloaked(hwnd: HWND) -> bool {
 }
 
 fn window_title(hwnd: HWND) -> String {
+    // SAFETY: read-only query for an enumerated window.
     let length = unsafe { GetWindowTextLengthW(hwnd) };
     if length <= 0 {
         return String::new();
     }
 
     let mut buffer = vec![0u16; length as usize + 1];
+    // SAFETY: the buffer holds `length + 1` UTF-16 code units, as required.
     let written = unsafe { GetWindowTextW(hwnd, &mut buffer) };
     if written <= 0 {
         return String::new();
@@ -184,6 +207,7 @@ fn window_title(hwnd: HWND) -> String {
 
 fn window_process_id(hwnd: HWND) -> u32 {
     let mut pid = 0u32;
+    // SAFETY: `pid` is a valid u32. The returned thread id is not needed.
     unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
     pid
 }
@@ -193,11 +217,15 @@ fn process_path(pid: u32) -> Result<PathBuf> {
         bail!("window has no process id");
     }
 
+    // SAFETY: OpenProcess only reads the target process identity. The returned handle
+    // is closed below on every path after the call.
     let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }
         .context("OpenProcess failed")?;
 
     let mut buffer = vec![0u16; 32768];
     let mut size = buffer.len() as u32;
+    // SAFETY: the buffer and `size` are valid; the API writes at most `size` UTF-16
+    // code units and updates `size` to the written length.
     let result = unsafe {
         QueryFullProcessImageNameW(
             handle,
@@ -206,14 +234,20 @@ fn process_path(pid: u32) -> Result<PathBuf> {
             &mut size,
         )
     };
-    let _ = unsafe { CloseHandle(handle) };
+    // SAFETY: `handle` was opened above and is closed exactly once here.
+    if let Err(error) = unsafe { CloseHandle(handle) } {
+        debug!(%error, "failed to close a process handle");
+    }
 
     result.context("QueryFullProcessImageNameW failed")?;
     buffer.truncate(size as usize);
     Ok(PathBuf::from(String::from_utf16_lossy(&buffer)))
 }
 
+/// SAFETY: Windows calls this with `lparam` set to the pointer passed to EnumWindows,
+/// which points to a live `Vec<HWND>` for the duration of the enumeration.
 unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    // SAFETY: the caller guarantees `lparam` is the live vector pointer from EnumWindows.
     let windows = unsafe { &mut *(lparam.0 as *mut Vec<HWND>) };
     windows.push(hwnd);
     BOOL(1)

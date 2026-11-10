@@ -1,17 +1,22 @@
 use std::sync::mpsc;
+use std::thread::JoinHandle;
 use std::time::Duration;
 
-use anyhow::{Result, anyhow, bail};
-use futures::channel::mpsc::{UnboundedReceiver, unbounded};
+use anyhow::{Result, anyhow};
+use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
+use tracing::warn;
 use windows::Win32::UI::{
     Input::KeyboardAndMouse::{
         HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, RegisterHotKey,
         UnregisterHotKey,
     },
-    WindowsAndMessaging::{GetMessageW, MSG, WM_HOTKEY},
+    WindowsAndMessaging::WM_HOTKEY,
 };
 
+use crate::win::worker;
+
 const HOTKEY_ID: i32 = 1;
+const READY_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Hotkey {
@@ -19,41 +24,114 @@ struct Hotkey {
     vk: u32,
 }
 
-pub fn spawn(value: &str) -> Result<UnboundedReceiver<()>> {
+/// Owns the global hotkey thread. Call [`HotkeyWorker::shutdown`] to stop the thread,
+/// unregister the hotkey, and join it.
+pub struct HotkeyWorker {
+    stop: Option<isize>,
+    thread: Option<JoinHandle<Result<()>>>,
+}
+
+impl HotkeyWorker {
+    /// Signals the stop event and joins the worker. Safe to call more than once and
+    /// after the worker already exited on `WM_HOTKEY`.
+    pub fn shutdown(&mut self) -> Result<()> {
+        worker::shutdown(&mut self.stop, &mut self.thread, worker::signal_stop)
+    }
+}
+
+impl Drop for HotkeyWorker {
+    fn drop(&mut self) {
+        if let Err(error) = self.shutdown() {
+            worker::finish_failed_shutdown(&mut self.stop, &mut self.thread, &error);
+            warn!(%error, "failed to stop the hotkey worker on drop");
+        }
+    }
+}
+
+/// Registers the global quit hotkey on a dedicated message-loop thread.
+pub fn spawn(value: &str) -> Result<(HotkeyWorker, UnboundedReceiver<()>)> {
     let hotkey = parse_hotkey(value).map_err(|error| anyhow!("invalid quit_hotkey: {error}"))?;
     let (sender, receiver) = unbounded();
+    let stop = worker::create_stop_signal()?;
     let (ready_sender, ready_receiver) = mpsc::channel();
 
-    std::thread::Builder::new()
+    let thread = match std::thread::Builder::new()
         .name("quit-hotkey".to_string())
-        .spawn(move || unsafe {
-            if let Err(error) = RegisterHotKey(None, HOTKEY_ID, hotkey.modifiers, hotkey.vk) {
-                let _ = ready_sender.send(Err(anyhow!("RegisterHotKey failed: {error}")));
-                return;
+        .spawn(move || run(stop, hotkey, sender, ready_sender))
+    {
+        Ok(thread) => thread,
+        Err(error) => {
+            if let Err(cleanup_error) = worker::close_stop_signal(stop) {
+                warn!(%cleanup_error, "failed to close the hotkey stop signal");
             }
-            let _ = ready_sender.send(Ok(()));
+            return Err(anyhow!("failed to start hotkey thread: {error}"));
+        }
+    };
 
-            let mut message = MSG::default();
-            loop {
-                let result = GetMessageW(&mut message, None, 0, 0);
-                if result.0 <= 0 {
-                    break;
-                }
-                if message.message == WM_HOTKEY {
-                    let _ = sender.unbounded_send(());
-                    break;
-                }
+    let mut hotkey_worker = HotkeyWorker {
+        stop: Some(stop),
+        thread: Some(thread),
+    };
+
+    match ready_receiver.recv_timeout(READY_TIMEOUT) {
+        Ok(Ok(())) => Ok((hotkey_worker, receiver)),
+        Ok(Err(message)) => {
+            if let Err(cleanup_error) = hotkey_worker.shutdown() {
+                warn!(%cleanup_error, "failed to clean up the hotkey thread");
             }
-
-            let _ = UnregisterHotKey(None, HOTKEY_ID);
-        })
-        .map_err(|error| anyhow!("failed to start hotkey thread: {error}"))?;
-
-    match ready_receiver.recv_timeout(Duration::from_secs(5)) {
-        Ok(Ok(())) => Ok(receiver),
-        Ok(Err(error)) => Err(error),
-        Err(error) => bail!("hotkey thread did not start: {error}"),
+            Err(anyhow!(message))
+        }
+        Err(error) => {
+            if let Err(cleanup_error) = hotkey_worker.shutdown() {
+                warn!(%cleanup_error, "failed to clean up the hotkey thread");
+            }
+            Err(anyhow!("hotkey thread did not become ready: {error}"))
+        }
     }
+}
+
+fn run(
+    stop: isize,
+    hotkey: Hotkey,
+    sender: UnboundedSender<()>,
+    ready_sender: mpsc::Sender<Result<(), String>>,
+) -> Result<()> {
+    // SAFETY: RegisterHotKey with a null window associates the hotkey with the calling
+    // thread's message queue. The modifiers and virtual key were parsed and validated.
+    if let Err(error) = unsafe { RegisterHotKey(None, HOTKEY_ID, hotkey.modifiers, hotkey.vk) } {
+        let message = format!("RegisterHotKey failed: {error}");
+        let _ = ready_sender.send(Err(message.clone()));
+        return Err(anyhow!(message));
+    }
+
+    let _ = ready_sender.send(Ok(()));
+
+    let loop_result = message_loop(stop, &sender);
+
+    // SAFETY: RegisterHotKey succeeded above on this thread, so unregistering the same
+    // id on this thread is valid exactly once.
+    let unregister = unsafe { UnregisterHotKey(None, HOTKEY_ID) };
+
+    match loop_result {
+        Ok(()) => unregister.map_err(|error| anyhow!("UnregisterHotKey failed: {error}")),
+        Err(error) => {
+            if let Err(cleanup_error) = unregister {
+                warn!(%cleanup_error, "failed to unregister the quit hotkey");
+            }
+            Err(error)
+        }
+    }
+}
+
+fn message_loop(stop: isize, sender: &UnboundedSender<()>) -> Result<()> {
+    while let Some(message) = worker::next_message(stop)? {
+        if message.message == WM_HOTKEY {
+            // A closed consumer means the application is already shutting down.
+            let _ = sender.unbounded_send(());
+            return Ok(());
+        }
+    }
+    Ok(())
 }
 
 fn parse_hotkey(value: &str) -> Result<Hotkey, String> {
@@ -153,5 +231,10 @@ mod tests {
         ] {
             assert!(parse_hotkey(value).is_err(), "value={value}");
         }
+    }
+
+    #[test]
+    fn invalid_hotkey_does_not_start_a_thread() {
+        assert!(spawn("Ctrl+Alt+Nope").is_err());
     }
 }

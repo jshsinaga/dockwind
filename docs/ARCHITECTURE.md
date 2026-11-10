@@ -1,0 +1,308 @@
+# Dockwind Architecture
+
+Status: active. The target layout is integrated and the native lifecycle contract
+is stable. Independent review is cleared. The final full gate passed on
+2026-11-10.
+
+Last updated: 2026-11-10
+Current code: review cleared, final full gate passed
+Historical baseline: `482bd7a` (pre-migration layout)
+
+Read `docs/PRD.md` for scope and `docs/HANDOFF.md` for current state and evidence.
+Dockwind has no database, so there is no ERD.
+
+## 1. Design Principles
+
+1. Keep pure logic independent of GPUI and Win32 so it can be tested.
+2. Keep all `unsafe` and raw handle work under `src/win/`.
+3. Keep one owner for each long-lived resource.
+4. Keep UI work on the GPUI thread. Send events to it through channels.
+5. Fail loudly. Invalid config and unsupported blur are the only logged
+   degradations, and both are defined in `docs/CONFIGURATION.md`.
+6. Make shutdown and taskbar recovery explicit. Do not rely on process exit alone.
+
+## 2. Target Module Map
+
+The target layout groups by feature. Do not create empty feature directories. A
+module exists only when it has code.
+
+| Path | Responsibility | Owns |
+|---|---|---|
+| `src/main.rs` | CLI dispatch and exit codes | Nothing long-lived |
+| `src/app/mod.rs` | `AppController`: active config, app items, config path, commands, event subscriptions | Application state |
+| `src/app/runtime.rs` | Startup order, channel wiring, guard and worker ownership, strong controller retention, shutdown | Process-level resources |
+| `src/config/mod.rs` | Public config exports used by consumers: types, path, color parser, watcher | Re-exports |
+| `src/config/model.rs` | Serde types, defaults, pinned app model | Config data shape |
+| `src/config/validation.rs` | Sanitization, color parsing, clock format checks | Validation rules |
+| `src/config/store.rs` | Default path, load, create, `ConfigError` | Config file I/O |
+| `src/config/watch.rs` | Absolute path resolution, parent-directory watch, debounce, reload, shutdown | Watcher thread and receiver |
+| `src/dock/mod.rs` | Dock domain boundary and coordination | Dock domain exports |
+| `src/dock/model.rs` | `DockItem`, pinned and running merge, grouping | Pure dock model |
+| `src/dock/autohide.rs` | Auto-hide state machine | Pure state machine |
+| `src/ui/mod.rs` | Window creation, placement, styles, backdrop, `DockRoot` ownership of the created view | GPUI window setup |
+| `src/ui/dock.rs` | Dock view, controller observation, polling, menu, clicks | Dock UI state |
+| `src/ui/app_item.rs` | App icon and running or active indicator | Item rendering |
+| `src/ui/clock.rs` | Clock and date formatting, boundary timer | Clock entity |
+| `src/ui/theme.rs` | Color, contrast, radius, padding mapping | Derived theme |
+| `src/win/worker.rs` | Manual-reset stop event and `MsgWaitForMultipleObjectsEx` cancellation shared by the event, taskbar, and hotkey workers | Worker cancellation primitive |
+| `src/win/*.rs` | Win32 wrappers for windows, DWM, monitors, icons, events, taskbar, hotkey, menu, autostart, single instance, cursor, launch | OS resources |
+| `src/logging.rs` | Tracing setup and daily log file | Log worker guard |
+
+`src/win/` stays flat. It is a platform boundary, not a feature layer.
+
+At 2026-11-10, the target layout is integrated. `src/main.rs` dispatches to
+`src/app/runtime.rs`. The native lifecycle contract is stable and independently
+reviewed. The final full gate passed on 2026-11-10.
+
+## 3. Current to Target Mapping
+
+| Historical path at `482bd7a` | Target path | Note |
+|---|---|---|
+| `src/main.rs` | `src/main.rs` plus `src/app/runtime.rs` | Integrated. `main` dispatches to the runtime |
+| `src/config.rs` | `src/config/{mod,model,validation,store,watch}.rs` | Integrated |
+| `src/app_state.rs` | `src/dock/model.rs` | Integrated |
+| `src/autohide.rs` | `src/dock/autohide.rs` | Integrated |
+| `src/theme.rs` | `src/ui/theme.rs` | Integrated |
+| `src/ui/*` | `src/ui/*` | Integrated. `DockView` observes `AppController` |
+| `src/win/*` | `src/win/*` | Integrated. `worker.rs` added |
+| `src/logging.rs` | `src/logging.rs` | Unchanged |
+
+`src/dock/mod.rs` re-exports the pure dock types and `src/ui/dock.rs` owns
+`DockView`. Do not document an API that has not landed.
+
+## 4. Integration Contract Status
+
+The contract is integrated. The native lifecycle contract is stable and
+review-cleared. The final full gate passed on 2026-11-10.
+
+| API | Contract | Status |
+|---|---|---|
+| `config::watch` | Resolves the path with `std::path::absolute`, watches the parent directory, returns `(ConfigWatcher, UnboundedReceiver<Config>)` | Integrated |
+| `ConfigWatcher` | `shutdown(&mut self)` is idempotent, stops the worker, and joins it. `Resolve` and `WatcherPanicked` are additive errors | Integrated |
+| `AutoHideInput` | Carries injected time plus `pointer_in_dock`, `pointer_in_trigger`, `enabled`, `force_hidden`, and `pinned_open` | Integrated |
+| `WindowInfo` | Keeps `hwnd`, `title`, `exe_path`, `is_minimized`, and `is_foreground` | Integrated in `src/dock/model.rs` |
+| `DockItem` | Does not carry an icon. Icons stay in the UI icon cache keyed by executable path | Integrated in `src/dock/model.rs` |
+
+The old `src/config.rs`, `src/app_state.rs`, and `src/autohide.rs` files are
+removed. This section states the ownership contract only. Read `docs/HANDOFF.md`
+for current verification status and pending manual evidence.
+
+### 4.1 Stable native lifecycle contract
+
+The lifecycle issues from the earlier re-review are resolved in source, the
+independent review is cleared, and the final full gate passed on 2026-11-10.
+
+- `worker::next_message` performs a stop-aware wait, then consumes one posted
+  message with `PeekMessageW`. A sent-only wake returns to the wait without a
+  blocking `GetMessageW`. `WM_QUIT` returns `None` before dispatch.
+- The wait explicitly polls the manual-reset stop event with
+  `WaitForSingleObject(0)` before `MsgWaitForMultipleObjectsEx`. A busy queue
+  cannot starve cancellation.
+- Shutdown signals a live worker before consuming either the stop handle or the
+  join handle. A signal failure returns the original error and keeps both handles
+  for retry. A completed worker joins without signaling. A joined panic or error
+  still closes the event without aborting.
+- The runtime keeps the native worker owners available for error reporting and
+  retries. The logger remains the last runtime field to drop.
+- Terminal cancellation failure is drop-only. If the worker is still live, the
+  failure path calls lock-free taskbar recovery, writes a synchronous stderr
+  diagnostic, and aborts. Completed workers and ordinary cleanup failures only
+  report.
+- `TaskbarOwnership` combines the state mutex with an irreversible
+  `AtomicBool` recovered latch. All normal ownership checks, hides, and restores
+  run under the same mutex. Recovery sets the latch before showing windows and
+  does not take the state mutex.
+- Every hide checks the latch before and after each native effect. An in-flight
+  hide that completes after recovery compensates by force-showing its recorded
+  handles. Effective ownership is the hidden flag AND `!recovered`. A late
+  `TaskbarCreated` cannot hide. A startup hide after recovery returns an error.
+
+Targeted tests use production methods with fake taskbar effects. They cover both
+normal mutex interleavings, a late callback, recovery between hides, and recovery
+during an in-flight effect. A message-only window test covers sent-only wake and
+stop, `WM_QUIT`, and a busy queue. An injected cancellation failure at the signal
+operation verifies ownership retention and retry. The final full gate passed on
+2026-11-10 with 66 tests, clean Clippy, and a release build.
+
+## 5. Runtime Ownership and Lifetimes
+
+| Owner | Owns | Released by |
+|---|---|---|
+| `main` | Exit code and CLI dispatch | Process exit |
+| Logging guard | Non-blocking log worker. Declared last in `Runtime`, so it drops last | Runtime drop or process exit |
+| `SingleInstanceGuard` | Named mutex | Drop at process exit |
+| `TaskbarGuard` | Normal hidden taskbar lifecycle and restore responsibility. Ownership also includes the irreversible recovered latch | `restore` or drop. Panic, console, and `WM_ENDSESSION` use independent recovery paths |
+| `app::runtime` | Guards, worker handles, channel receivers, config owner, strong `AppController` reference | Shutdown sequence |
+| `AppController` | Active config, app items, config path, event subscriptions | Entity drop after the runtime releases its strong reference |
+| `ConfigWatcher` | `notify` watcher and config-watch thread | Explicit `shutdown` or drop |
+| `EventWorker` | Two `SetWinEventHook` handles, its stop event, and its message loop | `shutdown`, then unhook |
+| `HotkeyWorker` | Registered hotkey, its stop event, and its message loop | `shutdown`, then unregister |
+| `TaskbarWatcher` | Hidden watch window, its stop event, and its message loop | `shutdown` or process exit |
+| `win::worker` | Manual-reset stop event, explicit stop poll, `MsgWaitForMultipleObjectsEx` wake, `PeekMessageW` message consumption, and shutdown/abort policy | Event worker, taskbar watcher, or hotkey worker |
+| `DockView` | Applied config, clock entity, item snapshot, icon cache, geometry snapshot, auto-hide state, menu state | Window close |
+| `ClockView` | Boundary timer task | Entity drop |
+
+The runtime keeps a strong `AppController` reference in a slot outside the view
+for the whole GPUI event loop. The view observes the controller but does not own
+its lifetime. The logger is the last runtime field to drop so cleanup diagnostics
+reach the log writer.
+
+The event, taskbar, and hotkey workers share `src/win/worker.rs`. They poll an
+owned manual-reset event, wait with `MsgWaitForMultipleObjectsEx`, and consume one
+posted message with `PeekMessageW`. Shutdown does not depend on
+`PostThreadMessageW`.
+
+`worker::shutdown` signals a live worker before consuming the stop or join handle.
+A signal failure returns the original error and retains both handles for retry. A
+completed worker joins without signaling. A joined panic or error still closes the
+event and does not abort.
+
+`worker::finish_failed_shutdown` is the drop-only terminal path. If the worker is
+still live after a failed shutdown, it calls lock-free taskbar recovery, writes a
+synchronous stderr diagnostic, and aborts. Completed workers and ordinary cleanup
+failures only report. The config watcher uses its own control channel and join
+handle.
+
+### Startup Order
+
+The order is part of the safety contract:
+
+1. `--restore-taskbar` is handled before the single-instance check.
+2. Logging starts.
+3. The single-instance mutex is acquired.
+4. Config is loaded and sanitized.
+5. The quit hotkey and window event hook start. A missing hotkey fails startup
+   only when the native taskbar will be hidden.
+6. If `hide_native_taskbar` is true, the panic hook, console handler, taskbar
+   watcher, and `TaskbarGuard` are installed in that order. Console handler
+   registration is required and fails startup before the taskbar is hidden.
+7. The config watcher starts.
+8. The GPUI application runs and the runtime retains a strong `AppController`
+   reference for the whole event loop.
+
+`TaskbarGuard` must stay alive through `Application::run`. The taskbar watcher
+must exist before the guard hides the taskbar.
+
+### Shutdown Order
+
+1. The GPUI application stops and the runtime releases its strong
+   `AppController` reference.
+2. Restore the taskbar through the explicit guard method.
+3. Stop the taskbar watcher.
+4. Stop the config watcher.
+5. Stop the window event worker and the hotkey worker.
+6. Report cleanup errors without masking the startup error.
+7. Release the single-instance mutex.
+8. Drop the logging guard last so cleanup diagnostics are flushed.
+
+The runtime owns these steps and keeps the native worker owners available through
+error reporting and retries. The final full gate passed, but a manual normal quit
+is still pending. Do not mark shutdown behavior verified until the manual quit
+check passes.
+
+## 6. Data Flow
+
+```text
+config.toml --(notify, 200 ms debounce)--> ConfigWatcher --> Config --> AppController
+AppController --> DockView
+WinEvent hook --(unbounded channel)--> AppController --(120 ms debounce)--> enumerate
+cursor timer --> cursor + fullscreen state --> AutoHide --> progress --> UI + click-through
+right click --> DockView --> deferred task --> native menu --> AppController command
+hide_native_taskbar --> TaskbarGuard
+TaskbarCreated --> taskbar watcher --> hide again
+```
+
+1. Config is loaded and sanitized before the window opens. The watcher sends a
+   full `Config` after a successful parse. A failed parse keeps the last valid
+   config.
+2. `AppController` owns the active config and the app list. `DockView` observes
+   the controller and recomputes config-derived view state only when the config
+   changes.
+3. Window events are coalesced for 120 ms, then `AppController` re-enumerates all
+   top-level windows. Icons are cached by executable path in the view.
+4. The dock polls the cursor and fullscreen state. The pure auto-hide state
+   machine returns progress. The view applies offset, opacity, and click-through.
+5. The native menu runs in a deferred task. `menu_open` pins the dock while the
+   modal menu loop runs. Menu actions go back to `AppController`.
+6. The taskbar watcher re-hides a restarted taskbar only while Dockwind owns the
+   hidden state.
+
+## 7. Threading Rules
+
+| Thread | Work | Rule |
+|---|---|---|
+| GPUI main thread | Window, rendering, config apply, menu actions | No blocking calls in handlers |
+| `win-events` | WinEvent hooks and message loop | Callback is light. No allocation or I/O in the callback. Uses the stop-aware message reader |
+| `taskbar-watch` | Hidden window and message loop | Handles `WM_ENDSESSION`, `WM_CLOSE`, `TaskbarCreated`. Uses the stop-aware message reader |
+| `quit-hotkey` | `RegisterHotKey` and message loop | Owns the hotkey registration. Uses the stop-aware message reader |
+| `config-watch` | `notify` events, debounce, parse | Sends a full config to the UI. Uses its own control channel and join handle |
+
+The native menu is modal. It must be called from a deferred task, not directly
+inside a GPUI borrow. This avoids the re-entrant borrow panic recorded in D020.
+
+The shared worker stop path is an explicit stop poll plus
+`MsgWaitForMultipleObjectsEx`, followed by one `PeekMessageW` consumption per
+wake. It returns to the stop-aware wait after each message, so a busy queue cannot
+starve cancellation. A sent-only wake leaves no posted message and does not block.
+`WM_QUIT` returns `None` before dispatch. The path does not depend on
+`PostThreadMessageW`.
+
+## 8. Invariants
+
+1. `--restore-taskbar` stays first in `main`.
+2. `TaskbarGuard` outlives `Application::run`.
+3. The taskbar watcher and console handler exist before the guard hides the
+   taskbar. Console handler registration failure aborts startup before hiding.
+4. The same taskbar state mutex guards the ownership flag, the visibility records,
+   restore, and the `TaskbarCreated` re-hide. A restore that wins the lock is not
+   followed by a hide.
+5. Panic and console recovery use the lock-free force-show path. They may show a
+   taskbar the user hid intentionally; that is preferred to a hidden desktop.
+6. `WS_EX_TOOLWINDOW` is set, `WS_EX_APPWINDOW` is clear, and the window has no
+   taskbar button or Alt+Tab entry.
+7. The dock does not take keyboard focus.
+8. All `unsafe` stays under `src/win/` and has a `// SAFETY:` comment.
+9. Pure modules do not import GPUI or Win32 types unless the type is a plain
+   value such as `Bounds`.
+10. Config updates run on the GPUI thread.
+11. A failed config reload never replaces the last valid config.
+12. A taskbar recovery path never leaves the taskbar hidden after a handled exit.
+13. The recovered latch is irreversible. Effective ownership is the hidden flag
+    AND `!recovered`. Every hide checks the latch before and after each native
+    effect. An in-flight hide that completes after recovery compensates by
+    force-showing its recorded handles.
+14. The runtime holds the strong `AppController` reference for the whole event
+    loop. The logger drops last.
+15. The event, taskbar, and hotkey workers use the stop-aware message reader. The
+    reader polls the stop event, consumes one posted message with `PeekMessageW`,
+    and returns `None` for stop or `WM_QUIT`.
+16. Shutdown signals a live worker before consuming its handles. Signal failure
+    retains both handles. Terminal abort is drop-only and only when a live worker
+    cannot be cancelled; recovery and a synchronous stderr diagnostic run first.
+
+## 9. Known Structural Limitations
+
+These are current limits. Do not describe them as fixed.
+
+| Limit | Effect |
+|---|---|
+| Placement runs once at startup | DPI, display, and work-area changes need a restart |
+| Hiding the taskbar does not update `rcWork` | The dock stays above the old work-area edge |
+| `reserve_space` is accepted but unused | Maximized windows can cover the dock. No AppBar registration or `ABM_REMOVE` |
+| Content size is fixed at `560x92` | Large app lists do not scroll |
+| `ApplicationFrameHost.exe` windows are skipped | UWP app identity is not mapped |
+| `clock.locale` is accepted but unused | Clock text uses the process locale |
+| Mica and Acrylic are gated on build 22621 and unverified | Windows 11 visual behavior is not proven on this machine |
+| Running UI was exercised at 100% DPI | 125% to 200% are unit-tested conversions only |
+| Manual desktop cases are unverified | Normal quit, taskbar hide and restore, Explorer restart, panic, console, restore CLI, GUI smoke, Windows 11, Mica, and real multi-DPI are not verified on the integrated code |
+
+## 10. Change Rules
+
+- Update this document when ownership, module boundaries, startup order, or
+  lifetime rules change.
+- Update `docs/CONFIGURATION.md` when a config field changes.
+- Update `docs/PRD.md` when scope or acceptance criteria change.
+- Record a deviation in `docs/decisions.md`.
+- Do not create the target files as empty placeholders.
+- The final full gate passed on 2026-11-10. Do not claim manual desktop behavior
+  until dated evidence exists.

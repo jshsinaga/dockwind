@@ -333,3 +333,285 @@ is open.
 Trade-off: The menu blocks the GPUI thread for the duration of the popup, but
 the deferred task is outside the borrow guard and the auto-hide task can still
 observe `menu_open`.
+
+## D021: Canonical documentation map
+
+Date: 2026-11-10
+
+Approved with the project organization plan. `AGENTS.md` is the entry point and
+points to canonical documents instead of repeating them:
+
+- `docs/PRD.md`: scope, requirements, status, acceptance criteria.
+- `docs/ARCHITECTURE.md`: target modules, ownership, lifetimes, invariants.
+- `DESIGN.md`: UI and window patterns.
+- `docs/CONFIGURATION.md`: config schema, validation, reload, save contract.
+- `docs/engineering.spec.md`: Rust and verification conventions.
+- `docs/HANDOFF.md`: current state, pending work, dated evidence.
+- `docs/decisions.md`: this record.
+- `docs/implementation_plan.md`: historical original plan.
+- `README.md`: user-facing setup and behavior.
+
+Dockwind has no database. `docs/ERD.md` does not apply, and the AGENTS pointer
+now goes to `docs/CONFIGURATION.md` for the data shape.
+
+Reason: The old set referenced missing specs and repeated current state in several
+places. One source of truth per concern makes changes easier to trace and stops
+drift between the README, the handoff, and the engineering spec.
+
+Trade-off: The documents must be synchronized after the source integration. Until
+then, paths and API names in the docs are target statements. The old missing-spec
+guidance in `docs/engineering.spec.md` and `docs/HANDOFF.md` is superseded.
+
+## D022: Feature-grouped target source layout
+
+Date: 2026-11-10
+
+Approved with the project organization plan. The target layout is:
+
+- `src/app/{mod,runtime}.rs`
+- `src/config/{mod,model,validation,store,watch}.rs`
+- `src/dock/{mod,model,autohide}.rs`
+- `src/ui/{mod,dock,app_item,clock,theme}.rs`
+- Existing `src/win/*.rs`
+- `src/logging.rs`
+
+The agreed integration contract is:
+
+- `config::watch` returns `(ConfigWatcher, UnboundedReceiver<Config>)`.
+- `ConfigWatcher::shutdown(&mut self)` stops the watcher thread.
+- `AutoHideInput` carries injected time plus the update inputs.
+- `WindowInfo` keeps the existing domain fields.
+- `DockItem` does not carry an icon. Icons stay in the UI cache.
+
+Reason: The flat `config.rs` and `app_state.rs` mix model, validation, I/O, and
+UI-facing grouping. Feature modules give each resource one owner and make the
+startup and shutdown path explicit.
+
+Trade-off: The migration started at baseline `482bd7a`. See D027 for the module
+landing and D028 for the integrated structure. Native lifecycle fixes are still
+pending, so source completion is not final.
+
+## D023: Pin the verified Rust 1.99.1 toolchain
+
+Date: 2026-11-10
+
+`rust-toolchain.toml` pins channel `1.99.1`, the
+`x86_64-pc-windows-msvc` target, `rustfmt`, and `clippy`.
+
+Reason: The project verified Rust 1.99.1. An exact release pin makes local and
+future CI builds reproducible. This supersedes the `stable` channel choice in
+D003 while keeping the MSVC target and components.
+
+Trade-off: Toolchain updates are deliberate. A machine that does not have 1.99.1
+installed must download it before the first build.
+
+## D024: Root-independent verification script and deferred lint changes
+
+Date: 2026-11-10
+
+`scripts/check.ps1` is the canonical local gate. It resolves the repository root
+from its own path and runs:
+
+1. `cargo fmt --check`
+2. `cargo check --all-targets --locked`
+3. `cargo clippy --all-targets --locked -- -D warnings`
+4. `cargo test --locked`
+5. `cargo build --release --locked`
+6. Local Markdown file-link checks
+
+It stops at the first failed native command and reports that command and its exit
+code. The link check skips external, plugin, and skill URIs, ignores anchors when
+checking the file part, and does not create files to satisfy historical examples.
+
+New warnings or denies in `Cargo.toml` were deferred at first. The approved
+policy is:
+
+- `[lints.rust] unsafe_op_in_unsafe_fn = "deny"`
+- `[lints.clippy] undocumented_unsafe_blocks = "deny"`
+
+The integrator confirmed native coverage on 2026-11-10 and the policy is active.
+See D028. Do not add global `unwrap` or `expect` denies. Tests and `build.rs` use
+them as permitted fatal errors. Production-only `unwrap` and `expect` are denied
+at crate scope separately.
+
+Native SAFETY coverage and `unwrap` or `expect` in tests and `build.rs` have
+different constraints. No broad lint allowances are allowed.
+
+Reason: One gate removes command drift and makes link rot visible. Lint changes
+can break native code and test code for different reasons, so they need one
+coordinated change.
+
+Trade-off: The gate takes longer than a single `cargo test`. Hosted CI is deferred
+until a host is selected. The two targeted lints are active.
+
+## D025: Settings UI and installer stay future
+
+Date: 2026-11-10
+
+The settings window and installer are proposed features, not current release
+scope. Their requirements and contracts are recorded in `docs/PRD.md`,
+`docs/CONFIGURATION.md`, and `DESIGN.md`.
+
+- Settings: one shared config owner, a focusable separate GPUI window, drafts,
+  Apply and Cancel, validation and errors, restart notices, atomic save, watcher
+  feedback, external edit conflicts, and preservation of user content.
+- Installer: user-scope recommendation, a stable path chosen by a later decision,
+  optional autostart, upgrade and shutdown taskbar restore, an uninstall
+  user-data policy, and no packaging tool guess.
+
+Reason: The current release needs a reliable dock and taskbar recovery. A settings
+UI and installer add write, conflict, upgrade, and uninstall failure paths. They
+need their own design and verification.
+
+Trade-off: Users edit `config.toml` by hand and install by copying or building.
+`reserve_space` and `clock.locale` remain accepted but ineffective until their
+features exist.
+
+## D026: The original implementation plan is historical
+
+Date: 2026-11-10
+
+`docs/implementation_plan.md` keeps its body and gains a status note. It remains
+useful for the original rationale, milestones, and manual test list. It is not
+current scope.
+
+`docs/PRD.md`, `docs/ARCHITECTURE.md`, `docs/CONFIGURATION.md`, and
+`docs/HANDOFF.md` supersede it for current requirements, structure, config, and
+state.
+
+Reason: Deleting the plan would lose the original intent and the M0 gate record.
+Rewriting it would blur what was planned and what was later decided.
+
+Trade-off: Some details in the plan are stale, including old file paths and
+milestone status. Readers must follow the status note and not copy its paths.
+
+## D027: Config, dock, and app modules land in isolation
+
+Date: 2026-11-10
+
+The config and dock parts of D022 landed in source:
+
+- `src/config/{mod,model,validation,store,watch}.rs`
+- `src/dock/{mod,model,autohide}.rs`
+
+`config::watch` returns `(ConfigWatcher, UnboundedReceiver<Config>)`.
+`ConfigWatcher::shutdown` is idempotent, stops the worker, and joins it. The
+watcher observes the parent directory, filters to the config path, and survives
+repeated atomic replacement. `ConfigError::WatcherPanicked` is additive.
+`AutoHideInput` carries injected time and booleans. `WindowInfo` keeps the old
+domain fields. `DockItem` has no icon.
+
+The config module reports 22 isolated tests passing. This is not a full repository
+gate. `src/app/*` and `src/ui/theme.rs` also landed later on 2026-11-10. See D028
+for the integrated structure and current native review stage.
+
+Reason: The split gives config and dock clear owners and removes the mixed I/O,
+validation, and UI model from the flat files.
+
+Trade-off: The docs must distinguish isolated module tests from full integration.
+Do not mark the target layout or its API as fully verified until
+`scripts/check.ps1` passes.
+
+## D028: Integrated structure, active lints, and pending native fixes (superseded by D029)
+
+Date: 2026-11-10
+
+The target layout is integrated:
+
+- `src/main.rs` dispatches to `src/app/runtime.rs`.
+- `src/app/mod.rs` owns `AppController`; the runtime keeps a strong reference
+  outside the dock view for the GPUI event loop.
+- `src/ui/mod.rs` creates a `DockRoot` that owns the `DockView` after successful
+  window setup.
+- `src/ui/theme.rs` is in place.
+- `src/win/worker.rs` owns the manual-reset stop event and
+  `MsgWaitForMultipleObjectsEx` wake path shared by the event, taskbar, and hotkey
+  workers. Shutdown does not depend on `PostThreadMessageW`.
+- The taskbar state mutex guards the ownership flag, visibility records, restore,
+  and `TaskbarCreated` re-hide.
+- Console handler registration is required before the taskbar is hidden.
+- The logger is the last runtime field to drop.
+
+Targeted lints are active in `Cargo.toml`:
+
+- `[lints.rust] unsafe_op_in_unsafe_fn = "deny"`
+- `[lints.clippy] undocumented_unsafe_blocks = "deny"`
+
+There is no global `unwrap` or `expect` deny. Production-only
+`clippy::unwrap_used` and `clippy::expect_used` are denied at crate scope with
+`cfg(not(test))` in `src/main.rs`.
+
+Intermediate evidence on 2026-11-10:
+
+- Full `scripts/check.ps1` passed before the native re-review: fmt, check, clippy,
+  59 tests, release build, and link checks.
+- The baseline `proc-macro-error2` v2.0.1 warning remains.
+- Debug startup smoke ran for 4 seconds on Windows 10 build 19045, 1920x1080,
+  100% DPI, `hide_native_taskbar = false`. Logs showed config load, hotkey
+  registration, placement, and transparent styles. The process was force-killed.
+
+This is not final completion. Native re-review found four lifecycle issues:
+
+1. The stop-aware wait can still block in `GetMessageW` after a sent-only wake.
+2. The emergency force-show path is missing the ownership latch.
+3. A failed `SetEvent` stop signal still leads to a join.
+4. Race tests duplicate policy checks.
+
+Source fixes are transferring to the Escalation profile. Do not mark native or
+source completion. Do not treat a gate run now as final.
+
+Not manually verified on the integrated code: normal quit, taskbar hide and
+restore, Explorer restart, panic, console control, `--restore-taskbar`, Windows
+11, Mica or Acrylic, and a real multi-DPI desktop.
+
+Reason: The structure and targeted lints are ready, and the intermediate gate
+gives useful evidence. The remaining native lifecycle issues affect shutdown and
+recovery, so they block final completion.
+
+Trade-off: The project has a working integrated structure but no final gate. One
+full gate runs after the critical fixes and review.
+
+## D029: Native lifecycle contract reviewed and cleared
+
+Date: 2026-11-10
+
+The four native lifecycle findings are resolved and independently cleared:
+
+1. `worker::next_message` uses a stop-aware wait and one `PeekMessageW`
+   consumption per wake. It does not block in `GetMessageW` after a sent-only
+   wake. `WM_QUIT` returns `None` before dispatch.
+2. The wait polls the manual-reset stop event with `WaitForSingleObject(0)` before
+   `MsgWaitForMultipleObjectsEx`, so a busy queue cannot starve cancellation.
+3. Shutdown signals a live worker before consuming the stop or join handle. A
+   signal failure returns the original error and retains both handles. A completed
+   worker joins without signaling. A joined panic or error closes the event
+   without aborting.
+4. `TaskbarOwnership` uses the state mutex plus an irreversible recovered
+   `AtomicBool` latch. Recovery sets the latch before showing windows and does not
+   take the state mutex. Every hide checks the latch before and after each native
+   effect. An in-flight hide that completes after recovery compensates by
+   force-showing its recorded handles.
+
+The runtime keeps native worker owners available through error reporting and
+retries. The logger still drops last. Terminal abort is limited to a drop-time
+cancellation failure while the worker is still live; recovery and a synchronous
+stderr diagnostic run first.
+
+Targeted tests use production methods with fake taskbar effects. They cover both
+normal mutex interleavings, a late callback, recovery between hides, and recovery
+during an in-flight effect. A message-only window test covers sent-only wake and
+stop, `WM_QUIT`, and a busy queue. An injected cancellation failure at the signal
+operation verifies ownership retention and retry.
+
+Independent review is cleared. The final full gate passed on 2026-11-10:
+`scripts/check.ps1` ran fmt, check, clippy with `-D warnings`, 66 tests, the
+release build, the 16-case link parser self-test, and 27 Markdown links in 11
+files. Manual desktop cases remain unverified: normal quit, taskbar hide and
+restore, real Explorer restart, panic, console control, `--restore-taskbar`, GUI
+smoke after the fixes, Windows 11, Mica or Acrylic, and real multi-DPI.
+
+Reason: The review findings affected cancellation, emergency recovery, and
+shutdown ownership. The fixes make the failure paths explicit and testable.
+
+Trade-off: The source is review-cleared and the full gate passed, but manual
+desktop behavior is not verified until dated checks exist.

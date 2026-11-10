@@ -1,10 +1,15 @@
-use gpui::{App, ClickEvent, Pixels, SharedString, Window, div, img, prelude::*, px, rgba};
+use std::sync::Arc;
 
-use crate::app_state::DockItem;
-use crate::theme::Theme;
+use gpui::{
+    App, ClickEvent, Pixels, RenderImage, SharedString, Window, div, img, prelude::*, px, rgba,
+};
+
+use super::theme::Theme;
+use crate::dock::DockItem;
 
 pub fn render_app_item(
     item: &DockItem,
+    icon: Option<Arc<RenderImage>>,
     theme: &Theme,
     icon_size: Pixels,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -17,8 +22,8 @@ pub fn render_app_item(
         None
     };
 
-    let icon = match &item.icon {
-        Some(icon) => img(icon.clone()).size(icon_size).into_any_element(),
+    let icon = match icon {
+        Some(icon) => img(icon).size(icon_size).into_any_element(),
         None => div()
             .size(icon_size)
             .rounded(px(8.0))
