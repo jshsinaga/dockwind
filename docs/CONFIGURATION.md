@@ -130,7 +130,8 @@ still show whether they are running.
 requires `hide_native_taskbar = true`; the settings window rejects the
 combination. The runtime logs a warning and ignores the reservation if the
 taskbar is visible. The reservation is created and removed live. The reserved
-rect is removed on shutdown, on disabling the field, and on process exit.
+rect is removed on shutdown and on disabling the field. A forced process kill
+can leave the work area reserved until `--restore-taskbar` runs.
 
 `hide_native_taskbar` is applied live. Enabling it installs the panic hook,
 console handler, and taskbar watcher before hiding. Disabling it restores the

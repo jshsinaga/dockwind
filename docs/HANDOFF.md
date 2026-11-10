@@ -29,7 +29,7 @@ work, and dated evidence. It does not repeat the architecture. Read
 | Installer | Inno Setup 6. Built and smoke-tested on 2026-11-11. Clean profile and upgrade are still pending |
 | CI | GitHub Actions gate and installer artifact passed on 2026-11-11. Runs 42878351738 on `189ef25`, 42884752869 on `f8ed473`, and 42889880818 on `85e4067` completed the `gate` and `installer` jobs. The tag release workflow has not run |
 | Taskbar toggle | Live. Manual hide/restore check passed on 2026-11-11 |
-| AppBar | `reserve_space` reserves the dock strip when the taskbar is hidden. Work area check passed on 2026-11-11 |
+| AppBar | `reserve_space` reserves the dock strip when the taskbar is hidden. Work area and visible maximized-frame checks passed on 2026-11-11. Forced kill needs the recovery command |
 | Final status | Full gate passed on 2026-11-11. Settings, tray, live geometry, live taskbar toggle, AppBar reservation, and the basic installer path manually checked. Explorer restart, panic/console recovery, the recovery CLI, and clean-profile installer checks are unverified |
 
 The original M0 feasibility spike is closed. Do not repeat it unless the UI stack
@@ -142,8 +142,8 @@ Read this before changing taskbar or worker code.
 - `hide_native_taskbar` defaults to false. Enable it only for a controlled test.
 - AppBar reservation is enabled only when both `reserve_space` and
   `hide_native_taskbar` are true. Disable it before restoring the taskbar.
-- The AppBar handle removes the reservation on drop. A forced process kill relies
-  on shell cleanup; that path is not exercised yet.
+- The AppBar handle removes the reservation on drop. After a forced process kill,
+  run `--restore-taskbar`; the tested command restores the work area and taskbar.
 - A live enable installs the panic hook, console handler, and watcher before
   hiding. A live disable restores before stopping the watcher.
 - `TaskbarRuntime` is shared on the GPUI main thread. The settings window only
@@ -206,7 +206,8 @@ Historical evidence does not automatically verify the integrated code.
 | 2026-11-11 | Settings window | Opened from `--settings` and from the tray. Apply saved the new schema through the atomic writer. The external-edit prompt, invalid-field messages, and pinned add/remove/reorder were not exercised |
 | 2026-11-11 | App list and auto geometry | Horizontal scrolling and middle-click launch were added. A one-second monitor poll repositions the dock on work-area, display, or DPI changes. The dock still rendered at a 300 px width. Resolution and DPI changes and the middle-click gesture were not manually exercised |
 | 2026-11-11 | Taskbar startup and quit | With a 45-second watchdog, startup with `hide_native_taskbar = true` hid `Shell_TrayWnd`. `Ctrl+Alt+Shift+Q` was received, the process exited, and the taskbar was visible again. The log recorded `quit hotkey received` and `native taskbar restored` |
-| 2026-11-11 | AppBar reservation | With `hide_native_taskbar = true`, `reserve_space = true`, `auto_hide = false`, and a 50-second restore watchdog, the work area became `0,0,1920,976` and the dock was placed at `y=976`. `Shell_TrayWnd` was hidden. After `Ctrl+Alt+Shift+Q`, the process exited, the work area returned to `0,0,1920,1040`, and the taskbar was visible. A visual maximized-window check is still pending |
+| 2026-11-11 | AppBar reservation | With `hide_native_taskbar = true`, `reserve_space = true`, `auto_hide = false`, and a 50-second restore watchdog, the work area became `0,0,1920,976` and the dock was placed at `y=976`. `Shell_TrayWnd` was hidden. After `Ctrl+Alt+Shift+Q`, the process exited, the work area returned to `0,0,1920,1040`, and the taskbar was visible. A maximized Notepad had a visible DWM frame of `0,0,1920,976`; its `GetWindowRect` was `984` because of the 8 px invisible border |
+| 2026-11-11 | AppBar forced kill | A forced process kill while reserving space left the work area at `0,0,1920,976`. Running `--restore-taskbar` returned it to `0,0,1920,1040` and showed the taskbar. The recovery command is the tested path |
 | 2026-11-11 | Live taskbar toggle | With a 40-second `--restore-taskbar` watchdog, a config reload changed `hide_native_taskbar` from false to true and `IsWindowVisible(Shell_TrayWnd)` went from true to false. Changing it back restored visibility. The settings checkbox plus Apply repeated the same sequence. The log recorded `taskbar mode updated`, `native taskbar hidden`, and `native taskbar restored` |
 | 2026-11-11 | Hosted CI | GitHub Actions `CI` run 42866275074 on `adb2206` and run 42868103165 on `42421fc` both completed successfully on `windows-latest`. Runs 42878351738 on `189ef25`, 42884752869 on `f8ed473`, and 42889880818 on `85e4067` completed both `gate` and `installer` jobs and uploaded the `Dockwind-installer` artifact |
 | 2026-11-11 | Tray | Icon visible in the notification area. Right-click showed Settings, Reload config, Start with Windows, Restore taskbar, and Quit. The Settings item opened the settings window |
@@ -253,9 +254,10 @@ Order is a recommendation, not a commitment.
 5. **Automatic geometry check.** Exercise a resolution change, a DPI change, and a
    taskbar hide or restore. The dock polls the primary monitor every second and
    repositions itself. See PRD U02.
-6. **AppBar follow-up.** Confirm a maximized window stops above the dock, and
-   confirm the shell removes the reservation after a forced process kill. The
-   work area and `ABM_REMOVE` path passed on 2026-11-11. See PRD R40.
+6. **AppBar forced-kill cleanup.** The work area and visible maximized frame
+   passed on 2026-11-11. After a forced kill, `--restore-taskbar` restores the
+   taskbar and work area. Confirm whether the shell eventually clears the
+   reservation without the command. See PRD R40.
 7. **App-list polish.** Add tooltips and a clearer overflow affordance.
    Middle-click launch and horizontal scrolling are implemented. See PRD U03.
 8. **UWP identity.** Map `ApplicationFrameHost.exe` windows to the real app, or
@@ -277,8 +279,8 @@ section 9. The short version:
 
 - Config geometry is live. DPI, display, and work-area changes are polled once per
   second; a real multi-DPI or resolution change was not exercised.
-- `reserve_space` requires hiding the native taskbar. A visual maximized-window
-  check is pending.
+- `reserve_space` requires hiding the native taskbar. A forced process kill can
+  leave the reserved work area until `--restore-taskbar` runs.
 - The app list scrolls horizontally and supports middle-click launch for pinned
   apps. Tooltips are not implemented.
 - UWP windows are skipped.

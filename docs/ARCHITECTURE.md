@@ -333,7 +333,7 @@ These are current limits. Do not describe them as fixed.
 |---|---|
 | Config geometry is live | `width`, `height`, `offset`, and `orientation` update without a restart. A one-second primary-monitor poll repositions on work-area, display, and DPI changes. A real multi-DPI or resolution change is not manually exercised |
 | Hiding the taskbar does not update `rcWork` | The dock stays above the old work-area edge |
-| AppBar reservation requires a hidden taskbar | `reserve_space` is ignored while the native taskbar is visible. A visual maximized-window check is pending |
+| AppBar reservation requires a hidden taskbar | `reserve_space` is ignored while the native taskbar is visible. A forced kill leaves the work area reserved until `--restore-taskbar` runs |
 | Content size defaults to `560x92` | The app list scrolls horizontally; a large list has no visible overflow affordance |
 | `ApplicationFrameHost.exe` windows are skipped | UWP app identity is not mapped |
 | `clock.locale` is accepted but unused | Clock text uses the process locale |

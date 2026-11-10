@@ -140,9 +140,9 @@ and its reload behavior.
 
 With `hide_native_taskbar = true` and `reserve_space = true`, Dockwind registers
 an AppBar reservation for the dock strip. Maximized windows stop above the dock
-instead of covering it. The reservation is removed when the field is disabled, on
-normal quit, and on process exit. It is not enabled while the native taskbar is
-visible.
+instead of covering it. The reservation is removed when the field is disabled and
+on normal quit. After a forced kill, run `dockwind --restore-taskbar` to restore
+the taskbar and work area. It is not enabled while the native taskbar is visible.
 
 ## App Management
 
@@ -253,8 +253,8 @@ manifest and icon. The embedded resources are checked by the build.
 - The app list scrolls horizontally. Tooltips and a visible overflow affordance
   are not implemented.
 - `reserve_space` requires `hide_native_taskbar = true`. It reserves the dock
-  strip through an AppBar. A visual maximized-window check and forced-kill
-  cleanup are still pending.
+  strip through an AppBar. A forced process kill can leave the work area
+  reserved until `--restore-taskbar` runs.
 - `clock.locale` is accepted but unused. Clock text uses the process locale.
 - `quit_hotkey` is read at startup. The settings window shows a restart notice.
   `hide_native_taskbar` applies live.
