@@ -15,6 +15,7 @@ work, and dated evidence. It does not repeat the architecture. Read
 | Item | Value |
 |---|---|
 | Product | Floating Windows 10/11 dock bar in Rust |
+| Version | 0.2.0 |
 | UI | GPUI `=0.2.2`, native Windows target |
 | Branch | `main` |
 | Source layout | Target layout integrated |
@@ -26,7 +27,7 @@ work, and dated evidence. It does not repeat the architecture. Read
 | Lints | `unsafe_op_in_unsafe_fn` and `clippy::undocumented_unsafe_blocks` are `deny`. Production-only `unwrap_used` and `expect_used` are denied outside tests |
 | Settings | Native Win32 window on its own thread. Atomic save and external-edit prompt |
 | Tray | Icon, menu, settings, reload, autostart, restore, quit, TaskbarCreated recovery |
-| Installer | Inno Setup 6. Built and smoke-tested on 2026-11-11. Clean profile and upgrade are still pending |
+| Installer | Inno Setup 6. Built and smoke-tested on 2026-11-11. Upgrade 0.1.0 to 0.2.0 passed. Clean profile is still pending |
 | CI | GitHub Actions gate and installer artifact passed on 2026-11-11. Runs 42878351738 on `189ef25`, 42884752869 on `f8ed473`, and 42889880818 on `85e4067` completed the `gate` and `installer` jobs. The tag release workflow has not run |
 | Taskbar toggle | Live. Manual hide/restore check passed on 2026-11-11 |
 | AppBar | `reserve_space` reserves the dock strip when the taskbar is hidden. Work area and visible maximized-frame checks passed on 2026-11-11. Forced kill needs the recovery command |
@@ -207,12 +208,13 @@ Historical evidence does not automatically verify the integrated code.
 | 2026-11-11 | App list and auto geometry | Horizontal scrolling and middle-click launch were added. A one-second monitor poll repositions the dock on work-area, display, or DPI changes. The dock still rendered at a 300 px width. Resolution and DPI changes and the middle-click gesture were not manually exercised |
 | 2026-11-11 | Taskbar startup and quit | With a 45-second watchdog, startup with `hide_native_taskbar = true` hid `Shell_TrayWnd`. `Ctrl+Alt+Shift+Q` was received, the process exited, and the taskbar was visible again. The log recorded `quit hotkey received` and `native taskbar restored` |
 | 2026-11-11 | AppBar reservation | With `hide_native_taskbar = true`, `reserve_space = true`, `auto_hide = false`, and a 50-second restore watchdog, the work area became `0,0,1920,976` and the dock was placed at `y=976`. `Shell_TrayWnd` was hidden. After `Ctrl+Alt+Shift+Q`, the process exited, the work area returned to `0,0,1920,1040`, and the taskbar was visible. A maximized Notepad had a visible DWM frame of `0,0,1920,976`; its `GetWindowRect` was `984` because of the 8 px invisible border |
+| 2026-11-11 | Installer upgrade | `Dockwind-0.1.0-setup.exe` installed silently. `Dockwind-0.2.0-setup.exe` installed over it with exit 0. The installed `--settings` window title read `Dockwind Settings 0.2.0`. Silent uninstall removed the install directory and Start Menu shortcut and preserved the config |
 | 2026-11-11 | AppBar forced kill | A forced process kill while reserving space left the work area at `0,0,1920,976`. Running `--restore-taskbar` returned it to `0,0,1920,1040` and showed the taskbar. The recovery command is the tested path |
 | 2026-11-11 | Live taskbar toggle | With a 40-second `--restore-taskbar` watchdog, a config reload changed `hide_native_taskbar` from false to true and `IsWindowVisible(Shell_TrayWnd)` went from true to false. Changing it back restored visibility. The settings checkbox plus Apply repeated the same sequence. The log recorded `taskbar mode updated`, `native taskbar hidden`, and `native taskbar restored` |
 | 2026-11-11 | Hosted CI | GitHub Actions `CI` run 42866275074 on `adb2206` and run 42868103165 on `42421fc` both completed successfully on `windows-latest`. Runs 42878351738 on `189ef25`, 42884752869 on `f8ed473`, and 42889880818 on `85e4067` completed both `gate` and `installer` jobs and uploaded the `Dockwind-installer` artifact |
 | 2026-11-11 | Tray | Icon visible in the notification area. Right-click showed Settings, Reload config, Start with Windows, Restore taskbar, and Quit. The Settings item opened the settings window |
 | 2026-11-11 | Full gate | `scripts/check.ps1` passed on the current source: fmt, check, clippy with `-D warnings`, **79 tests**, release build, link parser self-test (16 cases), and 30 Markdown links in 12 files |
-| 2026-11-11 | Installer | `installer/dockwind.iss`, `scripts/build-installer.ps1`, and `scripts/bump-version.ps1` produced `dist\Dockwind-0.1.0-setup.exe` with Inno Setup 6.7.3. Silent install exited 0, the installed app started with a tray icon, and silent uninstall exited 0. The install directory was removed and the config was preserved. Not a clean profile; upgrade was not exercised |
+| 2026-11-11 | Installer | `installer/dockwind.iss`, `scripts/build-installer.ps1`, and `scripts/bump-version.ps1` produced `dist\Dockwind-0.2.0-setup.exe` with Inno Setup 6.7.3. Silent install exited 0, the installed app started with a tray icon, and silent uninstall exited 0. The 0.1.0 to 0.2.0 upgrade was installed silently and uninstalled cleanly. The install directory and Start Menu shortcut were removed and the config was preserved. A clean profile is still untested |
 | 2026-11-11 | Build resources | `build.rs` injects the package version into the manifest and embeds the manifest and icon. The release build passed |
 | 2026-11-10 | Build warning | Baseline `proc-macro-error2` v2.0.1 warning remains |
 | 2026-11-10 | Earlier debug startup smoke | 4 seconds on Windows 10 build 19045, 1920x1080, 100% DPI, `hide_native_taskbar = false`. Logs showed config load, hotkey registration, placement, transparent styles. Process was force-killed |
@@ -237,11 +239,10 @@ source.
 
 Order is a recommendation, not a commitment.
 
-1. **Clean-profile and upgrade installer check.** Run the built installer on a
-   fresh Windows profile, confirm the Start Menu shortcut and optional desktop
-   shortcut, upgrade over the same path, and confirm config preservation. The
-   basic install, launch, and uninstall path passed on 2026-11-11. See PRD P08 to
-   P13 and `docs/RELEASE.md`.
+1. **Clean-profile installer check.** Run the 0.2.0 installer on a fresh Windows
+   profile, confirm the Start Menu and optional desktop shortcuts, and confirm
+   config preservation. The 0.1.0 to 0.2.0 upgrade, install, launch, and uninstall
+   path passed on 2026-11-11. See PRD P08 to P13 and `docs/RELEASE.md`.
 2. **Tag release workflow.** Push a `vX.Y.Z` tag and confirm the installer build,
    artifact upload, and GitHub Release publish steps. The CI gate already passes
    on `windows-latest`. See PRD P14 and `docs/RELEASE.md`.
@@ -289,9 +290,9 @@ section 9. The short version:
 - The running UI was exercised at 100% DPI only.
 - Explorer restart, panic, console-control, and `--restore-taskbar` recovery are
   unverified. Normal quit and live toggles passed.
-- The installer is built and the basic install and uninstall path passed. A clean
-  Windows profile and upgrade were not tested. The installer is unsigned and the
-  release workflow has not run yet.
+- The installer is built and the 0.1.0 to 0.2.0 upgrade, install, and uninstall
+  path passed. A clean Windows profile was not tested. The installer is unsigned
+  and the release workflow has not run yet.
 - A settings save drops comments and unknown keys. The native window has message
   box errors, not inline field errors. The taskbar toggle is live.
 - A missing tray icon is logged and does not block the dock.
