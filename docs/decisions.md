@@ -949,3 +949,27 @@ Evidence: on 2026-11-11, Settings opened an `ApplicationFrameHost` frame with a
 `CoreWindow` child owned by `SystemSettings.exe`. The debug log mapped frame PID
 11608 to app PID 6764, path `SystemSettings.exe`, name `Settings`. The app list
 refreshed five items. The icon was not visually checked.
+
+## D045: Force-stop Dockwind before uninstall
+
+Date: 2026-11-11
+
+`[UninstallRun]` starts with `taskkill /IM dockwind.exe /F`, then runs
+`--disable-autostart`, then `--restore-taskbar`, before the installer removes
+files. `CloseApplications=yes` alone was not enough because the dock is a
+non-activating tool window and a tray process; an uninstall while the taskbar was
+hidden left the process and `dockwind.exe` in place and the taskbar hidden.
+
+Reason: uninstall must leave the desktop usable and the install directory
+removable. The app has no document state that needs an orderly shutdown; the
+config file is on disk and is preserved.
+
+Trade-off: the running process is terminated without its normal GPUI shutdown.
+The taskbar recovery command runs immediately afterward and restores the
+recorded auto-hide state. A user with an unrelated Dockwind copy running will
+also have that process stopped. The installer remains unsigned.
+
+Evidence: install with the optional desktop-shortcut task created both
+shortcuts. With the taskbar hidden and state 0, uninstall exited 0, the app was
+gone, auto-hide was 1, the taskbar was visible, the install directory and both
+shortcuts were removed, and the config remained.

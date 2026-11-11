@@ -45,6 +45,9 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: deskto
 Filename: "{app}\{#AppExeName}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
+; The app is a tray/tool window and does not close reliably through Restart
+; Manager. Stop it before restoring the taskbar and removing files.
+Filename: "{sys}\taskkill.exe"; Parameters: "/IM dockwind.exe /F"; Flags: runhidden; RunOnceId: "StopDockwind"
 Filename: "{app}\{#AppExeName}"; Parameters: "--disable-autostart"; Flags: runhidden; RunOnceId: "DisableDockwindAutostart"
 Filename: "{app}\{#AppExeName}"; Parameters: "--restore-taskbar"; Flags: runhidden; RunOnceId: "RestoreDockwindTaskbar"
 

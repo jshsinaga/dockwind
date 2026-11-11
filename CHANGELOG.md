@@ -31,6 +31,9 @@ All notable changes to Dockwind are recorded here. Versions follow
 - Stale taskbar handles are reconciled during restore.
 - UWP windows hosted by `ApplicationFrameHost.exe` map to the hosted app process
   instead of being skipped.
+- Uninstall force-stops a running Dockwind before restoring the taskbar, so an
+  uninstall while the taskbar is hidden removes the app and leaves the desktop
+  usable.
 - The tray icon is checked while the taskbar is visible and re-added if missing.
 - Settings saves no longer replace a valid file with a fresh serialization.
 

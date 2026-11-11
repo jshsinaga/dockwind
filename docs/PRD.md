@@ -163,7 +163,7 @@ The save contract is defined in `docs/CONFIGURATION.md`.
 | P08 | Choose an install scope | Implemented | Per-user install with `PrivilegesRequired=lowest` and `{autopf}\Dockwind`. No administrator prompt |
 | P09 | Use a stable install path | Implemented | The per-user `{autopf}\Dockwind` path and fixed AppId are recorded in D033. Upgrades reuse them |
 | P10 | Offer optional autostart | Implemented | The installer does not force autostart. The app and tray expose it through the existing HKCU Run key |
-| P11 | Preserve the taskbar on upgrade and uninstall | Implemented with limitation | Uninstall runs `--disable-autostart` and `--restore-taskbar` before removing files. The installer closes a running Dockwind through Inno Setup's close-application support. The uninstall path ran while the taskbar was visible; the taskbar-hidden case is not exercised |
+| P11 | Preserve the taskbar on upgrade and uninstall | Verified | Uninstall force-stops `dockwind.exe`, runs `--disable-autostart`, then `--restore-taskbar` before removing files. On 2026-11-11 the uninstall passed while the taskbar was hidden: the app exited, auto-hide returned to 1, the taskbar was visible, and the install directory and shortcuts were removed. The taskbar-visible case also passed |
 | P12 | Define the user-data policy | Implemented | Uninstall preserves `%APPDATA%\Dockwind\config.toml` and logs. The installer does not delete user data |
 | P13 | Do not guess the packaging tool | Implemented | Inno Setup 6 is selected in D033. The script is in `installer/dockwind.iss` |
 
