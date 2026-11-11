@@ -11,10 +11,10 @@ use windows::Win32::{
         PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
     },
     UI::WindowsAndMessaging::{
-        EnumChildWindows, EnumWindows, GW_OWNER, GWL_EXSTYLE, GetForegroundWindow, GetWindow,
-        GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
-        IsIconic, IsWindowVisible, SW_MINIMIZE, SW_RESTORE, SetForegroundWindow, ShowWindow,
-        WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+        EnumChildWindows, EnumWindows, GW_OWNER, GWL_EXSTYLE, GetClassNameW, GetForegroundWindow,
+        GetWindow, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW,
+        GetWindowThreadProcessId, IsIconic, IsWindowVisible, SW_MINIMIZE, SW_RESTORE,
+        SetForegroundWindow, ShowWindow, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
     },
 };
 use windows::core::BOOL;
@@ -74,8 +74,13 @@ pub fn list_app_windows() -> Result<Vec<WindowInfo>> {
             match frame_host_app(hwnd, pid) {
                 Some((path, name)) => (path, Some(name)),
                 None => {
-                    debug!(pid, "skipping an unmapped UWP ApplicationFrameHost window");
-                    continue;
+                    let title = window_title(hwnd);
+                    let display = if title.trim().is_empty() {
+                        None
+                    } else {
+                        Some(title)
+                    };
+                    (exe_path, display)
                 }
             }
         } else {
@@ -103,8 +108,10 @@ fn is_application_frame_host(path: &Path) -> bool {
         .is_some_and(|name| name.eq_ignore_ascii_case("ApplicationFrameHost.exe"))
 }
 
-/// Maps a UWP `ApplicationFrameHost` window to the process that owns its hosted
-/// `Windows.UI.Core.CoreWindow`. The frame handle stays the activation target.
+/// Maps a UWP `ApplicationFrameHost` window to the process that owns its hosted content.
+/// In Windows 10, the hosted content is in a child window.
+/// In Windows 11, the hosted content is in a top-level `Windows.UI.Core.CoreWindow`.
+/// If both fail, falls back to the frame process itself with the window title.
 fn frame_host_app(frame: HWND, frame_pid: u32) -> Option<(PathBuf, String)> {
     let mut children = Vec::new();
     // SAFETY: `children` lives for the call and the callback only appends to it.
@@ -116,39 +123,119 @@ fn frame_host_app(frame: HWND, frame_pid: u32) -> Option<(PathBuf, String)> {
         )
     }
     .as_bool();
-    if !enumerated {
-        return None;
+    if enumerated {
+        for child in children {
+            let pid = window_process_id(child);
+            if pid == 0 || pid == frame_pid {
+                continue;
+            }
+            let Ok(path) = process_path(pid) else {
+                continue;
+            };
+            if is_application_frame_host(&path) {
+                continue;
+            }
+            let title = window_title(frame);
+            let name = if title.trim().is_empty() {
+                path.file_stem()
+                    .map(|stem| stem.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path.to_string_lossy().to_string())
+            } else {
+                title
+            };
+            debug!(
+                frame_pid,
+                app_pid = pid,
+                path = %path.display(),
+                name = %name,
+                "mapped UWP frame host via child window"
+            );
+            return Some((path, name));
+        }
     }
 
-    for child in children {
-        let pid = window_process_id(child);
-        if pid == 0 || pid == frame_pid {
-            continue;
-        }
-        let Ok(path) = process_path(pid) else {
-            continue;
-        };
-        if is_application_frame_host(&path) {
-            continue;
-        }
-        let title = window_title(frame);
-        let name = if title.trim().is_empty() {
-            path.file_stem()
-                .map(|stem| stem.to_string_lossy().to_string())
-                .unwrap_or_else(|| path.to_string_lossy().to_string())
-        } else {
-            title
-        };
+    // Windows 11: CoreWindow is a top-level window matching the frame title.
+    let title = window_title(frame);
+    if let Some((path, name)) = find_core_window_app(&title) {
         debug!(
             frame_pid,
-            app_pid = pid,
             path = %path.display(),
             name = %name,
-            "mapped UWP frame host"
+            "mapped UWP frame host via CoreWindow"
         );
         return Some((path, name));
     }
+
+    // Fallback: Use ApplicationFrameHost itself with the frame title so the window is
+    // never lost.
+    if !title.trim().is_empty()
+        && let Ok(path) = process_path(frame_pid)
+    {
+        return Some((path, title));
+    }
+
     None
+}
+
+fn find_core_window_app(frame_title: &str) -> Option<(PathBuf, String)> {
+    let trimmed = frame_title.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    struct CoreSearch {
+        target: String,
+        result: Option<(PathBuf, String)>,
+    }
+
+    unsafe extern "system" fn enum_core_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        // SAFETY: the caller guarantees `lparam` is the live CoreSearch pointer.
+        let state = unsafe { &mut *(lparam.0 as *mut CoreSearch) };
+        let class = window_class_name(hwnd);
+        if class == "Windows.UI.Core.CoreWindow" {
+            let title = window_title(hwnd);
+            if title.trim().eq_ignore_ascii_case(&state.target) {
+                let pid = window_process_id(hwnd);
+                if pid != 0
+                    && let Ok(path) = process_path(pid)
+                    && !is_application_frame_host(&path)
+                {
+                    let name = path
+                        .file_stem()
+                        .map(|stem| stem.to_string_lossy().to_string())
+                        .unwrap_or_else(|| state.target.clone());
+                    state.result = Some((path, name));
+                    return BOOL(0);
+                }
+            }
+        }
+        BOOL(1)
+    }
+
+    let mut state = CoreSearch {
+        target: trimmed.to_string(),
+        result: None,
+    };
+
+    // SAFETY: the callback only interacts with state via lparam.
+    unsafe {
+        let _ = EnumWindows(
+            Some(enum_core_proc),
+            LPARAM(&mut state as *mut CoreSearch as isize),
+        );
+    }
+
+    state.result
+}
+
+fn window_class_name(hwnd: HWND) -> String {
+    let mut buffer = [0u16; 256];
+    // SAFETY: buffer has 256 elements.
+    let written = unsafe { GetClassNameW(hwnd, &mut buffer) };
+    if written <= 0 {
+        return String::new();
+    }
+    String::from_utf16_lossy(&buffer[..written as usize])
 }
 
 pub fn is_taskbar_worthy(flags: &WindowFlags) -> bool {
@@ -397,5 +484,11 @@ mod tests {
             ..worthy_flags()
         };
         assert!(is_taskbar_worthy(&appwindow));
+    }
+
+    #[test]
+    fn core_window_search_handles_empty_title() {
+        assert!(find_core_window_app("").is_none());
+        assert!(find_core_window_app("   ").is_none());
     }
 }

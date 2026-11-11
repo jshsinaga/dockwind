@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,15 +14,18 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use tracing::{info, warn};
 use windows::{
     Win32::{
-        Foundation::{GetLastError, HWND, LPARAM, LRESULT, WPARAM},
+        Foundation::{GetLastError, HWND, LPARAM, LRESULT, RECT, WPARAM},
         System::{Console::SetConsoleCtrlHandler, LibraryLoader::GetModuleHandleW},
         UI::{
+            Input::KeyboardAndMouse::EnableWindow,
             Shell::{ABM_GETSTATE, ABM_SETSTATE, ABS_AUTOHIDE, APPBARDATA, SHAppBarMessage},
             WindowsAndMessaging::{
                 CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, EnumWindows,
-                GetClassNameW, IsWindowVisible, KillTimer, RegisterClassW, RegisterWindowMessageW,
-                SW_HIDE, SW_SHOW, SetTimer, ShowWindow, TranslateMessage, UnregisterClassW,
-                WM_ENDSESSION, WM_TIMER, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
+                GetClassNameW, GetWindowRect, HWND_BOTTOM, HWND_TOP, IsWindowVisible, KillTimer,
+                RegisterClassW, RegisterWindowMessageW, SW_HIDE, SW_SHOW, SWP_HIDEWINDOW,
+                SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SetTimer, SetWindowPos,
+                ShowWindow, TranslateMessage, UnregisterClassW, WM_ENDSESSION, WM_TIMER, WNDCLASSW,
+                WS_EX_TOOLWINDOW, WS_POPUP,
             },
         },
     },
@@ -199,6 +203,96 @@ trait TaskbarWindows {
     fn set_auto_hide(&self, enabled: bool) -> Result<()>;
 }
 
+static SAVED_TASKBAR_RECTS: Mutex<Option<HashMap<isize, RECT>>> = Mutex::new(None);
+const TASKBAR_RECTS_MARKER_FILE: &str = "taskbar-rects";
+
+fn taskbar_rects_marker_path() -> Result<PathBuf> {
+    let directory = dirs::data_local_dir().ok_or_else(|| anyhow!("no local app data directory"))?;
+    Ok(directory.join("Dockwind").join(TASKBAR_RECTS_MARKER_FILE))
+}
+
+fn persist_taskbar_rects(map: &HashMap<isize, RECT>) -> Result<()> {
+    let path = taskbar_rects_marker_path()?;
+    if map.is_empty() {
+        let _ = fs::remove_file(&path);
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut content = String::new();
+    for (hwnd, rect) in map {
+        content.push_str(&format!(
+            "{}:{}:{}:{}:{}\n",
+            hwnd, rect.left, rect.top, rect.right, rect.bottom
+        ));
+    }
+    fs::write(&path, content)?;
+    Ok(())
+}
+
+fn read_persisted_taskbar_rects() -> Result<HashMap<isize, RECT>> {
+    let path = taskbar_rects_marker_path()?;
+    let content = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
+        Err(e) => return Err(e.into()),
+    };
+    let mut map = HashMap::new();
+    for line in content.lines() {
+        let parts: Vec<&str> = line.split(':').collect();
+        if parts.len() == 5
+            && let (Ok(hwnd), Ok(left), Ok(top), Ok(right), Ok(bottom)) = (
+                parts[0].parse::<isize>(),
+                parts[1].parse::<i32>(),
+                parts[2].parse::<i32>(),
+                parts[3].parse::<i32>(),
+                parts[4].parse::<i32>(),
+            )
+        {
+            map.insert(
+                hwnd,
+                RECT {
+                    left,
+                    top,
+                    right,
+                    bottom,
+                },
+            );
+        }
+    }
+    Ok(map)
+}
+
+fn save_taskbar_rect(hwnd: isize, rect: RECT) {
+    let mut lock = SAVED_TASKBAR_RECTS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let map = lock.get_or_insert_with(|| read_persisted_taskbar_rects().unwrap_or_default());
+    map.entry(hwnd).or_insert(rect);
+    let _ = persist_taskbar_rects(map);
+}
+
+fn restore_taskbar_rect(hwnd: isize) -> Option<RECT> {
+    let mut lock = SAVED_TASKBAR_RECTS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if lock.is_none() {
+        *lock = Some(read_persisted_taskbar_rects().unwrap_or_default());
+    }
+    let rect = lock.as_mut().and_then(|map| map.remove(&hwnd));
+    if let Some(ref map) = *lock {
+        let _ = persist_taskbar_rects(map);
+    }
+    rect
+}
+
+fn clear_taskbar_rects_marker() {
+    if let Ok(path) = taskbar_rects_marker_path() {
+        let _ = fs::remove_file(path);
+    }
+}
+
 struct NativeTaskbar;
 
 impl TaskbarWindows for NativeTaskbar {
@@ -217,11 +311,57 @@ impl TaskbarWindows for NativeTaskbar {
     }
 
     fn set_visible(&self, hwnd: isize, visible: bool) {
-        let hwnd = HWND(hwnd as *mut c_void);
-        // SAFETY: ShowWindow accepts any window handle. Its return value reports the
-        // previous visibility, not success, so callers verify with `is_visible`.
-        unsafe {
-            let _ = ShowWindow(hwnd, if visible { SW_SHOW } else { SW_HIDE });
+        let hwnd_raw = HWND(hwnd as *mut c_void);
+        if visible {
+            // SAFETY: hwnd_raw is a taskbar window handle from taskbar_handles.
+            unsafe {
+                let _ = EnableWindow(hwnd_raw, true);
+                if let Some(rect) = restore_taskbar_rect(hwnd) {
+                    let _ = SetWindowPos(
+                        hwnd_raw,
+                        Some(HWND_TOP),
+                        rect.left,
+                        rect.top,
+                        rect.right - rect.left,
+                        rect.bottom - rect.top,
+                        SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                    );
+                } else {
+                    let _ = SetWindowPos(
+                        hwnd_raw,
+                        Some(HWND_TOP),
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                    );
+                }
+                let _ = ShowWindow(hwnd_raw, SW_SHOW);
+            }
+        } else {
+            // SAFETY: hwnd_raw is a taskbar window handle from taskbar_handles.
+            unsafe {
+                let mut rect = RECT::default();
+                if GetWindowRect(hwnd_raw, &mut rect).is_ok()
+                    && rect.bottom > rect.top
+                    && rect.right > rect.left
+                    && rect.top < 10000
+                {
+                    save_taskbar_rect(hwnd, rect);
+                }
+                let _ = EnableWindow(hwnd_raw, false);
+                let _ = SetWindowPos(
+                    hwnd_raw,
+                    Some(HWND_BOTTOM),
+                    0,
+                    99999,
+                    0,
+                    0,
+                    SWP_NOSIZE | SWP_NOACTIVATE | SWP_HIDEWINDOW,
+                );
+                let _ = ShowWindow(hwnd_raw, SW_HIDE);
+            }
         }
     }
 
@@ -309,6 +449,7 @@ fn remove_auto_hide_marker(path: &Path) -> Result<()> {
 }
 
 fn clear_auto_hide_marker() {
+    clear_taskbar_rects_marker();
     let path = match auto_hide_marker_path() {
         Ok(path) => path,
         Err(error) => {
@@ -336,7 +477,9 @@ fn restore_auto_hide_marker() -> Result<()> {
 /// native auto-hide state recorded before a forced process kill.
 pub fn restore_native_recovery() -> Result<()> {
     restore_native(true)?;
-    restore_auto_hide_marker()
+    let result = restore_auto_hide_marker();
+    clear_taskbar_rects_marker();
+    result
 }
 
 /// Owns the hidden taskbar lifecycle. Restores on drop unless an explicit restore

@@ -19,17 +19,17 @@ work, and dated evidence. It does not repeat the architecture. Read
 | Branch | `main` |
 | Source layout | Target layout integrated |
 | Independent review | Cleared on 2026-11-10. No new blockers |
-| Tests | 94 tests passed in the full gate on 2026-11-11 |
+| Tests | 103 tests passed in the full gate on 2026-11-11 |
 | Clippy | `cargo clippy --all-targets --locked -- -D warnings` passed in the final full gate |
 | Intermediate gate | Historical: 59 tests passed before the lifecycle fixes. Superseded by the final gate |
 | Release binary | `target\release\dockwind.exe` |
 | Lints | `unsafe_op_in_unsafe_fn` and `clippy::undocumented_unsafe_blocks` are `deny`. Production-only `unwrap_used` and `expect_used` are denied outside tests |
-| Settings | Native GPUI window in `src/ui/settings.rs` with multi-tab layout (Tampilan, Perilaku, Jam & Tanggal, Aplikasi Tersemat). One window per session via `focus_existing_settings_window`. Atomic save with `save_atomic_preserving`, reactive dirty indicator, steppers, toggle switches, preset palettes, and native file/color dialogs in `src/win/dialogs.rs`. |
+| Settings | Native GPUI window in `src/ui/settings.rs` with multi-tab English layout (Appearance, Behavior, Clock & Date, Pinned Applications). One window per session via `focus_existing_settings_window`. Atomic save with `save_atomic_preserving`, dirty indicator, steppers, toggle switches, preset palettes, asynchronous color picker, dual-mode app picker (Start Menu scan + manual exe browse), and warning confirmation modal before enabling native taskbar hide. |
 | Tray | Icon, menu, settings, reload, autostart, restore, quit, TaskbarCreated recovery, and a two-second visible-taskbar icon check |
 | Installer | Inno Setup 6. Built and smoke-tested on 2026-11-11. Upgrade 0.1.0 to 0.2.0 passed. Start Menu and optional desktop shortcuts were created and removed. A first-run install without Dockwind data created the default config and tray icon. Uninstall while the taskbar was hidden force-stopped the app and restored the taskbar. A clean Windows profile is still pending |
 | CI | GitHub Actions gate and installer artifact passed on 2026-11-11. Runs 42878351738 on `189ef25`, 42884752869 on `f8ed473`, 42889880818 on `85e4067`, 42892342420 on `c2984b5`, 42902593790 on `fc65aa3`, 42904347913 on `73ebf42`, 42906568724 on `dfd88e8`, 42911029970 on `639f945`, 42913132229 on `5fbc691`, 42914769400 on `aa9b53d`, 42928421805 on `b77667e`, and 42930790694 on `6551041` completed the `gate` and `installer` jobs. The release workflow dry run 42924851841 on `d61f871` ran the full gate, built and uploaded the installer without publishing. The tag publish run 42932966632 published the 0.2.0 release |
-| Taskbar toggle | Live. Manual hide/restore, native auto-hide suspension, Explorer restart, and late `TaskbarCreated` checks passed on 2026-11-11 |
-| AppBar | `reserve_space` reserves the dock strip when the taskbar is hidden. Work area, visible maximized-frame, and auto-hide interaction checks passed on 2026-11-11. Forced kill needs the recovery command |
+| Taskbar toggle | Live. Manual hide/restore, native auto-hide suspension, off-screen repositioning suppression with input disable and rect recovery marker, Explorer restart, and late `TaskbarCreated` checks passed on 2026-11-11 |
+| AppBar | `reserve_space` reserves the dock strip with Win32 `SetWindowPos` geometry, independent of `hide_native_taskbar`. Work area, visible maximized-frame, and auto-hide interaction checks passed on 2026-11-11 |
 | Final status | Full gate passed on 2026-11-11. Settings, tray, live geometry, live taskbar toggle, native auto-hide, AppBar reservation, the recovery CLI, Explorer restart, the basic installer path, and the release dry run manually checked. Clean-profile installer check is unverified |
 
 The original M0 feasibility spike is closed. Do not repeat it unless the UI stack

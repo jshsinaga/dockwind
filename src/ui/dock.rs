@@ -171,9 +171,6 @@ impl DockView {
             self.apply_geometry(&config);
             self.sync_appbar(&config);
         }
-        if config.behavior.reserve_space && !config.behavior.hide_native_taskbar {
-            warn!("reserve_space requires hide_native_taskbar; no space is reserved");
-        }
         self.applied_config = config;
 
         if blur_changed {
@@ -227,7 +224,7 @@ impl DockView {
     }
 
     fn sync_appbar(&mut self, config: &Config) {
-        let reserve = config.behavior.reserve_space && config.behavior.hide_native_taskbar;
+        let reserve = config.behavior.reserve_space;
         let rect = if reserve {
             Some(self.appbar_rect(config))
         } else {

@@ -13,7 +13,7 @@ pub struct WindowInfo {
     pub is_foreground: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DockItem {
     pub key: PathBuf,
     pub name: String,

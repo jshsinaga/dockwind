@@ -116,7 +116,7 @@ transparent surface. This is an explicit, logged degradation.
 | `show_delay_ms` | integer | 80 | None | Live |
 | `hide_delay_ms` | integer | 400 | None | Live |
 | `animation_ms` | integer | 180 | None. Zero means an instant step | Live |
-| `reserve_space` | bool | false | Requires `hide_native_taskbar = true` | Live when hiding is enabled |
+| `reserve_space` | bool | false | None | Live |
 | `hide_native_taskbar` | bool | false | None | Live |
 | `hide_in_fullscreen` | bool | true | None | Live |
 | `show_running_apps` | bool | true | None | Live |
@@ -129,11 +129,10 @@ this as the unchecked "Auto-hide when not used" box.
 still show whether they are running.
 
 `reserve_space = true` registers an AppBar reservation for the dock strip. It
-requires `hide_native_taskbar = true`; the settings window rejects the
-combination. The runtime logs a warning and ignores the reservation if the
-taskbar is visible. The reservation is created and removed live. The reserved
-rect is removed on shutdown and on disabling the field. A forced process kill
-can leave the work area reserved until `--restore-taskbar` runs.
+positions the reservation to match the dock edge and dimensions. The reservation
+is created and removed live. The reserved rect is removed on shutdown and on
+disabling the field. A forced process kill can leave the work area reserved until
+`--restore-taskbar` runs.
 
 `hide_native_taskbar` is applied live. Enabling it installs the panic hook,
 console handler, and taskbar watcher before hiding. Disabling it restores the

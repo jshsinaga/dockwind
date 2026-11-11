@@ -61,6 +61,10 @@ pub struct SettingsView {
     selected_pinned_index: Option<usize>,
     status_message: Option<(SharedString, bool)>,
     scroll_handle: ScrollHandle,
+    installed_apps: Option<Vec<win::dialogs::InstalledApp>>,
+    showing_app_picker: bool,
+    app_picker_filter: Option<char>,
+    showing_taskbar_confirm: bool,
 }
 
 impl SettingsView {
@@ -75,6 +79,10 @@ impl SettingsView {
             selected_pinned_index: None,
             status_message: None,
             scroll_handle: ScrollHandle::default(),
+            installed_apps: None,
+            showing_app_picker: false,
+            app_picker_filter: None,
+            showing_taskbar_confirm: false,
         }
     }
 
@@ -198,6 +206,8 @@ impl SettingsView {
                             })
                             .on_click(cx.listener(move |this: &mut Self, _, _, cx| {
                                 this.active_tab = tab;
+                                this.showing_app_picker = false;
+                                this.showing_taskbar_confirm = false;
                                 cx.notify();
                             }))
                             .child(label)
@@ -481,13 +491,18 @@ impl SettingsView {
                                     .text_color(rgba(0xCDD6F4FF))
                                     .cursor_pointer()
                                     .on_click(cx.listener(|this: &mut Self, _, _, cx| {
-                                        if let Ok(Some(color)) = win::dialogs::pick_color_dialog(
-                                            &this.draft.appearance.background,
-                                        ) {
-                                            this.draft.appearance.background = color;
-                                            this.status_message = None;
-                                            cx.notify();
-                                        }
+                                        let initial = this.draft.appearance.background.clone();
+                                        let receiver = win::dialogs::pick_color_async(initial);
+                                        cx.spawn(async move |this, cx| {
+                                            if let Ok(Ok(Some(color))) = receiver.await {
+                                                let _ = this.update(cx, |this, cx| {
+                                                    this.draft.appearance.background = color;
+                                                    this.status_message = None;
+                                                    cx.notify();
+                                                });
+                                            }
+                                        })
+                                        .detach();
                                     }))
                                     .child("Choose Color..."),
                             ),
@@ -663,13 +678,67 @@ impl SettingsView {
                             "toggle-hide-taskbar",
                             self.draft.behavior.hide_native_taskbar,
                             cx.listener(|this: &mut Self, _, _, cx| {
-                                this.draft.behavior.hide_native_taskbar =
-                                    !this.draft.behavior.hide_native_taskbar;
+                                if !this.draft.behavior.hide_native_taskbar {
+                                    this.showing_taskbar_confirm = true;
+                                } else {
+                                    this.draft.behavior.hide_native_taskbar = false;
+                                }
                                 this.status_message = None;
                                 cx.notify();
                             }),
                         ),
                     ),
+                    if self.draft.behavior.hide_native_taskbar {
+                        div()
+                            .p_3()
+                            .rounded_lg()
+                            .bg(rgba(0x18182580))
+                            .border_1()
+                            .border_color(rgba(0xF9E2AF44))
+                            .flex()
+                            .flex_col()
+                            .gap_1p5()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(rgba(0xF9E2AFFF))
+                                    .child("Method & Advisory"),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgba(0xCDD6F4FF))
+                                    .child(
+                                        "Method: Dockwind moves the Windows taskbar off-screen and suppresses hover popups while running.",
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgba(0x89B4FAFF))
+                                    .child(
+                                        "Recommended: For the cleanest native experience, you can also enable 'Automatically hide the taskbar' in Windows Settings (Personalization > Taskbar).",
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgba(0xA6ADC8FF))
+                                    .child(
+                                        "Warning: If Dockwind is terminated abnormally, run 'dockwind --restore-taskbar' or re-launch Dockwind to restore the taskbar position.",
+                                    ),
+                            )
+                            .into_any_element()
+                    } else {
+                        div()
+                            .text_xs()
+                            .text_color(rgba(0x6C7086FF))
+                            .child(
+                                "Tip: Enabling 'Automatically hide the taskbar' in Windows Settings is recommended alongside Dockwind.",
+                            )
+                            .into_any_element()
+                    },
                     render_setting_row(
                         "Reserve Desktop Space (AppBar)",
                         "Prevent maximized application windows from covering the dock.",
@@ -902,7 +971,292 @@ impl SettingsView {
             ))
     }
 
+    fn render_installed_apps_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let apps = self.installed_apps.as_deref().unwrap_or(&[]);
+        let filter = self.app_picker_filter;
+        let filtered_apps: Vec<_> = apps
+            .iter()
+            .filter(|app| {
+                if let Some(target_char) = filter {
+                    app.name
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.eq_ignore_ascii_case(&target_char))
+                } else {
+                    true
+                }
+            })
+            .collect();
+
+        let letters = [
+            'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q',
+            'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
+        ];
+
+        div()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_base()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(rgba(0xCDD6F4FF))
+                                    .child("Choose from Installed Applications"),
+                            )
+                            .child(
+                                div().text_xs().text_color(rgba(0x6C7086FF)).child(
+                                    "Select an installed application to pin it to your dock.",
+                                ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("btn-back-to-pinned")
+                            .px_3()
+                            .py_1p5()
+                            .rounded_md()
+                            .bg(rgba(0x313244FF))
+                            .hover(|s| s.bg(rgba(0x45475AFF)))
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(rgba(0xCDD6F4FF))
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this: &mut Self, _, _, cx| {
+                                this.showing_app_picker = false;
+                                cx.notify();
+                            }))
+                            .child("<- Back to Pinned"),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_1()
+                    .p_1p5()
+                    .rounded_lg()
+                    .bg(rgba(0x181825FF))
+                    .child(
+                        div()
+                            .id("filter-all")
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .cursor_pointer()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .bg(if filter.is_none() {
+                                rgba(0x89B4FAFF)
+                            } else {
+                                rgba(0x00000000)
+                            })
+                            .text_color(if filter.is_none() {
+                                rgba(0x11111BFF)
+                            } else {
+                                rgba(0xA6ADC8FF)
+                            })
+                            .hover(|s| {
+                                if filter.is_some() {
+                                    s.bg(rgba(0x313244FF)).text_color(rgba(0xFFFFFFFF))
+                                } else {
+                                    s
+                                }
+                            })
+                            .on_click(cx.listener(|this: &mut Self, _, _, cx| {
+                                this.app_picker_filter = None;
+                                cx.notify();
+                            }))
+                            .child("All"),
+                    )
+                    .children(letters.into_iter().map(|letter| {
+                        let is_active = filter == Some(letter);
+                        div()
+                            .id(SharedString::from(format!("filter-{letter}")))
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .cursor_pointer()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .bg(if is_active {
+                                rgba(0x89B4FAFF)
+                            } else {
+                                rgba(0x00000000)
+                            })
+                            .text_color(if is_active {
+                                rgba(0x11111BFF)
+                            } else {
+                                rgba(0xA6ADC8FF)
+                            })
+                            .hover(|s| {
+                                if !is_active {
+                                    s.bg(rgba(0x313244FF)).text_color(rgba(0xFFFFFFFF))
+                                } else {
+                                    s
+                                }
+                            })
+                            .on_click(cx.listener(move |this: &mut Self, _, _, cx| {
+                                this.app_picker_filter = Some(letter);
+                                cx.notify();
+                            }))
+                            .child(letter.to_string())
+                    })),
+            )
+            .child(
+                div()
+                    .id("installed-apps-scroll")
+                    .p_3()
+                    .rounded_xl()
+                    .bg(rgba(0x1E1E2EFF))
+                    .border_1()
+                    .border_color(rgba(0x313244FF))
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .max_h(px(420.0))
+                    .overflow_y_scroll()
+                    .children(if filtered_apps.is_empty() {
+                        vec![
+                            div()
+                                .py_8()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_xs()
+                                .text_color(rgba(0x6C7086FF))
+                                .child("No applications found for this filter.")
+                                .into_any_element(),
+                        ]
+                    } else {
+                        filtered_apps
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, app)| {
+                                let app_name = app.name.clone();
+                                let app_path_str = app.path.to_string_lossy().to_string();
+                                let is_already_pinned = self.draft.pinned.iter().any(|pinned| {
+                                    pinned.path == app_path_str || pinned.name == app_name
+                                });
+
+                                div()
+                                    .id(SharedString::from(format!("installed-app-{index}")))
+                                    .px_3()
+                                    .py_2()
+                                    .rounded_lg()
+                                    .bg(rgba(0x18182580))
+                                    .border_1()
+                                    .border_color(rgba(0x31324433))
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_3()
+                                            .child(
+                                                div()
+                                                    .w(px(28.0))
+                                                    .h(px(28.0))
+                                                    .rounded_md()
+                                                    .bg(rgba(0x313244FF))
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .text_xs()
+                                                    .font_weight(FontWeight::BOLD)
+                                                    .text_color(rgba(0x89B4FAFF))
+                                                    .child(
+                                                        app_name
+                                                            .chars()
+                                                            .next()
+                                                            .unwrap_or('A')
+                                                            .to_uppercase()
+                                                            .to_string(),
+                                                    ),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .flex_col()
+                                                    .gap_0p5()
+                                                    .child(
+                                                        div()
+                                                            .text_sm()
+                                                            .font_weight(FontWeight::MEDIUM)
+                                                            .text_color(rgba(0xCDD6F4FF))
+                                                            .child(app_name.clone()),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .text_xs()
+                                                            .text_color(rgba(0x6C7086FF))
+                                                            .child(app_path_str.clone()),
+                                                    ),
+                                            ),
+                                    )
+                                    .child(if is_already_pinned {
+                                        div()
+                                            .px_2p5()
+                                            .py_1()
+                                            .rounded_md()
+                                            .bg(rgba(0xA6E3A122))
+                                            .text_xs()
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(rgba(0xA6E3A1FF))
+                                            .child("Pinned")
+                                            .into_any_element()
+                                    } else {
+                                        div()
+                                            .id(SharedString::from(format!("btn-pin-app-{index}")))
+                                            .px_2p5()
+                                            .py_1()
+                                            .rounded_md()
+                                            .bg(rgba(0x89B4FAFF))
+                                            .hover(|s| s.bg(rgba(0xB4BEFEFF)))
+                                            .text_xs()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(rgba(0x11111BFF))
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(
+                                                move |this: &mut Self, _, _, cx| {
+                                                    this.draft.pinned.push(PinnedApp {
+                                                        name: app_name.clone(),
+                                                        path: app_path_str.clone(),
+                                                        args: Vec::new(),
+                                                    });
+                                                    this.selected_pinned_index =
+                                                        Some(this.draft.pinned.len() - 1);
+                                                    this.status_message = None;
+                                                    cx.notify();
+                                                },
+                                            ))
+                                            .child("+ Pin to Dock")
+                                            .into_any_element()
+                                    })
+                                    .into_any_element()
+                            })
+                            .collect()
+                    }),
+            )
+    }
+
     fn render_pinned_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.showing_app_picker {
+            return self.render_installed_apps_picker(cx).into_any_element();
+        }
+
         let has_selection = self.selected_pinned_index.is_some();
         let selected_index = self.selected_pinned_index.unwrap_or(0);
         let can_move_up = has_selection && selected_index > 0;
@@ -1005,39 +1359,76 @@ impl SettingsView {
                     )
                     .child(
                         div()
-                            .id("btn-add-pinned")
-                            .px_3()
-                            .py_1p5()
-                            .rounded_md()
-                            .bg(rgba(0x89B4FAFF))
-                            .hover(|s| s.bg(rgba(0xB4BEFEFF)))
-                            .text_xs()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgba(0x11111BFF))
-                            .cursor_pointer()
-                            .on_click(cx.listener(|this: &mut Self, _, _, cx| {
-                                if let Ok(Some(path)) = win::dialogs::pick_app_dialog() {
-                                    let stem =
-                                        path.file_stem().and_then(|s| s.to_str()).unwrap_or("App");
-                                    let mut chars = stem.chars();
-                                    let name = match chars.next() {
-                                        None => "App".to_string(),
-                                        Some(first) => {
-                                            first.to_uppercase().collect::<String>()
-                                                + chars.as_str()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .id("btn-add-installed-app")
+                                    .px_3()
+                                    .py_1p5()
+                                    .rounded_md()
+                                    .bg(rgba(0x89B4FAFF))
+                                    .hover(|s| s.bg(rgba(0xB4BEFEFF)))
+                                    .text_xs()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(rgba(0x11111BFF))
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|this: &mut Self, _, _, cx| {
+                                        if this.installed_apps.is_none() {
+                                            this.installed_apps =
+                                                Some(win::dialogs::scan_installed_apps());
                                         }
-                                    };
-                                    this.draft.pinned.push(PinnedApp {
-                                        name,
-                                        path: path.to_string_lossy().to_string(),
-                                        args: Vec::new(),
-                                    });
-                                    this.selected_pinned_index = Some(this.draft.pinned.len() - 1);
-                                    this.status_message = None;
-                                    cx.notify();
-                                }
-                            }))
-                            .child("+ Add Application (.exe)..."),
+                                        this.showing_app_picker = true;
+                                        cx.notify();
+                                    }))
+                                    .child("+ Installed Apps"),
+                            )
+                            .child(
+                                div()
+                                    .id("btn-add-pinned")
+                                    .px_3()
+                                    .py_1p5()
+                                    .rounded_md()
+                                    .bg(rgba(0x313244FF))
+                                    .hover(|s| s.bg(rgba(0x45475AFF)))
+                                    .text_xs()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(rgba(0xCDD6F4FF))
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|_this: &mut Self, _, _, cx| {
+                                        let receiver = win::dialogs::pick_file_async();
+                                        cx.spawn(async move |this, cx| {
+                                            if let Ok(Ok(Some(path))) = receiver.await {
+                                                let stem = path
+                                                    .file_stem()
+                                                    .and_then(|s| s.to_str())
+                                                    .unwrap_or("App");
+                                                let mut chars = stem.chars();
+                                                let name = match chars.next() {
+                                                    None => "App".to_string(),
+                                                    Some(first) => {
+                                                        first.to_uppercase().collect::<String>()
+                                                            + chars.as_str()
+                                                    }
+                                                };
+                                                let _ = this.update(cx, |this, cx| {
+                                                    this.draft.pinned.push(PinnedApp {
+                                                        name,
+                                                        path: path.to_string_lossy().to_string(),
+                                                        args: Vec::new(),
+                                                    });
+                                                    this.selected_pinned_index =
+                                                        Some(this.draft.pinned.len() - 1);
+                                                    this.status_message = None;
+                                                    cx.notify();
+                                                });
+                                            }
+                                        })
+                                        .detach();
+                                    }))
+                                    .child("Browse (.exe)..."),
+                            ),
                     ),
             )
             .child(
@@ -1127,6 +1518,7 @@ impl SettingsView {
                         }),
                     )),
             )
+            .into_any_element()
     }
 
     fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1202,11 +1594,152 @@ impl SettingsView {
                     ),
             )
     }
+
+    fn render_taskbar_confirm_dialog(&self, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .id("taskbar-confirm-backdrop")
+            .absolute()
+            .top(px(0.0))
+            .left(px(0.0))
+            .size_full()
+            .bg(rgba(0x000000B0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .p_6()
+            .child(
+                div()
+                    .id("taskbar-confirm-modal")
+                    .w(px(520.0))
+                    .p_6()
+                    .rounded_2xl()
+                    .bg(rgba(0x181825FF))
+                    .border_1()
+                    .border_color(rgba(0xF9E2AF80))
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .px_2p5()
+                                    .py_1()
+                                    .rounded_md()
+                                    .bg(rgba(0xF9E2AF33))
+                                    .text_xs()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(rgba(0xF9E2AFFF))
+                                    .child("WARNING"),
+                            )
+                            .child(
+                                div()
+                                    .text_base()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(rgba(0xFFFFFFFF))
+                                    .child("Hide Windows Taskbar?"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .p_3p5()
+                            .rounded_lg()
+                            .bg(rgba(0x11111B80))
+                            .border_1()
+                            .border_color(rgba(0x31324480))
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgba(0xCDD6F4FF))
+                                    .child(
+                                        "This feature repositions the Windows taskbar off-screen and suppresses mouse hover detection while Dockwind is running.",
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgba(0x89B4FAFF))
+                                    .child(
+                                        "Recommended: Enabling 'Automatically hide the taskbar' in Windows Settings is safer and provides full native system stability.",
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgba(0xA6ADC8FF))
+                                    .child(
+                                        "Recovery: If Dockwind closes unexpectedly, you can restore your taskbar by running 'dockwind --restore-taskbar' or re-opening Dockwind.",
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(rgba(0xCDD6F4FF))
+                            .child("Are you sure you want to enable this feature?"),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_end()
+                            .gap_3()
+                            .pt_2()
+                            .child(
+                                div()
+                                    .id("btn-cancel-taskbar-hide")
+                                    .px_4()
+                                    .py_2()
+                                    .rounded_lg()
+                                    .bg(rgba(0x313244FF))
+                                    .hover(|s| s.bg(rgba(0x45475AFF)))
+                                    .text_xs()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(rgba(0xCDD6F4FF))
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|this: &mut Self, _, _, cx| {
+                                        this.showing_taskbar_confirm = false;
+                                        cx.notify();
+                                    }))
+                                    .child("Cancel"),
+                            )
+                            .child(
+                                div()
+                                    .id("btn-confirm-taskbar-hide")
+                                    .px_4()
+                                    .py_2()
+                                    .rounded_lg()
+                                    .bg(rgba(0xF9E2AFFF))
+                                    .hover(|s| s.bg(rgba(0xF5E0DCFF)))
+                                    .text_xs()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(rgba(0x11111BFF))
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|this: &mut Self, _, _, cx| {
+                                        this.draft.behavior.hide_native_taskbar = true;
+                                        this.showing_taskbar_confirm = false;
+                                        this.status_message = None;
+                                        cx.notify();
+                                    }))
+                                    .child("Enable Hide Taskbar"),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
 }
 
 impl Render for SettingsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
+            .relative()
             .size_full()
             .bg(rgba(0x11111BFF))
             .flex()
@@ -1229,6 +1762,11 @@ impl Render for SettingsView {
                     }),
             )
             .child(self.render_footer(cx))
+            .children(if self.showing_taskbar_confirm {
+                Some(self.render_taskbar_confirm_dialog(cx))
+            } else {
+                None
+            })
     }
 }
 
@@ -1567,5 +2105,36 @@ mod tests {
 
         view.active_tab = SettingsTab::Clock;
         assert_eq!(view.active_tab, SettingsTab::Clock);
+    }
+
+    #[test]
+    fn settings_view_app_picker_state() {
+        let path = PathBuf::from("config.toml");
+        let config = Config::default();
+        let mut view = SettingsView::new(path, config, false);
+        assert!(!view.showing_app_picker);
+        assert!(view.app_picker_filter.is_none());
+
+        view.showing_app_picker = true;
+        view.app_picker_filter = Some('C');
+        assert!(view.showing_app_picker);
+        assert_eq!(view.app_picker_filter, Some('C'));
+    }
+
+    #[test]
+    fn settings_view_taskbar_confirm_state() {
+        let path = PathBuf::from("config.toml");
+        let config = Config::default();
+        let mut view = SettingsView::new(path, config, false);
+        assert!(!view.showing_taskbar_confirm);
+        assert!(!view.draft.behavior.hide_native_taskbar);
+
+        view.showing_taskbar_confirm = true;
+        assert!(view.showing_taskbar_confirm);
+
+        view.draft.behavior.hide_native_taskbar = true;
+        view.showing_taskbar_confirm = false;
+        assert!(!view.showing_taskbar_confirm);
+        assert!(view.draft.behavior.hide_native_taskbar);
     }
 }

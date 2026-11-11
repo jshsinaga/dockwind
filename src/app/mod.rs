@@ -71,12 +71,30 @@ impl AppController {
 
         cx.spawn(async move |this, cx| {
             while window_events.next().await.is_some() {
-                Timer::after(Duration::from_millis(120)).await;
+                Timer::after(Duration::from_millis(50)).await;
                 while window_events.try_recv().is_ok() {}
                 if this
                     .update(cx, |this, cx| {
-                        this.refresh();
-                        cx.notify();
+                        if this.refresh() {
+                            cx.notify();
+                        }
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
+
+        cx.spawn(async move |this, cx| {
+            loop {
+                Timer::after(Duration::from_millis(250)).await;
+                if this
+                    .update(cx, |this, cx| {
+                        if this.refresh() {
+                            cx.notify();
+                        }
                     })
                     .is_err()
                 {
@@ -186,22 +204,31 @@ impl AppController {
         cx.notify();
     }
 
-    fn refresh(&mut self) {
+    fn refresh(&mut self) -> bool {
         let started = std::time::Instant::now();
         match win::windows_enum::list_app_windows() {
             Ok(windows) => {
-                self.items = dock::merge(
+                let new_items = dock::merge(
                     &self.config.pinned,
                     &windows,
                     self.config.behavior.show_running_apps,
                 );
-                debug!(
-                    items = self.items.len(),
-                    elapsed_ms = started.elapsed().as_millis(),
-                    "app list refreshed"
-                );
+                if new_items != self.items {
+                    self.items = new_items;
+                    debug!(
+                        items = self.items.len(),
+                        elapsed_ms = started.elapsed().as_millis(),
+                        "app list refreshed"
+                    );
+                    true
+                } else {
+                    false
+                }
             }
-            Err(error) => error!(%error, "failed to enumerate app windows"),
+            Err(error) => {
+                error!(%error, "failed to enumerate app windows");
+                false
+            }
         }
     }
 
@@ -289,5 +316,19 @@ mod tests {
         };
         assert_eq!(controller.config(), &config);
         assert!(controller.items().is_empty());
+    }
+
+    #[test]
+    fn refresh_returns_false_when_items_are_unchanged() {
+        let config = Config::default();
+        let mut controller = AppController {
+            config,
+            items: Vec::new(),
+            config_path: PathBuf::from("config.toml"),
+            taskbar: Rc::new(RefCell::new(TaskbarRuntime::default())),
+        };
+        let _ = controller.refresh();
+        let changed = controller.refresh();
+        assert!(!changed);
     }
 }

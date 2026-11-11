@@ -17,7 +17,8 @@ use windows::{
             },
             WindowsAndMessaging::{
                 CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, RegisterClassW,
-                TranslateMessage, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
+                SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, TranslateMessage, WNDCLASSW,
+                WS_EX_TOOLWINDOW, WS_POPUP,
             },
         },
     },
@@ -115,6 +116,20 @@ impl AppBarHandle {
             bail!("SHAppBarMessage(ABM_SETPOS) failed");
         }
 
+        // SAFETY: Move the appbar window to the dimensions returned by ABM_SETPOS as
+        // required by the Win32 AppBar specification.
+        unsafe {
+            let _ = SetWindowPos(
+                self.hwnd,
+                None,
+                data.rc.left,
+                data.rc.top,
+                data.rc.right - data.rc.left,
+                data.rc.bottom - data.rc.top,
+                SWP_NOACTIVATE | SWP_NOZORDER,
+            );
+        }
+
         self.active = true;
         info!(
             edge = ?edge,
@@ -143,6 +158,20 @@ impl AppBarHandle {
         if positioned == 0 {
             bail!("SHAppBarMessage(ABM_SETPOS) failed during update");
         }
+
+        // SAFETY: Update the appbar window dimensions to match the approved rect.
+        unsafe {
+            let _ = SetWindowPos(
+                self.hwnd,
+                None,
+                data.rc.left,
+                data.rc.top,
+                data.rc.right - data.rc.left,
+                data.rc.bottom - data.rc.top,
+                SWP_NOACTIVATE | SWP_NOZORDER,
+            );
+        }
+
         debug!(
             edge = ?edge,
             left = data.rc.left,
