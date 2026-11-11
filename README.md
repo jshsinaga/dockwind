@@ -8,12 +8,14 @@ Dockwind shows pinned and running apps, a clock and date, and optional auto-hide
 It has a native settings window, a system tray icon, per-user autostart, a global
 quit hotkey, a standalone taskbar restore command, and an Inno Setup installer.
 
+Latest release: [Dockwind 0.2.0](https://github.com/jshsinaga/dockwind/releases/tag/v0.2.0).
+
 Current build status: the full gate passes on the current source. Settings, tray,
 live geometry, live taskbar toggling, native auto-hide suspension, AppBar
-reservation, startup hide, normal quit restore, Explorer restart recovery, the
-recovery CLI, the basic installer path, and the release dry run were manually
-checked on 2026-11-11. A clean-profile install and the tag publish are still open.
-See [docs/HANDOFF.md](docs/HANDOFF.md) for dated evidence.
+reservation, startup hide, normal quit restore, Explorer restart recovery, panic
+and console recovery, the recovery CLI, the installer path, and the tag release
+were checked on 2026-11-11. A clean-profile install is still open. See
+[docs/HANDOFF.md](docs/HANDOFF.md) for dated evidence.
 
 ## Documentation
 
@@ -282,7 +284,7 @@ manifest and icon. The embedded resources are checked by the build.
 - App tooltips are not implemented yet. Middle-click launch for pinned apps is
   implemented.
 - The installer is unsigned. Windows SmartScreen may warn on first run.
-- The GitHub Actions CI gate passed on 2026-11-11. A manual release dry run built
-  and uploaded the installer; the tag publish path has not run yet.
+- Release `v0.2.0` passed the gate and published the installer asset. A clean
+  Windows profile install is still untested.
 - GPUI is pinned to `=0.2.2` because it is pre-1.0 and its API changes between
   releases.

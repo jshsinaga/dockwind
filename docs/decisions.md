@@ -924,7 +924,8 @@ still declares `contents: write` because the tag path needs it.
 
 Evidence: manual dispatch run 42924851841 on `d61f871` ran the full gate, built
 the installer, uploaded `Dockwind-0.2.0-setup` (4,259,713 bytes), and created no
-release. The tag publish path has not run.
+release. Tag `v0.2.0` later triggered run 42932966632, which published
+`Dockwind 0.2.0` with the installer asset.
 
 ## D044: Map UWP frame hosts through the hosted child window
 

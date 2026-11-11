@@ -27,10 +27,10 @@ work, and dated evidence. It does not repeat the architecture. Read
 | Settings | Native Win32 window on its own thread. One window per user session through a named mutex. Atomic save, external-edit prompt, and TOML preservation. Validation, restart notice, Close discard, and pinned add/remove/reorder passed on 2026-11-11. A valid file keeps comments, ordering, and unknown keys; pinned entries are rewritten |
 | Tray | Icon, menu, settings, reload, autostart, restore, quit, TaskbarCreated recovery, and a two-second visible-taskbar icon check |
 | Installer | Inno Setup 6. Built and smoke-tested on 2026-11-11. Upgrade 0.1.0 to 0.2.0 passed. Start Menu and optional desktop shortcuts were created and removed. A first-run install without Dockwind data created the default config and tray icon. Uninstall while the taskbar was hidden force-stopped the app and restored the taskbar. A clean Windows profile is still pending |
-| CI | GitHub Actions gate and installer artifact passed on 2026-11-11. Runs 42878351738 on `189ef25`, 42884752869 on `f8ed473`, 42889880818 on `85e4067`, 42892342420 on `c2984b5`, 42902593790 on `fc65aa3`, 42904347913 on `73ebf42`, 42906568724 on `dfd88e8`, 42911029970 on `639f945`, 42913132229 on `5fbc691`, and 42914769400 on `aa9b53d`, 42928421805 on `b77667e`, and 42930790694 on `6551041` completed the `gate` and `installer` jobs. The release workflow dry run 42924851841 on `d61f871` ran the full gate, built and uploaded the installer without publishing. The tag publish path has not run |
+| CI | GitHub Actions gate and installer artifact passed on 2026-11-11. Runs 42878351738 on `189ef25`, 42884752869 on `f8ed473`, 42889880818 on `85e4067`, 42892342420 on `c2984b5`, 42902593790 on `fc65aa3`, 42904347913 on `73ebf42`, 42906568724 on `dfd88e8`, 42911029970 on `639f945`, 42913132229 on `5fbc691`, 42914769400 on `aa9b53d`, 42928421805 on `b77667e`, and 42930790694 on `6551041` completed the `gate` and `installer` jobs. The release workflow dry run 42924851841 on `d61f871` ran the full gate, built and uploaded the installer without publishing. The tag publish run 42932966632 published the 0.2.0 release |
 | Taskbar toggle | Live. Manual hide/restore, native auto-hide suspension, Explorer restart, and late `TaskbarCreated` checks passed on 2026-11-11 |
 | AppBar | `reserve_space` reserves the dock strip when the taskbar is hidden. Work area, visible maximized-frame, and auto-hide interaction checks passed on 2026-11-11. Forced kill needs the recovery command |
-| Final status | Full gate passed on 2026-11-11. Settings, tray, live geometry, live taskbar toggle, native auto-hide, AppBar reservation, the recovery CLI, Explorer restart, the basic installer path, and the release dry run manually checked. Tag publish and clean-profile installer checks are unverified |
+| Final status | Full gate passed on 2026-11-11. Settings, tray, live geometry, live taskbar toggle, native auto-hide, AppBar reservation, the recovery CLI, Explorer restart, the basic installer path, and the release dry run manually checked. Clean-profile installer check is unverified |
 
 The original M0 feasibility spike is closed. Do not repeat it unless the UI stack
 changes. Evidence is in `docs/spike-m0.md`.
@@ -133,9 +133,8 @@ Set `RUST_LOG=dockwind=debug` for refresh, reload, and taskbar diagnostics.
   gate and release workflows.
 
 These are current code capabilities. Settings, tray, live geometry, taskbar
-recovery, panic restore, and a real Explorer restart were manually checked on
-2026-11-11.
-Console-control recovery and a clean-profile installer check are still pending.
+recovery, panic and console recovery, and a real Explorer restart were manually
+checked on 2026-11-11. A clean-profile installer check is still pending.
 
 ## Taskbar Safety
 
@@ -234,7 +233,8 @@ Historical evidence does not automatically verify the integrated code.
 | 2026-11-11 | AppBar forced kill | A forced process kill while reserving space left the work area at `0,0,1920,976`. It stayed there through a 35-second poll. Running `--restore-taskbar` returned it to `0,0,1920,1080`, showed the taskbar, and removed the marker. The recovery command is required |
 | 2026-11-11 | Live taskbar toggle | With a 40-second `--restore-taskbar` watchdog, a config reload changed `hide_native_taskbar` from false to true and `IsWindowVisible(Shell_TrayWnd)` went from true to false. Changing it back restored visibility. The settings checkbox plus Apply repeated the same sequence. The log recorded `taskbar mode updated`, `native taskbar hidden`, and `native taskbar restored` |
 | 2026-11-11 | Hosted CI | GitHub Actions `CI` run 42866275074 on `adb2206` and run 42868103165 on `42421fc` both completed successfully on `windows-latest`. Runs 42878351738 on `189ef25`, 42884752869 on `f8ed473`, 42889880818 on `85e4067`, 42892342420 on `c2984b5`, 42902593790 on `fc65aa3`, 42904347913 on `73ebf42`, 42906568724 on `dfd88e8`, 42911029970 on `639f945`, 42913132229 on `5fbc691`, 42914769400 on `aa9b53d`, 42928421805 on `b77667e`, and 42930790694 on `6551041` completed both `gate` and `installer` jobs and uploaded the `Dockwind-installer` artifact |
-| 2026-11-11 | Release dry run | Manual `release.yml` dispatch run 42924851841 on `d61f871` resolved `0.2.0` from `Cargo.toml`, ran the full quality gate, built the installer, and uploaded the `Dockwind-0.2.0-setup` artifact (4,259,713 bytes). No GitHub Release was created. The tag publish path remains |
+| 2026-11-11 | Release dry run | Manual `release.yml` dispatch run 42924851841 on `d61f871` resolved `0.2.0` from `Cargo.toml`, ran the full quality gate, built the installer, and uploaded the `Dockwind-0.2.0-setup` artifact (4,259,713 bytes). No GitHub Release was created. The tag path was validated later |
+| 2026-11-11 | Release publish | Annotated tag `v0.2.0` on `a92e5b0` triggered release run 42932966632. The build job passed and published `Dockwind 0.2.0` at https://github.com/jshsinaga/dockwind/releases/tag/v0.2.0 with asset `Dockwind-0.2.0-setup.exe` (4,775,376 bytes) |
 | 2026-11-11 | Tray | Icon visible in the notification area. Right-click showed Settings, Reload config, Start with Windows, Restore taskbar, and Quit. The Settings item opened the settings window |
 | 2026-11-11 | UWP mapping | Settings opened an `ApplicationFrameHost` frame with a `Windows.UI.Core.CoreWindow` child owned by `SystemSettings.exe`. The debug log mapped frame PID 11608 to app PID 6764, path `SystemSettings.exe`, name `Settings`; the app list refreshed 5 items. The visual icon was not checked |
 | 2026-11-11 | Shutdown latency | Three release runs with `auto_hide = false` exited in 98 ms, 77 ms, and 77 ms after `Ctrl+Alt+Shift+Q` |
@@ -247,7 +247,6 @@ Historical evidence does not automatically verify the integrated code.
 Not verified on the current integrated code:
 
 - Clean-profile install and Start Menu shortcut creation. The upgrade, uninstall, and shortcut removal path passed.
-- The tag push publish step. The manual release dry run built and uploaded the installer.
 - Windows 11 behavior.
 - Mica or Acrylic.
 - Real multi-DPI desktop.
@@ -264,19 +263,16 @@ Order is a recommendation, not a commitment.
    config preservation. The first-run install with no Dockwind data, upgrade,
    launch, and uninstall path passed on 2026-11-11. See PRD P08 to P13 and
    `docs/RELEASE.md`.
-2. **Tag release publish.** Push a `vX.Y.Z` tag and confirm the GitHub Release
-   publish step. The manual release dry run already ran the gate and uploaded
-   the installer without publishing. See PRD P14 and `docs/RELEASE.md`.
-3. **Automatic geometry check.** Exercise a resolution change, a DPI change, and a
+2. **Automatic geometry check.** Exercise a resolution change, a DPI change, and a
    taskbar hide or restore. The dock polls the primary monitor every second and
    repositions itself. See PRD U02.
-4. **App-list polish.** Add tooltips and a clearer overflow affordance.
+3. **App-list polish.** Add tooltips and a clearer overflow affordance.
    Middle-click launch and horizontal scrolling are implemented. See PRD U03.
-5. **Windows 11 blur.** Exercise Mica and Acrylic on Windows 11 22H2 or newer.
+4. **Windows 11 blur.** Exercise Mica and Acrylic on Windows 11 22H2 or newer.
    See PRD U05.
-6. **Multi-DPI UI.** Exercise the running UI at 125%, 150%, and 200%. See PRD U07.
-7. **Settings polish.** Inline field validation.
-8. **Code signing.** The installer and binary are unsigned. Add signing only with
+5. **Multi-DPI UI.** Exercise the running UI at 125%, 150%, and 200%. See PRD U07.
+6. **Settings polish.** Inline field validation.
+7. **Code signing.** The installer and binary are unsigned. Add signing only with
    a certificate and a recorded decision.
 
 ## Known Limitations
@@ -300,7 +296,7 @@ section 9. The short version:
 - The running UI was exercised at 100% DPI only.
 - The installer is built and the first-run, 0.1.0 to 0.2.0 upgrade, install, and
   uninstall path passed. A clean Windows profile was not tested. The installer is
-  unsigned. The release dry run passed; the tag publish path has not run.
+  unsigned. Release `v0.2.0` is published with the installer asset.
 - A settings save preserves comments, ordering, and unknown keys for a valid
   file, but rewrites `pinned` entries. An invalid TOML file is not overwritten.
   The native window has message box errors, not inline field errors. A second

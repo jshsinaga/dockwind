@@ -122,8 +122,11 @@ uploaded the `Dockwind-installer` artifact.
 
 Release workflow run 42924851841 on `d61f871` was a manual dry run. It ran the
 full quality gate, built the installer, and uploaded `Dockwind-0.2.0-setup`
-(4,259,713 bytes). It created no GitHub Release. The tag push publish path has
-not run yet.
+(4,259,713 bytes). It created no GitHub Release.
+
+Tag `v0.2.0` on `a92e5b0` triggered run 42932966632. The build job passed and
+published [Dockwind 0.2.0](https://github.com/jshsinaga/dockwind/releases/tag/v0.2.0)
+with `Dockwind-0.2.0-setup.exe` (4,775,376 bytes).
 
 ## 5. Release Checklist
 
