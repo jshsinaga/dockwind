@@ -17,6 +17,23 @@ pub struct Appearance {
     pub blur: BlurMode,
     pub icon_size: u32,
     pub padding: u32,
+    #[serde(default)]
+    pub padding_top: Option<u32>,
+    #[serde(default)]
+    pub padding_bottom: Option<u32>,
+    #[serde(default)]
+    pub padding_left: Option<u32>,
+    #[serde(default)]
+    pub padding_right: Option<u32>,
+    pub border_color: String,
+    pub border_width: u32,
+    pub shadow: bool,
+    pub item_spacing: u32,
+    pub indicator_style: IndicatorStyle,
+    pub item_alignment: ItemAlignment,
+    pub alignment_anchor: AlignmentAnchor,
+    pub width_mode: WidthMode,
+    pub vertical_align: VerticalAlign,
     pub width: u32,
     pub height: u32,
     #[serde(alias = "margin_bottom")]
@@ -27,6 +44,17 @@ pub struct Appearance {
     pub opacity: u8,
 }
 
+impl Appearance {
+    pub fn effective_padding(&self) -> (u32, u32, u32, u32) {
+        (
+            self.padding_top.unwrap_or(self.padding),
+            self.padding_bottom.unwrap_or(self.padding),
+            self.padding_left.unwrap_or(self.padding),
+            self.padding_right.unwrap_or(self.padding),
+        )
+    }
+}
+
 impl Default for Appearance {
     fn default() -> Self {
         Self {
@@ -35,6 +63,19 @@ impl Default for Appearance {
             blur: BlurMode::None,
             icon_size: 40,
             padding: 8,
+            padding_top: None,
+            padding_bottom: None,
+            padding_left: None,
+            padding_right: None,
+            border_color: "#FFFFFF33".to_string(),
+            border_width: 1,
+            shadow: true,
+            item_spacing: 4,
+            indicator_style: IndicatorStyle::Line,
+            item_alignment: ItemAlignment::Center,
+            alignment_anchor: AlignmentAnchor::Dock,
+            width_mode: WidthMode::Manual,
+            vertical_align: VerticalAlign::Center,
             width: 560,
             height: 92,
             offset: 12,
@@ -42,6 +83,57 @@ impl Default for Appearance {
             opacity: 100,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum IndicatorStyle {
+    #[default]
+    Line,
+    Dot,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ItemAlignment {
+    #[default]
+    Center,
+    Left,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AlignmentAnchor {
+    #[default]
+    Dock,
+    Clock,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum WidthMode {
+    #[default]
+    Manual,
+    Auto,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum VerticalAlign {
+    #[default]
+    Center,
+    Top,
+    Bottom,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ClockAlignment {
+    #[default]
+    Right,
+    Center,
+    Left,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -61,6 +153,42 @@ pub enum BlurMode {
     Acrylic,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AnimationCurve {
+    #[default]
+    EaseOut,
+    EaseIn,
+    EaseInOut,
+    Linear,
+    Ease,
+    Bounce,
+}
+
+impl AnimationCurve {
+    pub fn apply(self, t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        match self {
+            Self::Linear => t,
+            Self::EaseIn => t * t * t,
+            Self::EaseOut => 1.0 - (1.0 - t).powi(3),
+            Self::EaseInOut => {
+                if t < 0.5 {
+                    4.0 * t * t * t
+                } else {
+                    1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
+                }
+            }
+            Self::Ease => t * t * (3.0 - 2.0 * t),
+            Self::Bounce => {
+                let c1 = 1.70158;
+                let c3 = c1 + 1.0;
+                1.0 + c3 * (t - 1.0).powi(3) + c1 * (t - 1.0).powi(2)
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Behavior {
@@ -68,7 +196,10 @@ pub struct Behavior {
     pub show_delay_ms: u64,
     pub hide_delay_ms: u64,
     pub animation_ms: u64,
+    pub animation_curve: AnimationCurve,
+    pub trigger_size: u32,
     pub reserve_space: bool,
+    pub reserve_offset: u32,
     pub hide_native_taskbar: bool,
     pub hide_in_fullscreen: bool,
     pub show_running_apps: bool,
@@ -82,7 +213,10 @@ impl Default for Behavior {
             show_delay_ms: 80,
             hide_delay_ms: 400,
             animation_ms: 180,
+            animation_curve: AnimationCurve::EaseOut,
+            trigger_size: 8,
             reserve_space: false,
+            reserve_offset: 0,
             hide_native_taskbar: false,
             hide_in_fullscreen: true,
             show_running_apps: true,
@@ -94,17 +228,39 @@ impl Default for Behavior {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Clock {
+    pub show: bool,
     pub time_format: String,
     pub date_format: String,
     pub locale: String,
+    pub line_gap: i32,
+    pub font_family: String,
+    pub font_color: Option<String>,
+    pub time_font_size: u32,
+    pub date_font_size: u32,
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub alignment: ClockAlignment,
+    pub vertical_align: VerticalAlign,
 }
 
 impl Default for Clock {
     fn default() -> Self {
         Self {
+            show: true,
             time_format: "%H:%M".to_string(),
             date_format: "%a, %d %b %Y".to_string(),
             locale: "en".to_string(),
+            line_gap: 0,
+            font_family: String::new(),
+            font_color: None,
+            time_font_size: 20,
+            date_font_size: 12,
+            bold: false,
+            italic: false,
+            underline: false,
+            alignment: ClockAlignment::Right,
+            vertical_align: VerticalAlign::Center,
         }
     }
 }

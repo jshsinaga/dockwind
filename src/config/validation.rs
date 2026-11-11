@@ -104,6 +104,82 @@ impl Config {
             self.appearance.background = defaults.appearance.background;
         }
 
+        if self.appearance.border_width > 20 {
+            warnings.push(format!(
+                "border_width {} is greater than 20; using {}",
+                self.appearance.border_width, defaults.appearance.border_width
+            ));
+            self.appearance.border_width = defaults.appearance.border_width;
+        }
+
+        if parse_rgba_hex(&self.appearance.border_color).is_none() {
+            warnings.push(format!(
+                "border_color '{}' is not #RRGGBB or #RRGGBBAA; using {}",
+                self.appearance.border_color, defaults.appearance.border_color
+            ));
+            self.appearance.border_color = defaults.appearance.border_color;
+        }
+
+        if self.appearance.item_spacing > 64 {
+            warnings.push(format!(
+                "item_spacing {} is greater than 64; using {}",
+                self.appearance.item_spacing, defaults.appearance.item_spacing
+            ));
+            self.appearance.item_spacing = defaults.appearance.item_spacing;
+        }
+
+        if !(1..=64).contains(&self.behavior.trigger_size) {
+            warnings.push(format!(
+                "trigger_size {} is outside 1..=64; using {}",
+                self.behavior.trigger_size, defaults.behavior.trigger_size
+            ));
+            self.behavior.trigger_size = defaults.behavior.trigger_size;
+        }
+
+        if self.behavior.reserve_offset > 120 {
+            warnings.push(format!(
+                "reserve_offset {} is greater than 120; using {}",
+                self.behavior.reserve_offset, defaults.behavior.reserve_offset
+            ));
+            self.behavior.reserve_offset = defaults.behavior.reserve_offset;
+        }
+
+        if !(-50..=50).contains(&self.clock.line_gap) {
+            warnings.push(format!(
+                "line_gap {} is outside -50..=50; using {}",
+                self.clock.line_gap, defaults.clock.line_gap
+            ));
+            self.clock.line_gap = defaults.clock.line_gap;
+        }
+
+        if !(8..=72).contains(&self.clock.time_font_size) {
+            warnings.push(format!(
+                "time_font_size {} is outside 8..=72; using {}",
+                self.clock.time_font_size, defaults.clock.time_font_size
+            ));
+            self.clock.time_font_size = defaults.clock.time_font_size;
+        }
+
+        if !(8..=48).contains(&self.clock.date_font_size) {
+            warnings.push(format!(
+                "date_font_size {} is outside 8..=48; using {}",
+                self.clock.date_font_size, defaults.clock.date_font_size
+            ));
+            self.clock.date_font_size = defaults.clock.date_font_size;
+        }
+
+        if let Some(color) = self.clock.font_color.clone() {
+            match parse_rgba_hex(&color) {
+                Some(_) => {}
+                None => {
+                    warnings.push(format!(
+                        "clock font_color '{color}' is not #RRGGBB or #RRGGBBAA; clearing"
+                    ));
+                    self.clock.font_color = None;
+                }
+            }
+        }
+
         if !valid_strftime(&self.clock.time_format) {
             warnings.push(format!(
                 "time_format '{}' is invalid; using {}",
@@ -261,6 +337,69 @@ mod tests {
         let loaded = config.sanitize();
         assert_eq!(loaded.config.clock.time_format, "%H:%M");
         assert_eq!(loaded.config.clock.date_format, "%a, %d %b %Y");
+        assert_eq!(loaded.warnings.len(), 2);
+    }
+
+    #[test]
+    fn invalid_border_and_item_spacing_fall_back_with_warnings() {
+        let mut config = Config::default();
+        config.appearance.border_width = 99;
+        config.appearance.border_color = "not-a-color".to_string();
+        config.appearance.item_spacing = 100;
+        let loaded = config.sanitize();
+        assert_eq!(
+            loaded.config.appearance.border_width,
+            Config::default().appearance.border_width
+        );
+        assert_eq!(
+            loaded.config.appearance.border_color,
+            Config::default().appearance.border_color
+        );
+        assert_eq!(
+            loaded.config.appearance.item_spacing,
+            Config::default().appearance.item_spacing
+        );
+        assert_eq!(loaded.warnings.len(), 3);
+    }
+
+    #[test]
+    fn invalid_clock_styling_falls_back_with_warnings() {
+        let mut config = Config::default();
+        config.clock.line_gap = -100;
+        config.clock.font_color = Some("invalid-hex".to_string());
+        config.clock.time_font_size = 100;
+        config.clock.date_font_size = 2;
+        let loaded = config.sanitize();
+        assert_eq!(
+            loaded.config.clock.line_gap,
+            Config::default().clock.line_gap
+        );
+        assert_eq!(loaded.config.clock.font_color, None);
+        assert_eq!(
+            loaded.config.clock.time_font_size,
+            Config::default().clock.time_font_size
+        );
+        assert_eq!(
+            loaded.config.clock.date_font_size,
+            Config::default().clock.date_font_size
+        );
+        assert_eq!(loaded.warnings.len(), 4);
+    }
+
+    #[test]
+    fn invalid_behavior_values_fall_back_with_warnings() {
+        let mut config = Config::default();
+        config.behavior.trigger_size = 0;
+        config.behavior.reserve_offset = 200;
+        let loaded = config.sanitize();
+        assert_eq!(
+            loaded.config.behavior.trigger_size,
+            Config::default().behavior.trigger_size
+        );
+        assert_eq!(
+            loaded.config.behavior.reserve_offset,
+            Config::default().behavior.reserve_offset
+        );
         assert_eq!(loaded.warnings.len(), 2);
     }
 }

@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     Bounds, ClickEvent, Context, Entity, MouseButton, MouseDownEvent, Pixels, Point, Render, Timer,
-    Window, div, prelude::*, px, rgba,
+    Window, div, prelude::*, px,
 };
 use tracing::{debug, error, info, warn};
 use windows::Win32::Foundation::RECT;
@@ -11,7 +11,7 @@ use super::app_item::render_app_item;
 use super::clock::ClockView;
 use super::theme::Theme;
 use crate::app::AppController;
-use crate::config::{Config, DockEdge};
+use crate::config::{BlurMode, Config, DockEdge};
 use crate::dock::{AutoHide, AutoHideInput, AutoHideSettings, DockItem};
 use crate::win::appbar::{AppBarEdge, AppBarHandle};
 use crate::win::menu::MenuAction;
@@ -127,7 +127,14 @@ impl DockView {
             let controller = controller.read(cx);
             (controller.config().clone(), controller.items().to_vec())
         };
+        let count_changed = self.items.len() != items.len();
         self.items = items;
+        if self.applied_config.appearance.width_mode == crate::config::WidthMode::Auto
+            && count_changed
+        {
+            let config = self.applied_config.clone();
+            self.apply_geometry(&config);
+        }
 
         if config == self.applied_config {
             cx.notify();
@@ -152,8 +159,22 @@ impl DockView {
             self.applied_config.appearance.height != config.appearance.height,
             self.applied_config.appearance.offset != config.appearance.offset,
             self.applied_config.appearance.orientation != config.appearance.orientation,
+            self.applied_config.appearance.width_mode != config.appearance.width_mode,
+            self.applied_config.appearance.icon_size != config.appearance.icon_size,
+            self.applied_config.appearance.item_spacing != config.appearance.item_spacing,
+            self.applied_config.appearance.padding != config.appearance.padding,
+            self.applied_config.appearance.padding_top != config.appearance.padding_top,
+            self.applied_config.appearance.padding_bottom != config.appearance.padding_bottom,
+            self.applied_config.appearance.padding_left != config.appearance.padding_left,
+            self.applied_config.appearance.padding_right != config.appearance.padding_right,
+            self.applied_config.appearance.corner_radius != config.appearance.corner_radius,
+            self.applied_config.appearance.border_width != config.appearance.border_width,
             self.applied_config.behavior.reserve_space != config.behavior.reserve_space,
+            self.applied_config.behavior.reserve_offset != config.behavior.reserve_offset,
+            self.applied_config.behavior.trigger_size != config.behavior.trigger_size,
             self.applied_config.behavior.hide_native_taskbar != config.behavior.hide_native_taskbar,
+            self.applied_config.clock.show != config.clock.show,
+            self.applied_config.clock.time_font_size != config.clock.time_font_size,
         ]
         .into_iter()
         .any(|changed| changed);
@@ -197,22 +218,43 @@ impl DockView {
     }
 
     fn apply_geometry_with_monitor(&mut self, config: &Config, monitor: &MonitorInfo) -> bool {
-        let content_size = gpui::size(
-            px(config.appearance.width as f32),
-            px(config.appearance.height as f32),
-        );
+        let width = if config.appearance.width_mode == crate::config::WidthMode::Auto {
+            let (_, _, left, right) = config.appearance.effective_padding();
+            let app_count = self.items.len().max(1) as u32;
+            let icon_total = app_count * (config.appearance.icon_size + 8);
+            let spacing_total = app_count.saturating_sub(1) * config.appearance.item_spacing;
+            let clock_width = if config.clock.show {
+                (config.clock.time_font_size * 7).max(130)
+            } else {
+                0u32
+            };
+            (left + right + icon_total + spacing_total + clock_width + 24).max(120)
+        } else {
+            config.appearance.width
+        };
+        let content_size = gpui::size(px(width as f32), px(config.appearance.height as f32));
         let bounds = win::monitors::dock_rect(
             monitor,
             content_size,
             config.appearance.offset as f32,
             config.appearance.orientation,
         );
-        let trigger = win::monitors::trigger_rect(monitor, config.appearance.orientation);
+        let trigger = win::monitors::trigger_rect(
+            monitor,
+            config.appearance.orientation,
+            config.behavior.trigger_size as f32,
+        );
 
         if let Err(error) = win::dwm::set_bounds(self.geometry.hwnd, bounds, monitor.scale_factor) {
             warn!(%error, "failed to apply the dock geometry");
             return false;
         }
+
+        let p_width = (f32::from(bounds.size.width) * monitor.scale_factor).round() as i32;
+        let p_height = (f32::from(bounds.size.height) * monitor.scale_factor).round() as i32;
+        let p_radius = (f32::from(self.theme.radius) * monitor.scale_factor).round() as i32;
+        let _ = win::dwm::set_window_shape(self.geometry.hwnd, 0, 0, p_width, p_height, p_radius);
+
         win::dwm::force_render(self.geometry.hwnd);
 
         self.geometry.bounds = bounds;
@@ -267,19 +309,27 @@ impl DockView {
         let top = (f32::from(monitor.bounds.origin.y) * scale).round() as i32;
         let bottom = (f32::from(monitor.bounds.origin.y + monitor.bounds.size.height) * scale)
             .round() as i32;
+        let extra_offset = config.behavior.reserve_offset as f32;
         match config.appearance.orientation {
-            DockEdge::Bottom => RECT {
-                left,
-                top: (f32::from(bounds.origin.y) * scale).round() as i32,
-                right,
-                bottom,
-            },
-            DockEdge::Top => RECT {
-                left,
-                top,
-                right,
-                bottom: (f32::from(bounds.origin.y + bounds.size.height) * scale).round() as i32,
-            },
+            DockEdge::Bottom => {
+                let reserved_top = (f32::from(bounds.origin.y) - extra_offset) * scale;
+                RECT {
+                    left,
+                    top: reserved_top.round() as i32,
+                    right,
+                    bottom,
+                }
+            }
+            DockEdge::Top => {
+                let reserved_bottom =
+                    (f32::from(bounds.origin.y + bounds.size.height) + extra_offset) * scale;
+                RECT {
+                    left,
+                    top,
+                    right,
+                    bottom: reserved_bottom.round() as i32,
+                }
+            }
         }
     }
 
@@ -452,10 +502,10 @@ impl Render for DockView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let now = self.start_time.elapsed();
         let progress = self.auto_hide.advance(now, self.auto_hide_settings);
-        let was_click_through = self.progress <= 0.001;
-        let is_click_through = progress <= 0.001;
-        if was_click_through != is_click_through {
-            self.set_click_through(is_click_through);
+        let was_hidden = self.progress <= 0.001;
+        let is_hidden = progress <= 0.001;
+        if was_hidden != is_hidden {
+            self.set_click_through(is_hidden);
         }
         self.progress = progress;
 
@@ -467,8 +517,41 @@ impl Render for DockView {
             DockEdge::Bottom => 1.0,
             DockEdge::Top => -1.0,
         };
-        let visual_progress = 1.0 - (1.0 - self.progress) * (1.0 - self.progress);
+        let visual_progress = self
+            .applied_config
+            .behavior
+            .animation_curve
+            .apply(self.progress);
         let offset = self.geometry.bounds.size.height * (1.0 - visual_progress) * direction;
+
+        if is_hidden {
+            let _ = win::dwm::set_window_shape(self.geometry.hwnd, 0, 0, 0, 0, 0);
+            let _ = win::dwm::apply_backdrop_to_hwnd(self.geometry.hwnd, BlurMode::None);
+        } else {
+            let y_offset = (f32::from(offset) * self.geometry.scale_factor).round() as i32;
+            let p_width = (f32::from(self.geometry.bounds.size.width) * self.geometry.scale_factor)
+                .round() as i32;
+            let p_height = (f32::from(self.geometry.bounds.size.height)
+                * self.geometry.scale_factor)
+                .round() as i32;
+            let p_radius =
+                (f32::from(self.theme.radius) * self.geometry.scale_factor).round() as i32;
+            let _ = win::dwm::set_window_shape(
+                self.geometry.hwnd,
+                0,
+                y_offset,
+                p_width,
+                p_height,
+                p_radius,
+            );
+            if was_hidden {
+                let _ = win::dwm::apply_backdrop_to_hwnd(
+                    self.geometry.hwnd,
+                    self.applied_config.appearance.blur,
+                );
+            }
+        }
+
         let icons = {
             let cache = &mut self.icons;
             self.items
@@ -477,60 +560,116 @@ impl Render for DockView {
                 .collect::<Vec<_>>()
         };
 
-        div().size_full().child(
-            div()
-                .id("dock-bar")
-                .relative()
-                .top(offset)
-                .size_full()
-                .rounded(self.theme.radius)
-                .bg(self.theme.background)
-                .border_1()
-                .border_color(rgba(0xFFFFFF33))
-                .flex()
-                .items_center()
-                .justify_between()
-                .p(self.theme.padding)
-                .text_color(self.theme.text)
-                .on_mouse_down(
-                    MouseButton::Right,
-                    cx.listener(|this, _event, _window, cx| this.on_context_menu(cx)),
-                )
-                .child(
-                    div()
-                        .id("dock-apps")
-                        .flex()
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .items_center()
-                        .gap_1()
-                        .overflow_x_scroll()
-                        .children(self.items.iter().zip(icons).enumerate().map(
-                            |(index, (item, icon))| {
-                                let on_click =
-                                    cx.listener(move |this, event: &ClickEvent, window, cx| {
-                                        this.on_item_click(index, event, window, cx);
-                                    });
-                                let on_middle = cx.listener(
-                                    move |this, _event: &MouseDownEvent, _window, cx| {
-                                        this.controller.update(cx, |controller, _| {
-                                            controller.launch_second_instance(index);
-                                        });
-                                    },
-                                );
-                                render_app_item(
-                                    item,
-                                    icon,
-                                    &self.theme,
-                                    self.icon_size,
-                                    on_click,
-                                    on_middle,
-                                )
-                            },
-                        )),
-                )
-                .child(self.clock.clone()),
-        )
+        let (pt, pb, pl, pr) = (
+            self.theme.padding_top,
+            self.theme.padding_bottom,
+            self.theme.padding_left,
+            self.theme.padding_right,
+        );
+
+        let mut dock_bar = div()
+            .id("dock-bar")
+            .relative()
+            .top(offset)
+            .size_full()
+            .rounded(self.theme.radius)
+            .bg(self.theme.background)
+            .border(self.theme.border_width)
+            .border_color(self.theme.border_color)
+            .flex()
+            .justify_between()
+            .pt(pt)
+            .pb(pb)
+            .pl(pl)
+            .pr(pr)
+            .text_color(self.theme.text)
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, _event, _window, cx| this.on_context_menu(cx)),
+            );
+
+        dock_bar = match self.theme.vertical_align {
+            crate::config::VerticalAlign::Center => dock_bar.items_center(),
+            crate::config::VerticalAlign::Top => dock_bar.items_start(),
+            crate::config::VerticalAlign::Bottom => dock_bar.items_end(),
+        };
+
+        if self.theme.shadow {
+            dock_bar = dock_bar.shadow_lg();
+        }
+
+        let mut apps_div = div()
+            .id("dock-apps")
+            .flex()
+            .flex_1()
+            .min_w(px(0.0))
+            .gap(self.theme.item_spacing)
+            .overflow_x_scroll();
+
+        apps_div = match self.theme.item_alignment {
+            crate::config::ItemAlignment::Center => apps_div.justify_center(),
+            crate::config::ItemAlignment::Left => apps_div.justify_start(),
+            crate::config::ItemAlignment::Right => apps_div.justify_end(),
+        };
+
+        apps_div = match self.theme.vertical_align {
+            crate::config::VerticalAlign::Center => apps_div.items_center(),
+            crate::config::VerticalAlign::Top => apps_div.items_start(),
+            crate::config::VerticalAlign::Bottom => apps_div.items_end(),
+        };
+
+        let show_clock = self.applied_config.clock.show;
+
+        let mut clock_container = div().flex().flex_col();
+        clock_container = match self.applied_config.clock.vertical_align {
+            crate::config::VerticalAlign::Center => clock_container.justify_center(),
+            crate::config::VerticalAlign::Top => clock_container.justify_start(),
+            crate::config::VerticalAlign::Bottom => clock_container.justify_end(),
+        };
+
+        let items_elements =
+            self.items
+                .iter()
+                .zip(icons)
+                .enumerate()
+                .map(|(index, (item, icon))| {
+                    let on_click = cx.listener(move |this, event: &ClickEvent, window, cx| {
+                        this.on_item_click(index, event, window, cx);
+                    });
+                    let on_middle =
+                        cx.listener(move |this, _event: &MouseDownEvent, _window, cx| {
+                            this.controller.update(cx, |controller, _| {
+                                controller.launch_second_instance(index);
+                            });
+                        });
+                    render_app_item(item, icon, &self.theme, self.icon_size, on_click, on_middle)
+                });
+
+        let apps_children = apps_div.children(items_elements);
+
+        let dock_bar = if show_clock {
+            match self.theme.alignment_anchor {
+                crate::config::AlignmentAnchor::Dock => {
+                    let absolute_clock = clock_container
+                        .absolute()
+                        .right(pr)
+                        .top_0()
+                        .bottom_0()
+                        .pt(pt)
+                        .pb(pb)
+                        .child(self.clock.clone());
+                    dock_bar.child(apps_children).child(absolute_clock)
+                }
+                crate::config::AlignmentAnchor::Clock => {
+                    let relative_clock = clock_container.h_full().child(self.clock.clone());
+                    dock_bar.child(apps_children).child(relative_clock)
+                }
+            }
+        } else {
+            dock_bar.child(apps_children)
+        };
+
+        div().size_full().child(dock_bar)
     }
 }
 

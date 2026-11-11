@@ -5,7 +5,10 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, value};
 
-use super::model::{BlurMode, Config, DockEdge, LoadedConfig};
+use super::model::{
+    AlignmentAnchor, AnimationCurve, BlurMode, ClockAlignment, Config, DockEdge, IndicatorStyle,
+    ItemAlignment, LoadedConfig, VerticalAlign, WidthMode,
+};
 
 pub const CONFIG_DIR_NAME: &str = "Dockwind";
 pub const CONFIG_FILE_NAME: &str = "config.toml";
@@ -174,6 +177,26 @@ fn update_document(document: &mut DocumentMut, config: &Config) {
     });
     appearance["icon_size"] = value(config.appearance.icon_size as i64);
     appearance["padding"] = value(config.appearance.padding as i64);
+    if let Some(val) = config.appearance.padding_top {
+        appearance["padding_top"] = value(val as i64);
+    } else {
+        appearance.remove("padding_top");
+    }
+    if let Some(val) = config.appearance.padding_bottom {
+        appearance["padding_bottom"] = value(val as i64);
+    } else {
+        appearance.remove("padding_bottom");
+    }
+    if let Some(val) = config.appearance.padding_left {
+        appearance["padding_left"] = value(val as i64);
+    } else {
+        appearance.remove("padding_left");
+    }
+    if let Some(val) = config.appearance.padding_right {
+        appearance["padding_right"] = value(val as i64);
+    } else {
+        appearance.remove("padding_right");
+    }
     appearance["width"] = value(config.appearance.width as i64);
     appearance["height"] = value(config.appearance.height as i64);
     appearance["offset"] = value(config.appearance.offset as i64);
@@ -182,6 +205,32 @@ fn update_document(document: &mut DocumentMut, config: &Config) {
         DockEdge::Top => "top",
     });
     appearance["opacity"] = value(config.appearance.opacity as i64);
+    appearance["border_color"] = value(config.appearance.border_color.as_str());
+    appearance["border_width"] = value(config.appearance.border_width as i64);
+    appearance["shadow"] = value(config.appearance.shadow);
+    appearance["item_spacing"] = value(config.appearance.item_spacing as i64);
+    appearance["indicator_style"] = value(match config.appearance.indicator_style {
+        IndicatorStyle::Line => "line",
+        IndicatorStyle::Dot => "dot",
+    });
+    appearance["item_alignment"] = value(match config.appearance.item_alignment {
+        ItemAlignment::Left => "left",
+        ItemAlignment::Center => "center",
+        ItemAlignment::Right => "right",
+    });
+    appearance["alignment_anchor"] = value(match config.appearance.alignment_anchor {
+        AlignmentAnchor::Dock => "dock",
+        AlignmentAnchor::Clock => "clock",
+    });
+    appearance["width_mode"] = value(match config.appearance.width_mode {
+        WidthMode::Manual => "manual",
+        WidthMode::Auto => "auto",
+    });
+    appearance["vertical_align"] = value(match config.appearance.vertical_align {
+        VerticalAlign::Center => "center",
+        VerticalAlign::Top => "top",
+        VerticalAlign::Bottom => "bottom",
+    });
     appearance.remove("margin_bottom");
 
     let behavior = table_mut(document, "behavior");
@@ -189,16 +238,49 @@ fn update_document(document: &mut DocumentMut, config: &Config) {
     behavior["show_delay_ms"] = value(config.behavior.show_delay_ms as i64);
     behavior["hide_delay_ms"] = value(config.behavior.hide_delay_ms as i64);
     behavior["animation_ms"] = value(config.behavior.animation_ms as i64);
+    behavior["animation_curve"] = value(match config.behavior.animation_curve {
+        AnimationCurve::EaseOut => "ease_out",
+        AnimationCurve::EaseIn => "ease_in",
+        AnimationCurve::EaseInOut => "ease_in_out",
+        AnimationCurve::Linear => "linear",
+        AnimationCurve::Ease => "ease",
+        AnimationCurve::Bounce => "bounce",
+    });
+    behavior["trigger_size"] = value(config.behavior.trigger_size as i64);
     behavior["reserve_space"] = value(config.behavior.reserve_space);
+    behavior["reserve_offset"] = value(config.behavior.reserve_offset as i64);
     behavior["hide_native_taskbar"] = value(config.behavior.hide_native_taskbar);
     behavior["hide_in_fullscreen"] = value(config.behavior.hide_in_fullscreen);
     behavior["show_running_apps"] = value(config.behavior.show_running_apps);
     behavior["quit_hotkey"] = value(config.behavior.quit_hotkey.as_str());
 
     let clock = table_mut(document, "clock");
+    clock["show"] = value(config.clock.show);
     clock["time_format"] = value(config.clock.time_format.as_str());
     clock["date_format"] = value(config.clock.date_format.as_str());
     clock["locale"] = value(config.clock.locale.as_str());
+    clock["line_gap"] = value(config.clock.line_gap as i64);
+    clock["font_family"] = value(config.clock.font_family.as_str());
+    if let Some(ref color) = config.clock.font_color {
+        clock["font_color"] = value(color.as_str());
+    } else {
+        clock.remove("font_color");
+    }
+    clock["bold"] = value(config.clock.bold);
+    clock["italic"] = value(config.clock.italic);
+    clock["underline"] = value(config.clock.underline);
+    clock["time_font_size"] = value(config.clock.time_font_size as i64);
+    clock["date_font_size"] = value(config.clock.date_font_size as i64);
+    clock["alignment"] = value(match config.clock.alignment {
+        ClockAlignment::Right => "right",
+        ClockAlignment::Center => "center",
+        ClockAlignment::Left => "left",
+    });
+    clock["vertical_align"] = value(match config.clock.vertical_align {
+        VerticalAlign::Center => "center",
+        VerticalAlign::Top => "top",
+        VerticalAlign::Bottom => "bottom",
+    });
 
     let mut pinned = ArrayOfTables::new();
     for app in &config.pinned {
@@ -378,5 +460,88 @@ value = 7
 
         let loaded = Config::load_existing(&path).expect("reload saved config");
         assert_eq!(loaded.config, saved.config);
+    }
+
+    #[test]
+    fn save_atomic_preserving_writes_all_appearance_and_clock_fields() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("config.toml");
+        let mut config = Config::default();
+        config.appearance.padding_top = Some(14);
+        config.appearance.padding_bottom = Some(16);
+        config.appearance.padding_left = Some(18);
+        config.appearance.padding_right = Some(20);
+        config.appearance.border_color = "#123456".to_string();
+        config.appearance.border_width = 3;
+        config.appearance.shadow = true;
+        config.appearance.item_spacing = 12;
+        config.appearance.indicator_style = IndicatorStyle::Dot;
+        config.appearance.item_alignment = ItemAlignment::Right;
+        config.appearance.alignment_anchor = AlignmentAnchor::Dock;
+        config.appearance.width_mode = WidthMode::Auto;
+        config.appearance.vertical_align = VerticalAlign::Top;
+
+        config.behavior.animation_curve = AnimationCurve::Bounce;
+        config.behavior.trigger_size = 16;
+        config.behavior.reserve_offset = 24;
+
+        config.clock.show = true;
+        config.clock.line_gap = -5;
+        config.clock.font_family = "Cascadia Code".to_string();
+        config.clock.font_color = Some("#ABCDEF".to_string());
+        config.clock.bold = true;
+        config.clock.italic = true;
+        config.clock.underline = true;
+        config.clock.time_font_size = 28;
+        config.clock.date_font_size = 14;
+        config.clock.alignment = ClockAlignment::Center;
+        config.clock.vertical_align = VerticalAlign::Bottom;
+
+        config
+            .save_atomic_preserving(&path)
+            .expect("save preserved");
+
+        let loaded = Config::load_existing(&path).expect("reload saved");
+        assert_eq!(loaded.config.appearance.padding_top, Some(14));
+        assert_eq!(loaded.config.appearance.padding_bottom, Some(16));
+        assert_eq!(loaded.config.appearance.padding_left, Some(18));
+        assert_eq!(loaded.config.appearance.padding_right, Some(20));
+        assert_eq!(loaded.config.appearance.border_color, "#123456");
+        assert_eq!(loaded.config.appearance.border_width, 3);
+        assert!(loaded.config.appearance.shadow);
+        assert_eq!(loaded.config.appearance.item_spacing, 12);
+        assert_eq!(
+            loaded.config.appearance.indicator_style,
+            IndicatorStyle::Dot
+        );
+        assert_eq!(
+            loaded.config.appearance.item_alignment,
+            ItemAlignment::Right
+        );
+        assert_eq!(
+            loaded.config.appearance.alignment_anchor,
+            AlignmentAnchor::Dock
+        );
+        assert_eq!(loaded.config.appearance.width_mode, WidthMode::Auto);
+        assert_eq!(loaded.config.appearance.vertical_align, VerticalAlign::Top);
+
+        assert_eq!(
+            loaded.config.behavior.animation_curve,
+            AnimationCurve::Bounce
+        );
+        assert_eq!(loaded.config.behavior.trigger_size, 16);
+        assert_eq!(loaded.config.behavior.reserve_offset, 24);
+
+        assert!(loaded.config.clock.show);
+        assert_eq!(loaded.config.clock.line_gap, -5);
+        assert_eq!(loaded.config.clock.font_family, "Cascadia Code");
+        assert_eq!(loaded.config.clock.font_color, Some("#ABCDEF".to_string()));
+        assert!(loaded.config.clock.bold);
+        assert!(loaded.config.clock.italic);
+        assert!(loaded.config.clock.underline);
+        assert_eq!(loaded.config.clock.time_font_size, 28);
+        assert_eq!(loaded.config.clock.date_font_size, 14);
+        assert_eq!(loaded.config.clock.alignment, ClockAlignment::Center);
+        assert_eq!(loaded.config.clock.vertical_align, VerticalAlign::Bottom);
     }
 }

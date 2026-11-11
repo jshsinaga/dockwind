@@ -44,8 +44,21 @@ pub fn render_app_item(
             .into_any_element(),
     };
 
+    let indicator_element = match theme.indicator_style {
+        crate::config::IndicatorStyle::Line => div()
+            .h(px(3.0))
+            .w(px(18.0))
+            .rounded_full()
+            .bg(indicator.unwrap_or_else(|| rgba(0x00000000))),
+        crate::config::IndicatorStyle::Dot => div()
+            .size(px(5.0))
+            .rounded_full()
+            .bg(indicator.unwrap_or_else(|| rgba(0x00000000))),
+    };
+
     div()
         .id(SharedString::from(item.key.to_string_lossy().to_string()))
+        .relative()
         .flex()
         .flex_col()
         .items_center()
@@ -54,15 +67,9 @@ pub fn render_app_item(
         .p(px(4.0))
         .rounded(px(8.0))
         .cursor_pointer()
-        .hover(|style| style.bg(rgba(0xFFFFFF14)))
+        .hover(|style| style.bg(rgba(0xFFFFFF18)).top(px(-2.0)))
         .on_click(on_click)
         .on_mouse_down(MouseButton::Middle, on_middle_click)
         .child(icon)
-        .child(
-            div()
-                .h(px(3.0))
-                .w(px(18.0))
-                .rounded_full()
-                .bg(indicator.unwrap_or_else(|| rgba(0x00000000))),
-        )
+        .child(indicator_element)
 }

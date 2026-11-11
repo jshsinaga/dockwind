@@ -1,7 +1,10 @@
 use anyhow::{Result, anyhow};
 use gpui::{Pixels, Rgba, px, rgba};
 
-use crate::config::{Appearance, parse_rgba_hex};
+use crate::config::{
+    AlignmentAnchor, Appearance, BlurMode, IndicatorStyle, ItemAlignment, VerticalAlign, WidthMode,
+    parse_rgba_hex,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Theme {
@@ -10,7 +13,19 @@ pub struct Theme {
     pub running_indicator: Rgba,
     pub active_indicator: Rgba,
     pub radius: Pixels,
-    pub padding: Pixels,
+    pub padding_top: Pixels,
+    pub padding_bottom: Pixels,
+    pub padding_left: Pixels,
+    pub padding_right: Pixels,
+    pub border_color: Rgba,
+    pub border_width: Pixels,
+    pub shadow: bool,
+    pub item_spacing: Pixels,
+    pub indicator_style: IndicatorStyle,
+    pub item_alignment: ItemAlignment,
+    pub alignment_anchor: AlignmentAnchor,
+    pub width_mode: WidthMode,
+    pub vertical_align: VerticalAlign,
 }
 
 impl Theme {
@@ -21,9 +36,17 @@ impl Theme {
                 appearance.background
             )
         })?;
-        let alpha = ((color[3] as f32 * appearance.opacity as f32) / 100.0)
+        let (pt, pb, pl, pr) = appearance.effective_padding();
+        let border_bytes =
+            parse_rgba_hex(&appearance.border_color).unwrap_or([0xFF, 0xFF, 0xFF, 0x33]);
+        let border_color = rgba(u32::from_be_bytes(border_bytes));
+
+        let mut alpha = ((color[3] as f32 * appearance.opacity as f32) / 100.0)
             .round()
             .clamp(0.0, 255.0) as u8;
+        if appearance.blur != BlurMode::None && alpha > 200 {
+            alpha = (alpha as f32 * 0.75).round() as u8;
+        }
         let background = rgba(u32::from_be_bytes([color[0], color[1], color[2], alpha]));
         let text = if white_has_better_contrast([color[0], color[1], color[2]]) {
             rgba(0xFFFFFFFF)
@@ -37,7 +60,19 @@ impl Theme {
             running_indicator: Rgba { a: 0.45, ..text },
             active_indicator: text,
             radius: px(appearance.corner_radius as f32),
-            padding: px(appearance.padding as f32),
+            padding_top: px(pt as f32),
+            padding_bottom: px(pb as f32),
+            padding_left: px(pl as f32),
+            padding_right: px(pr as f32),
+            border_color,
+            border_width: px(appearance.border_width as f32),
+            shadow: appearance.shadow,
+            item_spacing: px(appearance.item_spacing as f32),
+            indicator_style: appearance.indicator_style,
+            item_alignment: appearance.item_alignment,
+            alignment_anchor: appearance.alignment_anchor,
+            width_mode: appearance.width_mode,
+            vertical_align: appearance.vertical_align,
         })
     }
 }
@@ -106,7 +141,8 @@ mod tests {
         let theme = Theme::from_config(&appearance).expect("theme");
         assert_eq!(theme.background, rgba(0xFF000080));
         assert_eq!(theme.radius, px(24.0));
-        assert_eq!(theme.padding, px(10.0));
+        assert_eq!(theme.padding_top, px(10.0));
+        assert_eq!(theme.padding_bottom, px(10.0));
         assert_eq!(theme.running_indicator.a, 0.45);
     }
 

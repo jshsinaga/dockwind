@@ -35,11 +35,23 @@ corner_radius = 16
 blur = "none"
 icon_size = 40
 padding = 8
+padding_top = 8
+padding_bottom = 8
+padding_left = 12
+padding_right = 12
 width = 560
 height = 92
 offset = 12
 orientation = "bottom"
 opacity = 100
+border_color = "#FFFFFF33"
+border_width = 1
+shadow = false
+item_spacing = 8
+indicator_style = "line"
+item_alignment = "center"
+width_mode = "manual"
+vertical_align = "center"
 
 [behavior]
 auto_hide = true
@@ -56,6 +68,13 @@ quit_hotkey = "Ctrl+Alt+Shift+Q"
 time_format = "%H:%M"
 date_format = "%a, %d %b %Y"
 locale = "en"
+line_gap = -2
+font_family = ""
+font_color = "#CDD6F4"
+bold = false
+italic = false
+underline = false
+alignment = "right"
 
 [[pinned]]
 name = "Terminal"
@@ -81,11 +100,24 @@ duplicate item.
 | `blur` | enum | `none` | `none`, `mica`, or `acrylic` | Live |
 | `icon_size` | integer | 40 | 16 to 128, and no more than `height - 16` | Live |
 | `padding` | integer | 8 | Fits in `height` with `icon_size`; checked arithmetic | Live |
+| `padding_top` | integer (optional) | None | 0 to 64; overrides `padding` for top | Live |
+| `padding_bottom` | integer (optional) | None | 0 to 64; overrides `padding` for bottom | Live |
+| `padding_left` | integer (optional) | None | 0 to 64; overrides `padding` for left | Live |
+| `padding_right` | integer (optional) | None | 0 to 64; overrides `padding` for right | Live |
 | `width` | integer | 560 | 200 to 4096 | Live |
 | `height` | integer | 92 | 48 to 400 | Live |
 | `offset` | integer | 12 | 0 to 512. Alias `margin_bottom` | Live |
 | `orientation` | enum | `bottom` | `bottom` or `top` | Live |
 | `opacity` | integer | 100 | 10 to 100 | Live |
+| `border_color` | string | `#FFFFFF33` | `#RRGGBB` or `#RRGGBBAA` | Live |
+| `border_width` | integer | 1 | 0 to 20 | Live |
+| `shadow` | bool | false | None | Live |
+| `item_spacing` | integer | 8 | 0 to 64 | Live |
+| `indicator_style` | enum | `line` | `line` or `dot` | Live |
+| `item_alignment` | enum | `center` | `center`, `left`, or `right` | Live |
+| `alignment_anchor` | enum | `dock` | `dock` or `clock` | Live |
+| `width_mode` | enum | `manual` | `manual` or `auto` | Live |
+| `vertical_align` | enum | `center` | `center`, `top`, or `bottom` | Live |
 
 `background` alpha is written in the color. `opacity` is a percentage multiplier
 on that alpha. At `opacity = 100`, the background is exactly the written value. At
@@ -98,15 +130,27 @@ or by editing the file repositions and resizes the dock without a restart.
 auto-hide trigger to the top edge. `orientation = "bottom"` is the default.
 
 `padding` uses checked arithmetic. If `padding * 2 + icon_size` overflows `u32`,
-Dockwind replaces `padding` with 8 and logs a warning. It is then capped so the
-content fits inside `height`.
+Dockwind replaces `padding` with 8 and logs a warning. Per-side padding fields
+(`padding_top`, `padding_bottom`, `padding_left`, `padding_right`) take precedence
+over `padding` when specified.
+
+`width_mode = "auto"` automatically calculates dock width based on item count, icon
+size, spacing, padding, and clock element width. `width_mode = "manual"` uses the
+fixed `width` value.
+
+`indicator_style = "dot"` renders a circular status indicator under running/active apps;
+`indicator_style = "line"` renders a rounded pill line indicator.
+
+`vertical_align` controls vertical placement of items (`center`, `top`, `bottom`) within
+the dock frame.
+
+`blur = "acrylic"` and `blur = "mica"` use `SetWindowCompositionAttribute` on Windows 10
+and DWM system backdrops (`DwmExtendFrameIntoClientArea` + `DWMWA_SYSTEMBACKDROP_TYPE`)
+on Windows 11 build 22621 or newer. On unsupported platforms, Dockwind logs that the
+backdrop is unavailable and keeps the transparent surface.
 
 `corner_radius` is replaced with `min(default, max_radius)` when it exceeds the
 cap. The cap is half of `icon_size + 2 * padding`.
-
-`blur = "mica"` and `blur = "acrylic"` need Windows 11 build 22621 or newer. On an
-older build, Dockwind logs that the backdrop is unavailable and keeps the
-transparent surface. This is an explicit, logged degradation.
 
 ### 3.2 `[behavior]`
 
@@ -116,23 +160,30 @@ transparent surface. This is an explicit, logged degradation.
 | `show_delay_ms` | integer | 80 | None | Live |
 | `hide_delay_ms` | integer | 400 | None | Live |
 | `animation_ms` | integer | 180 | None. Zero means an instant step | Live |
+| `animation_curve` | enum | `ease_out` | `ease_out`, `ease_in`, `ease_in_out`, `linear`, `ease`, or `bounce` | Live |
+| `trigger_size` | integer | 8 | 1 to 64 | Live |
 | `reserve_space` | bool | false | None | Live |
+| `reserve_offset` | integer | 0 | 0 to 120 | Live |
 | `hide_native_taskbar` | bool | false | None | Live |
 | `hide_in_fullscreen` | bool | true | None | Live |
 | `show_running_apps` | bool | true | None | Live |
 | `quit_hotkey` | string | `Ctrl+Alt+Shift+Q` | Parsed at startup and by the settings window | Startup only |
 
 `auto_hide = false` keeps the dock permanently visible. The settings window shows
-this as the unchecked "Auto-hide when not used" box.
+this as the unchecked "Auto-hide when not used" box. `animation_curve` selects the
+transition easing curve for auto-hide slide animations (`ease_out`, `ease_in`,
+`ease_in_out`, `linear`, `ease`, `bounce`). `trigger_size` sets the hover activation
+zone height along the screen edge in pixels (1 - 64 px).
 
 `show_running_apps = false` hides running apps that are not pinned. Pinned apps
 still show whether they are running.
 
 `reserve_space = true` registers an AppBar reservation for the dock strip. It
-positions the reservation to match the dock edge and dimensions. The reservation
-is created and removed live. The reserved rect is removed on shutdown and on
-disabling the field. A forced process kill can leave the work area reserved until
-`--restore-taskbar` runs.
+positions the reservation to match the dock edge and dimensions. `reserve_offset`
+adds an optional gap in pixels (0 - 120 px) between the dock container boundary
+and the reserved desktop work area. The reservation is created and removed live.
+The reserved rect is removed on shutdown and on disabling the field. A forced process
+kill can leave the work area reserved until `--restore-taskbar` runs.
 
 `hide_native_taskbar` is applied live. Enabling it installs the panic hook,
 console handler, and taskbar watcher before hiding. Disabling it restores the
@@ -153,12 +204,29 @@ shows a restart notice.
 
 | Field | Type | Default | Validation | Reload |
 |---|---|---|---|---|
+| `show` | bool | true | None | Live |
 | `time_format` | string | `%H:%M` | Valid `chrono` strftime pattern | Live |
 | `date_format` | string | `%a, %d %b %Y` | Valid `chrono` strftime pattern | Live |
 | `locale` | string | `en` | None | No effect |
+| `line_gap` | integer | -2 | -50 to 50 | Live |
+| `font_family` | string | `""` | None | Live |
+| `font_color` | string (optional) | None | `#RRGGBB` or `#RRGGBBAA` | Live |
+| `time_font_size` | integer | 20 | 8 to 72 | Live |
+| `date_font_size` | integer | 12 | 8 to 48 | Live |
+| `bold` | bool | false | None | Live |
+| `italic` | bool | false | None | Live |
+| `underline` | bool | false | None | Live |
+| `alignment` | enum | `right` | `right`, `center`, or `left` | Live |
+| `vertical_align` | enum | `center` | `center`, `top`, or `bottom` | Live |
 
 Invalid time or date formats are replaced with defaults and logged. The clock
 uses the process locale. `locale` is accepted for compatibility but is unused.
+`line_gap` sets the spacing in pixels between the time and date lines; negative
+values allow the lines to sit closer together or overlap while preserving symmetric
+vertical centering. `time_font_size` and `date_font_size` configure text sizes in
+pixels. `font_family`, `font_color`, `bold`, `italic`, and `underline` configure
+typography. `alignment` controls horizontal text alignment (`right`, `center`, `left`).
+`vertical_align` controls vertical placement inside the dock container (`center`, `top`, `bottom`).
 
 ### 3.4 `[[pinned]]`
 
@@ -195,9 +263,18 @@ name as the display name and writes an empty argument list.
 10. `quit_hotkey` must parse at startup. A bad value is a startup error. If the
     taskbar is not hidden, Dockwind logs a warning and runs without a global quit
     hotkey. The settings window rejects an invalid hotkey with a message.
-11. A TOML type error is a parse failure. Startup uses defaults with a warning.
+11. `border_width` must be in `0..=20`. Otherwise it becomes 1 with a warning.
+12. `border_color` must be `#RRGGBB` or `#RRGGBBAA`. Otherwise it becomes `#FFFFFF33` with a warning.
+13. `item_spacing` must be in `0..=64`. Otherwise it becomes 8 with a warning.
+14. `line_gap` must be in `-50..=50`. Otherwise it becomes -2 with a warning.
+15. `font_color`, when set, must be `#RRGGBB` or `#RRGGBBAA`. Otherwise it is cleared to None with a warning.
+16. `time_font_size` must be in `8..=72`. Otherwise it becomes 20 with a warning.
+17. `date_font_size` must be in `8..=48`. Otherwise it becomes 12 with a warning.
+18. `trigger_size` must be in `1..=64`. Otherwise it becomes 8 with a warning.
+19. `reserve_offset` must be in `0..=120`. Otherwise it becomes 0 with a warning.
+20. A TOML type error is a parse failure. Startup uses defaults with a warning.
     Reload keeps the last valid config with an error.
-12. Unknown keys are ignored. They are not preserved by a rewrite.
+21. Unknown keys are ignored. They are not preserved by a rewrite.
 
 Validation never panics. The application must not crash because of a bad config
 value.

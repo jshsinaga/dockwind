@@ -78,7 +78,7 @@ fn icon_from_window(hwnd: HWND) -> Option<Arc<RenderImage>> {
     None
 }
 
-fn icon_from_path(path: &Path) -> Option<Arc<RenderImage>> {
+pub fn icon_from_path(path: &Path) -> Option<Arc<RenderImage>> {
     let path = HSTRING::from(path.as_os_str());
     let mut info = SHFILEINFOW::default();
     // SAFETY: the path is a live null-terminated HSTRING and `info` has the size

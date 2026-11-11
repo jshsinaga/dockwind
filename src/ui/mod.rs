@@ -43,8 +43,22 @@ pub fn open_dock_window(
 ) -> Result<()> {
     let monitor =
         win::monitors::MonitorInfo::primary().context("failed to read the primary monitor")?;
+    let initial_width = if config.appearance.width_mode == crate::config::WidthMode::Auto {
+        let (_, _, left, right) = config.appearance.effective_padding();
+        let app_count = controller.read(cx).items().len().max(1) as u32;
+        let icon_total = app_count * (config.appearance.icon_size + 8);
+        let spacing_total = app_count.saturating_sub(1) * config.appearance.item_spacing;
+        let clock_width = if config.clock.show {
+            (config.clock.time_font_size * 7).max(130)
+        } else {
+            0u32
+        };
+        (left + right + icon_total + spacing_total + clock_width + 24).max(120)
+    } else {
+        config.appearance.width
+    };
     let content_size = size(
-        px(config.appearance.width as f32),
+        px(initial_width as f32),
         px(config.appearance.height as f32),
     );
     let bounds = win::monitors::dock_rect(
@@ -53,7 +67,11 @@ pub fn open_dock_window(
         config.appearance.offset as f32,
         config.appearance.orientation,
     );
-    let trigger = win::monitors::trigger_rect(&monitor, config.appearance.orientation);
+    let trigger = win::monitors::trigger_rect(
+        &monitor,
+        config.appearance.orientation,
+        config.behavior.trigger_size as f32,
+    );
     let scale_factor = monitor.scale_factor;
     let theme = Theme::from_config(&config.appearance).context("failed to build the dock theme")?;
     let blur = config.appearance.blur;
@@ -87,6 +105,10 @@ pub fn open_dock_window(
                     let hwnd = win::dwm::window_hwnd(window)?;
                     hwnd_slot.set(hwnd);
                     win::dwm::set_bounds(hwnd, bounds, scale_factor)?;
+                    let p_width = (f32::from(bounds.size.width) * scale_factor).round() as i32;
+                    let p_height = (f32::from(bounds.size.height) * scale_factor).round() as i32;
+                    let p_radius = (f32::from(theme.radius) * scale_factor).round() as i32;
+                    let _ = win::dwm::set_window_shape(hwnd, 0, 0, p_width, p_height, p_radius);
                     if let Err(error) = win::dwm::apply_backdrop(window, blur) {
                         warn!(%error, "backdrop configuration failed; keeping transparent");
                     }

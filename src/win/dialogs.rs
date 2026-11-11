@@ -1,5 +1,4 @@
-use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 use windows::Win32::Foundation::{COLORREF, HWND};
@@ -14,67 +13,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{PCWSTR, w};
 
 use crate::config::parse_rgba_hex;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InstalledApp {
-    pub name: String,
-    pub path: PathBuf,
-}
-
-pub fn scan_installed_apps() -> Vec<InstalledApp> {
-    let mut search_directories = Vec::new();
-    if let Some(app_data) = dirs::data_dir() {
-        search_directories.push(app_data.join(r"Microsoft\Windows\Start Menu\Programs"));
-    }
-    let program_data = std::env::var_os("ProgramData")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"));
-    search_directories.push(program_data.join(r"Microsoft\Windows\Start Menu\Programs"));
-
-    let mut apps = Vec::new();
-    for directory in search_directories {
-        collect_shortcuts_recursive(&directory, &mut apps);
-    }
-
-    let mut seen_names = HashSet::new();
-    apps.retain(|app| {
-        let lower = app.name.to_lowercase();
-        if lower.contains("uninstall")
-            || lower.contains("help")
-            || lower.contains("readme")
-            || lower.contains("documentation")
-            || lower.contains("website")
-            || lower.contains("web site")
-            || lower.contains("manual")
-        {
-            return false;
-        }
-        seen_names.insert(lower)
-    });
-
-    apps.sort_by_key(|a| a.name.to_lowercase());
-    apps
-}
-
-fn collect_shortcuts_recursive(directory: &Path, apps: &mut Vec<InstalledApp>) {
-    let Ok(entries) = std::fs::read_dir(directory) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_shortcuts_recursive(&path, apps);
-        } else if let Some(extension) = path.extension()
-            && extension.eq_ignore_ascii_case("lnk")
-            && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
-        {
-            let name = stem.trim().to_string();
-            if !name.is_empty() {
-                apps.push(InstalledApp { name, path });
-            }
-        }
-    }
-}
 
 pub fn pick_color_async(
     initial_hex: String,
@@ -202,12 +140,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_scan_installed_apps_returns_list() {
-        let apps = scan_installed_apps();
-        assert!(!apps.is_empty());
-        for app in &apps {
-            assert!(!app.name.is_empty());
-            assert!(app.path.exists());
-        }
+    fn test_pick_color_initial_hex_parsing() {
+        let parsed = parse_rgba_hex("#1E1E2ECC");
+        assert_eq!(parsed, Some([0x1E, 0x1E, 0x2E, 0xCC]));
     }
 }
