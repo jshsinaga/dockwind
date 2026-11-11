@@ -19,7 +19,7 @@ work, and dated evidence. It does not repeat the architecture. Read
 | Branch | `main` |
 | Source layout | Target layout integrated |
 | Independent review | Cleared on 2026-11-10. No new blockers |
-| Tests | 92 tests passed in the full gate on 2026-11-11 |
+| Tests | 94 tests passed in the full gate on 2026-11-11 |
 | Clippy | `cargo clippy --all-targets --locked -- -D warnings` passed in the final full gate |
 | Intermediate gate | Historical: 59 tests passed before the lifecycle fixes. Superseded by the final gate |
 | Release binary | `target\release\dockwind.exe` |
@@ -236,8 +236,9 @@ Historical evidence does not automatically verify the integrated code.
 | 2026-11-11 | Hosted CI | GitHub Actions `CI` run 42866275074 on `adb2206` and run 42868103165 on `42421fc` both completed successfully on `windows-latest`. Runs 42878351738 on `189ef25`, 42884752869 on `f8ed473`, 42889880818 on `85e4067`, 42892342420 on `c2984b5`, 42902593790 on `fc65aa3`, 42904347913 on `73ebf42`, 42906568724 on `dfd88e8`, 42911029970 on `639f945`, 42913132229 on `5fbc691`, and 42914769400 on `aa9b53d` completed both `gate` and `installer` jobs and uploaded the `Dockwind-installer` artifact |
 | 2026-11-11 | Release dry run | Manual `release.yml` dispatch run 42924851841 on `d61f871` resolved `0.2.0` from `Cargo.toml`, ran the full quality gate, built the installer, and uploaded the `Dockwind-0.2.0-setup` artifact (4,259,713 bytes). No GitHub Release was created. The tag publish path remains |
 | 2026-11-11 | Tray | Icon visible in the notification area. Right-click showed Settings, Reload config, Start with Windows, Restore taskbar, and Quit. The Settings item opened the settings window |
+| 2026-11-11 | UWP mapping | Settings opened an `ApplicationFrameHost` frame with a `Windows.UI.Core.CoreWindow` child owned by `SystemSettings.exe`. The debug log mapped frame PID 11608 to app PID 6764, path `SystemSettings.exe`, name `Settings`; the app list refreshed 5 items. The visual icon was not checked |
 | 2026-11-11 | Shutdown latency | Three release runs with `auto_hide = false` exited in 98 ms, 77 ms, and 77 ms after `Ctrl+Alt+Shift+Q` |
-| 2026-11-11 | Full gate | `scripts/check.ps1` passed on the current source: fmt, check, clippy with `-D warnings`, **92 tests**, release build, link parser self-test (16 cases), and 30 Markdown links in 12 files |
+| 2026-11-11 | Full gate | `scripts/check.ps1` passed on the current source: fmt, check, clippy with `-D warnings`, **94 tests**, release build, link parser self-test (16 cases), and 33 Markdown links in 13 files |
 | 2026-11-11 | Installer | `installer/dockwind.iss`, `scripts/build-installer.ps1`, and `scripts/bump-version.ps1` produced the final `dist\Dockwind-0.2.0-setup.exe` with Inno Setup 6.7.3. Silent 0.1.0 install and 0.2.0 upgrade exited 0. The installed settings title read `Dockwind Settings 0.2.0`. The Start Menu shortcut existed after install and was removed by silent uninstall. The install directory was removed and the config was preserved. The installer was rebuilt after the TOML preservation, settings-mutex, and marker-test changes; silent install and uninstall exited 0. A first-run install with no existing Dockwind config started the app, created the default config, and added the tray window; uninstall kept the config. A clean Windows profile is still untested |
 | 2026-11-11 | Build resources | `build.rs` injects the package version into the manifest and embeds the manifest and icon. The release build passed |
 | 2026-11-10 | Build warning | Baseline `proc-macro-error2` v2.0.1 warning remains |
@@ -271,13 +272,11 @@ Order is a recommendation, not a commitment.
    repositions itself. See PRD U02.
 4. **App-list polish.** Add tooltips and a clearer overflow affordance.
    Middle-click launch and horizontal scrolling are implemented. See PRD U03.
-5. **UWP identity.** Map `ApplicationFrameHost.exe` windows to the real app, or
-   document a supported alternative. See PRD U04.
-6. **Windows 11 blur.** Exercise Mica and Acrylic on Windows 11 22H2 or newer.
+5. **Windows 11 blur.** Exercise Mica and Acrylic on Windows 11 22H2 or newer.
    See PRD U05.
-7. **Multi-DPI UI.** Exercise the running UI at 125%, 150%, and 200%. See PRD U07.
-8. **Settings polish.** Inline field validation.
-9. **Code signing.** The installer and binary are unsigned. Add signing only with
+6. **Multi-DPI UI.** Exercise the running UI at 125%, 150%, and 200%. See PRD U07.
+7. **Settings polish.** Inline field validation.
+8. **Code signing.** The installer and binary are unsigned. Add signing only with
    a certificate and a recorded decision.
 
 ## Known Limitations
@@ -294,7 +293,8 @@ section 9. The short version:
   restores the recorded state from the marker file.
 - The app list scrolls horizontally and supports middle-click launch for pinned
   apps. Tooltips are not implemented.
-- UWP windows are skipped.
+- UWP frame hosts map to the hosted child process for identity and name; the
+  icon is not visually checked.
 - `clock.locale` is unused.
 - Mica and Acrylic are unverified on Windows 11.
 - The running UI was exercised at 100% DPI only.

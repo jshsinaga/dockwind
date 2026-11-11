@@ -130,7 +130,7 @@ normal mutex interleavings, a late callback, recovery between hides, and recover
 during an in-flight effect. A message-only window test covers sent-only wake and
 stop, `WM_QUIT`, and a busy queue. An injected cancellation failure at the signal
 operation verifies ownership retention and retry. The full gate passed on
-2026-11-11 with 92 tests, clean Clippy, and a release build.
+2026-11-11 with 94 tests, clean Clippy, and a release build.
 
 ## 5. Runtime Ownership and Lifetimes
 
@@ -354,7 +354,7 @@ These are current limits. Do not describe them as fixed.
 | AppBar reservation requires a hidden taskbar | `reserve_space` is ignored while the native taskbar is visible. A forced kill leaves the work area reserved until `--restore-taskbar` runs |
 | Native auto-hide is suspended while hidden | A forced kill can leave auto-hide disabled. The marker file lets `--restore-taskbar` restore the previous setting. The watcher and tray checks run every two seconds |
 | Content size defaults to `560x92` | The app list scrolls horizontally; a large list has no visible overflow affordance |
-| `ApplicationFrameHost.exe` windows are skipped | UWP app identity is not mapped |
+| UWP frame hosts map through a child `CoreWindow` | Identity and name resolve to the hosted process; the icon is not visually checked |
 | `clock.locale` is accepted but unused | Clock text uses the process locale |
 | Mica and Acrylic are gated on build 22621 and unverified | Windows 11 visual behavior is not proven on this machine |
 | Running UI was exercised at 100% DPI | 125% to 200% are unit-tested conversions only |

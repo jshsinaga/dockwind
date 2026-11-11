@@ -277,7 +277,8 @@ manifest and icon. The embedded resources are checked by the build.
   conversion and dock rectangle are unit-tested at 100%, 125%, 150%, and 200%.
 - A fullscreen app check is still pending. Panic restore, console-control
   restore, and a real Explorer restart passed.
-- UWP windows hosted by `ApplicationFrameHost.exe` are skipped.
+- UWP windows hosted by `ApplicationFrameHost.exe` map to the hosted app process
+  for identity and name; the icon is not visually checked.
 - App tooltips are not implemented yet. Middle-click launch for pinned apps is
   implemented.
 - The installer is unsigned. Windows SmartScreen may warn on first run.

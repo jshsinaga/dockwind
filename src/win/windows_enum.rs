@@ -1,5 +1,5 @@
 use std::ffi::c_void;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail, ensure};
 use tracing::debug;
@@ -11,10 +11,10 @@ use windows::Win32::{
         PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
     },
     UI::WindowsAndMessaging::{
-        EnumWindows, GW_OWNER, GWL_EXSTYLE, GetForegroundWindow, GetWindow, GetWindowLongPtrW,
-        GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
-        SW_MINIMIZE, SW_RESTORE, SetForegroundWindow, ShowWindow, WS_EX_APPWINDOW,
-        WS_EX_TOOLWINDOW,
+        EnumChildWindows, EnumWindows, GW_OWNER, GWL_EXSTYLE, GetForegroundWindow, GetWindow,
+        GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
+        IsIconic, IsWindowVisible, SW_MINIMIZE, SW_RESTORE, SetForegroundWindow, ShowWindow,
+        WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
     },
 };
 use windows::core::BOOL;
@@ -68,19 +68,23 @@ pub fn list_app_windows() -> Result<Vec<WindowInfo>> {
             }
         };
 
-        if exe_path
-            .to_string_lossy()
-            .to_ascii_lowercase()
-            .ends_with("applicationframehost.exe")
-        {
-            debug!(pid, "skipping UWP ApplicationFrameHost window");
-            continue;
-        }
+        let (exe_path, display_name) = if is_application_frame_host(&exe_path) {
+            match frame_host_app(hwnd, pid) {
+                Some((path, name)) => (path, Some(name)),
+                None => {
+                    debug!(pid, "skipping an unmapped UWP ApplicationFrameHost window");
+                    continue;
+                }
+            }
+        } else {
+            (exe_path, None)
+        };
 
         result.push(WindowInfo {
             hwnd: hwnd.0 as isize,
             title,
             exe_path,
+            display_name,
             // SAFETY: `hwnd` came from EnumWindows in this call and may have closed
             // since; IsIconic reports false for an invalid handle, which is harmless.
             is_minimized: unsafe { IsIconic(hwnd) }.as_bool(),
@@ -89,6 +93,60 @@ pub fn list_app_windows() -> Result<Vec<WindowInfo>> {
     }
 
     Ok(result)
+}
+
+fn is_application_frame_host(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("ApplicationFrameHost.exe"))
+}
+
+/// Maps a UWP `ApplicationFrameHost` window to the process that owns its hosted
+/// `Windows.UI.Core.CoreWindow`. The frame handle stays the activation target.
+fn frame_host_app(frame: HWND, frame_pid: u32) -> Option<(PathBuf, String)> {
+    let mut children = Vec::new();
+    // SAFETY: `children` lives for the call and the callback only appends to it.
+    let enumerated = unsafe {
+        EnumChildWindows(
+            Some(frame),
+            Some(enum_child_proc),
+            LPARAM(&mut children as *mut Vec<HWND> as isize),
+        )
+    }
+    .as_bool();
+    if !enumerated {
+        return None;
+    }
+
+    for child in children {
+        let pid = window_process_id(child);
+        if pid == 0 || pid == frame_pid {
+            continue;
+        }
+        let Ok(path) = process_path(pid) else {
+            continue;
+        };
+        if is_application_frame_host(&path) {
+            continue;
+        }
+        let title = window_title(frame);
+        let name = if title.trim().is_empty() {
+            path.file_stem()
+                .map(|stem| stem.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.to_string_lossy().to_string())
+        } else {
+            title
+        };
+        debug!(
+            frame_pid,
+            app_pid = pid,
+            path = %path.display(),
+            name = %name,
+            "mapped UWP frame host"
+        );
+        return Some((path, name));
+    }
+    None
 }
 
 pub fn is_taskbar_worthy(flags: &WindowFlags) -> bool {
@@ -253,6 +311,15 @@ unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> BOOL 
     BOOL(1)
 }
 
+/// SAFETY: Windows calls this with `lparam` set to the live vector pointer passed
+/// to EnumChildWindows. The callback only appends and always continues.
+unsafe extern "system" fn enum_child_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    // SAFETY: documented by the caller.
+    let children = unsafe { &mut *(lparam.0 as *mut Vec<HWND>) };
+    children.push(hwnd);
+    BOOL(1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,6 +330,19 @@ mod tests {
             has_title: true,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn application_frame_host_detection_is_case_insensitive() {
+        assert!(is_application_frame_host(Path::new(
+            r"C:\Windows\System32\ApplicationFrameHost.exe"
+        )));
+        assert!(is_application_frame_host(Path::new(
+            r"C:\WINDOWS\SYSTEM32\APPLICATIONFRAMEHOST.EXE"
+        )));
+        assert!(!is_application_frame_host(Path::new(
+            r"C:\Windows\System32\notepad.exe"
+        )));
     }
 
     #[test]

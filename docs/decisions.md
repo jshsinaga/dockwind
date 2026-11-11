@@ -922,6 +922,30 @@ Trade-off: a dry run does not exercise the GitHub Release API call, generated
 notes, or release permissions. Those remain tag-push-only checks. The workflow
 still declares `contents: write` because the tag path needs it.
 
-Evidence: manual dispatch run 42916491747 on `b252850` completed the build job,
-uploaded `Dockwind-0.2.0-setup` (4,259,448 bytes), and created no release. The tag
-publish path has not run.
+Evidence: manual dispatch run 42924851841 on `d61f871` ran the full gate, built
+the installer, uploaded `Dockwind-0.2.0-setup` (4,259,713 bytes), and created no
+release. The tag publish path has not run.
+
+## D044: Map UWP frame hosts through the hosted child window
+
+Date: 2026-11-11
+
+`ApplicationFrameHost.exe` windows are no longer skipped. The enumerator walks
+their child windows, skips the frame process, and reads the first child process
+image path. That path becomes the dock item key and grouping identity; the frame
+title becomes the display name. The frame handle remains the activation target.
+The icon chain still tries the frame window first and then the mapped executable.
+
+Reason: UWP apps otherwise disappear from the dock even when they are open and
+visible. The hosted child `Windows.UI.Core.CoreWindow` carries the real app
+process identity.
+
+Trade-off: the mapper picks the first non-frame child process, so an unusual
+frame host with an unrelated child could be misidentified. UWP icons are not
+visually verified. The frame handle is retained for activation because the child
+`CoreWindow` is not the top-level activation window.
+
+Evidence: on 2026-11-11, Settings opened an `ApplicationFrameHost` frame with a
+`CoreWindow` child owned by `SystemSettings.exe`. The debug log mapped frame PID
+11608 to app PID 6764, path `SystemSettings.exe`, name `Settings`. The app list
+refreshed five items. The icon was not visually checked.

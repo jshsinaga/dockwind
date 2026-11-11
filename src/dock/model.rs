@@ -8,6 +8,7 @@ pub struct WindowInfo {
     pub hwnd: isize,
     pub title: String,
     pub exe_path: PathBuf,
+    pub display_name: Option<String>,
     pub is_minimized: bool,
     pub is_foreground: bool,
 }
@@ -96,10 +97,14 @@ pub fn merge(
             .or_else(|| windows.iter().find(|window| !window.is_minimized))
             .or_else(|| windows.first())
             .map(|window| window.hwnd);
-        let name = path
-            .file_stem()
-            .map(|stem| stem.to_string_lossy().to_string())
-            .filter(|stem| !stem.is_empty())
+        let name = windows
+            .iter()
+            .find_map(|window| window.display_name.clone())
+            .or_else(|| {
+                path.file_stem()
+                    .map(|stem| stem.to_string_lossy().to_string())
+                    .filter(|stem| !stem.is_empty())
+            })
             .or_else(|| windows.first().map(|window| window.title.clone()))
             .unwrap_or_else(|| path.to_string_lossy().to_string());
 
@@ -131,6 +136,7 @@ mod tests {
             hwnd,
             title: "window".to_string(),
             exe_path: PathBuf::from(path),
+            display_name: None,
             is_minimized: false,
             is_foreground: foreground,
         }
@@ -190,6 +196,23 @@ mod tests {
 
         assert_eq!(items.len(), 1);
         assert!(items[0].is_running);
+    }
+
+    #[test]
+    fn display_name_overrides_the_executable_stem() {
+        let mut uwp = window(
+            1,
+            r"C:\Windows\ImmersiveControlPanel\SystemSettings.exe",
+            false,
+        );
+        uwp.display_name = Some("Settings".to_string());
+        let items = merge(&[], &[uwp], true);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].name, "Settings");
+        assert_eq!(
+            items[0].key,
+            PathBuf::from(r"C:\Windows\ImmersiveControlPanel\SystemSettings.exe")
+        );
     }
 
     #[test]
