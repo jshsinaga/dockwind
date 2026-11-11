@@ -43,6 +43,7 @@ pub struct DockView {
     menu_open: bool,
     progress: f32,
     last_monitor_check: Instant,
+    start_time: Instant,
 }
 
 impl DockView {
@@ -59,6 +60,7 @@ impl DockView {
         let clock = cx.new(|cx| ClockView::new(cx, &config.clock));
         let auto_hide = AutoHide::new(config.behavior.auto_hide);
         let progress = auto_hide.progress();
+        let start_time = Instant::now();
         let mut this = Self {
             controller,
             applied_config: config.clone(),
@@ -73,7 +75,8 @@ impl DockView {
             appbar: None,
             menu_open: false,
             progress,
-            last_monitor_check: Instant::now(),
+            last_monitor_check: start_time,
+            start_time,
         };
         this.set_click_through(progress <= 0.001);
         this.appbar = match AppBarHandle::spawn() {
@@ -201,16 +204,13 @@ impl DockView {
             px(config.appearance.width as f32),
             px(config.appearance.height as f32),
         );
-        let reserve_space = config.behavior.reserve_space && config.behavior.hide_native_taskbar;
         let bounds = win::monitors::dock_rect(
             monitor,
             content_size,
             config.appearance.offset as f32,
             config.appearance.orientation,
-            reserve_space,
         );
-        let trigger =
-            win::monitors::trigger_rect(monitor, config.appearance.orientation, reserve_space);
+        let trigger = win::monitors::trigger_rect(monitor, config.appearance.orientation);
 
         if let Err(error) = win::dwm::set_bounds(self.geometry.hwnd, bounds, monitor.scale_factor) {
             warn!(%error, "failed to apply the dock geometry");
@@ -290,7 +290,10 @@ impl DockView {
         if self.last_monitor_check.elapsed() >= Duration::from_secs(1) {
             self.last_monitor_check = Instant::now();
             match MonitorInfo::primary() {
-                Ok(monitor) if monitor != self.geometry.monitor => {
+                Ok(monitor)
+                    if monitor.bounds != self.geometry.monitor.bounds
+                        || monitor.scale_factor != self.geometry.monitor.scale_factor =>
+                {
                     let config = self.applied_config.clone();
                     if self.apply_geometry_with_monitor(&config, &monitor) {
                         self.sync_appbar(&config);
@@ -310,19 +313,43 @@ impl DockView {
             }
         };
 
+        let dock_interaction_bounds = match self.geometry.edge {
+            DockEdge::Bottom => Bounds::new(
+                self.geometry.bounds.origin,
+                gpui::size(
+                    self.geometry.bounds.size.width,
+                    self.geometry.monitor.bounds.origin.y
+                        + self.geometry.monitor.bounds.size.height
+                        - self.geometry.bounds.origin.y,
+                ),
+            ),
+            DockEdge::Top => Bounds::new(
+                gpui::point(
+                    self.geometry.bounds.origin.x,
+                    self.geometry.monitor.bounds.origin.y,
+                ),
+                gpui::size(
+                    self.geometry.bounds.size.width,
+                    self.geometry.bounds.origin.y + self.geometry.bounds.size.height
+                        - self.geometry.monitor.bounds.origin.y,
+                ),
+            ),
+        };
+
         let force_hidden =
             self.applied_config.behavior.hide_in_fullscreen && win::cursor::fullscreen_active();
         let input = AutoHideInput {
             now,
-            pointer_in_dock: contains(self.geometry.bounds, cursor),
+            pointer_in_dock: contains(dock_interaction_bounds, cursor),
             pointer_in_trigger: contains(self.geometry.trigger, cursor),
             enabled: self.applied_config.behavior.auto_hide,
             force_hidden,
             pinned_open: self.menu_open,
         };
-        let progress = self.auto_hide.update(input, self.auto_hide_settings);
+        let target_changed = self.auto_hide.update_target(input, self.auto_hide_settings);
+        let progress = self.auto_hide.advance(now, self.auto_hide_settings);
 
-        if (progress - self.progress).abs() > f32::EPSILON {
+        if target_changed || (progress - self.progress).abs() > f32::EPSILON {
             self.progress = progress;
             self.set_click_through(progress <= 0.001);
             cx.notify();
@@ -330,7 +357,7 @@ impl DockView {
     }
 
     fn poll_interval(&self) -> Duration {
-        if self.applied_config.behavior.auto_hide && self.progress > 0.001 {
+        if self.applied_config.behavior.auto_hide {
             Duration::from_millis(16)
         } else {
             Duration::from_millis(100)
@@ -425,12 +452,26 @@ impl DockView {
 }
 
 impl Render for DockView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let now = self.start_time.elapsed();
+        let progress = self.auto_hide.advance(now, self.auto_hide_settings);
+        let was_click_through = self.progress <= 0.001;
+        let is_click_through = progress <= 0.001;
+        if was_click_through != is_click_through {
+            self.set_click_through(is_click_through);
+        }
+        self.progress = progress;
+
+        if self.auto_hide.is_animating() {
+            window.request_animation_frame();
+        }
+
         let direction = match self.geometry.edge {
             DockEdge::Bottom => 1.0,
             DockEdge::Top => -1.0,
         };
-        let offset = self.geometry.bounds.size.height * (1.0 - self.progress) * direction;
+        let visual_progress = 1.0 - (1.0 - self.progress) * (1.0 - self.progress);
+        let offset = self.geometry.bounds.size.height * (1.0 - visual_progress) * direction;
         let icons = {
             let cache = &mut self.icons;
             self.items
@@ -439,13 +480,11 @@ impl Render for DockView {
                 .collect::<Vec<_>>()
         };
 
-        // The app list owns the flexible width; the clock keeps its natural size.
         div().size_full().child(
             div()
                 .id("dock-bar")
                 .relative()
                 .top(offset)
-                .opacity(self.progress)
                 .size_full()
                 .rounded(self.theme.radius)
                 .bg(self.theme.background)
@@ -500,9 +539,9 @@ impl Render for DockView {
 
 fn contains(bounds: Bounds<Pixels>, point: Point<Pixels>) -> bool {
     point.x >= bounds.origin.x
-        && point.x < bounds.origin.x + bounds.size.width
+        && point.x <= bounds.origin.x + bounds.size.width
         && point.y >= bounds.origin.y
-        && point.y < bounds.origin.y + bounds.size.height
+        && point.y <= bounds.origin.y + bounds.size.height
 }
 
 fn auto_hide_settings(config: &Config) -> AutoHideSettings {

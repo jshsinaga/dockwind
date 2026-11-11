@@ -974,3 +974,27 @@ Evidence: install with the optional desktop-shortcut task created both
 shortcuts. With the taskbar hidden and state 0, uninstall exited 0, the app was
 gone, auto-hide was 1, the taskbar was visible, the install directory and both
 shortcuts were removed, and the config remained.
+
+## D046: Anchor dock to work area with screen-spanning bottom trigger and VSync slide animation
+
+Date: 2026-11-11
+
+Dock geometry keeps its offset relative to the native taskbar via `monitor.work_area`
+(superseding D008). The auto-hide trigger zone spans from 8 px above the native
+taskbar edge down to the physical screen bottom (`monitor.bounds`), superseding D015.
+Moving the cursor to the bottom of the screen or dragging down reliably triggers
+auto-show regardless of taskbar state without overlapping the taskbar when resting.
+The slide animation is driven by hardware VSync via GPUI's `window.request_animation_frame()`,
+advancing at the monitor's native refresh rate (60/120/144/240 FPS) with a quadratic
+ease-out curve. Opacity fading was removed so the dock performs a crisp, solid slide-up.
+
+Reason: Anchoring dock geometry directly to physical display bounds caused the dock
+to overlap the native taskbar when visible. Conversely, placing the trigger only above
+the taskbar prevented cursor movements to the screen edge or drags from triggering
+auto-show. Polling with async timers caused frame jitter and stutter.
+
+Trade-off: The trigger area is larger when the native taskbar is present, extending
+from above the taskbar to the display edge.
+
+Evidence: On 2026-11-11, unit tests confirmed `dock_rect` centers above the taskbar
+at `y=936` on 1080p, while `trigger_rect` spans `y=1032..1080`.

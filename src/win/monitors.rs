@@ -70,13 +70,8 @@ pub fn dock_rect(
     content_size: Size<Pixels>,
     offset: f32,
     edge: DockEdge,
-    reserve_space: bool,
 ) -> Bounds<Pixels> {
-    let area = if reserve_space {
-        monitor.bounds
-    } else {
-        monitor.work_area
-    };
+    let area = monitor.work_area;
     let x = area.origin.x + (area.size.width - content_size.width) / 2.0;
     let y = match edge {
         DockEdge::Bottom => area.origin.y + area.size.height - content_size.height - px(offset),
@@ -85,18 +80,30 @@ pub fn dock_rect(
     Bounds::new(point(x, y), content_size)
 }
 
-pub fn trigger_rect(monitor: &MonitorInfo, edge: DockEdge, reserve_space: bool) -> Bounds<Pixels> {
-    let area = if reserve_space {
-        monitor.bounds
-    } else {
-        monitor.work_area
-    };
-    let height = px(2.0);
-    let y = match edge {
-        DockEdge::Bottom => area.origin.y + area.size.height - height,
-        DockEdge::Top => area.origin.y,
-    };
-    Bounds::new(point(area.origin.x, y), size(area.size.width, height))
+pub fn trigger_rect(monitor: &MonitorInfo, edge: DockEdge) -> Bounds<Pixels> {
+    let height = px(8.0);
+    match edge {
+        DockEdge::Bottom => {
+            let taskbar_top = monitor.work_area.origin.y + monitor.work_area.size.height;
+            let monitor_bottom = monitor.bounds.origin.y + monitor.bounds.size.height;
+            let trigger_top = (taskbar_top - height).min(monitor_bottom - height);
+            let trigger_height = monitor_bottom - trigger_top;
+            Bounds::new(
+                point(monitor.bounds.origin.x, trigger_top),
+                size(monitor.bounds.size.width, trigger_height),
+            )
+        }
+        DockEdge::Top => {
+            let taskbar_bottom = monitor.work_area.origin.y;
+            let monitor_top = monitor.bounds.origin.y;
+            let trigger_top = monitor_top;
+            let trigger_height = (taskbar_bottom + height - monitor_top).max(height);
+            Bounds::new(
+                point(monitor.bounds.origin.x, trigger_top),
+                size(monitor.bounds.size.width, trigger_height),
+            )
+        }
+    }
 }
 
 fn rect_to_bounds(rect: RECT, scale_factor: f32) -> Bounds<Pixels> {
@@ -154,13 +161,7 @@ mod tests {
             work_area: Bounds::new(point(px(0.0), px(0.0)), size(px(1920.0), px(1040.0))),
             scale_factor: 1.0,
         };
-        let bounds = dock_rect(
-            &monitor,
-            size(px(560.0), px(92.0)),
-            12.0,
-            DockEdge::Bottom,
-            false,
-        );
+        let bounds = dock_rect(&monitor, size(px(560.0), px(92.0)), 12.0, DockEdge::Bottom);
         assert_eq!(bounds.origin, point(px(680.0), px(936.0)));
         assert_eq!(bounds.size, size(px(560.0), px(92.0)));
     }
@@ -172,13 +173,7 @@ mod tests {
             work_area: Bounds::new(point(px(0.0), px(0.0)), size(px(1920.0), px(1040.0))),
             scale_factor: 1.0,
         };
-        let bounds = dock_rect(
-            &monitor,
-            size(px(560.0), px(92.0)),
-            12.0,
-            DockEdge::Top,
-            false,
-        );
+        let bounds = dock_rect(&monitor, size(px(560.0), px(92.0)), 12.0, DockEdge::Top);
         assert_eq!(bounds.origin, point(px(680.0), px(12.0)));
     }
 
@@ -189,33 +184,25 @@ mod tests {
             work_area: Bounds::new(point(px(0.0), px(0.0)), size(px(1920.0), px(1040.0))),
             scale_factor: 1.0,
         };
-        let bottom = trigger_rect(&monitor, DockEdge::Bottom, false);
-        assert_eq!(bottom.origin, point(px(0.0), px(1038.0)));
-        assert_eq!(bottom.size, size(px(1920.0), px(2.0)));
+        let bottom = trigger_rect(&monitor, DockEdge::Bottom);
+        assert_eq!(bottom.origin, point(px(0.0), px(1032.0)));
+        assert_eq!(bottom.size, size(px(1920.0), px(48.0)));
 
-        let top = trigger_rect(&monitor, DockEdge::Top, false);
+        let top = trigger_rect(&monitor, DockEdge::Top);
         assert_eq!(top.origin, point(px(0.0), px(0.0)));
-        assert_eq!(top.size, size(px(1920.0), px(2.0)));
+        assert_eq!(top.size, size(px(1920.0), px(8.0)));
     }
 
     #[test]
-    fn reserve_space_uses_display_bounds_instead_of_work_area() {
+    fn trigger_without_taskbar_uses_edge() {
         let monitor = MonitorInfo {
             bounds: Bounds::new(point(px(0.0), px(0.0)), size(px(1920.0), px(1080.0))),
-            work_area: Bounds::new(point(px(0.0), px(0.0)), size(px(1920.0), px(1040.0))),
+            work_area: Bounds::new(point(px(0.0), px(0.0)), size(px(1920.0), px(1080.0))),
             scale_factor: 1.0,
         };
-        let bounds = dock_rect(
-            &monitor,
-            size(px(560.0), px(92.0)),
-            12.0,
-            DockEdge::Bottom,
-            true,
-        );
-        assert_eq!(bounds.origin, point(px(680.0), px(976.0)));
-
-        let trigger = trigger_rect(&monitor, DockEdge::Bottom, true);
-        assert_eq!(trigger.origin, point(px(0.0), px(1078.0)));
+        let bottom = trigger_rect(&monitor, DockEdge::Bottom);
+        assert_eq!(bottom.origin, point(px(0.0), px(1072.0)));
+        assert_eq!(bottom.size, size(px(1920.0), px(8.0)));
     }
 
     #[test]
@@ -225,13 +212,7 @@ mod tests {
             work_area: Bounds::new(point(px(1920.0), px(0.0)), size(px(1920.0), px(1040.0))),
             scale_factor: 1.0,
         };
-        let bounds = dock_rect(
-            &monitor,
-            size(px(560.0), px(92.0)),
-            12.0,
-            DockEdge::Bottom,
-            false,
-        );
+        let bounds = dock_rect(&monitor, size(px(560.0), px(92.0)), 12.0, DockEdge::Bottom);
         assert_eq!(bounds.origin, point(px(2600.0), px(936.0)));
     }
 }

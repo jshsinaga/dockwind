@@ -233,7 +233,7 @@ config.toml --(notify, 200 ms debounce)--> ConfigWatcher --> Config --> AppContr
 AppController --> DockView
 WinEvent hook --(unbounded channel)--> AppController --(120 ms debounce)--> enumerate
 cursor timer --> cursor + fullscreen state --> AutoHide --> progress --> UI + click-through
-monitor poll --> primary work area + DPI --> dock rect + trigger --> SetWindowPos
+monitor poll --> primary display bounds + DPI --> dock rect + trigger --> SetWindowPos
 right click --> DockView --> deferred task --> native menu --> AppController command
 hide_native_taskbar --(config reload)--> AppController --> TaskbarRuntime
 reserve_space + hidden taskbar --> DockView --> AppBarHandle --> ABM_SETPOS

@@ -40,22 +40,22 @@ impl AutoHide {
         self.progress
     }
 
-    pub fn update(&mut self, input: AutoHideInput, settings: AutoHideSettings) -> f32 {
-        let delta = input.now.saturating_sub(self.last_update);
-        self.last_update = input.now;
+    pub fn is_animating(&self) -> bool {
+        (self.progress - self.target).abs() > 0.0001
+    }
 
+    pub fn update_target(&mut self, input: AutoHideInput, settings: AutoHideSettings) -> bool {
+        let old_target = self.target;
         if !input.enabled {
-            self.progress = 1.0;
             self.target = 1.0;
             self.pending_since = None;
-            return self.progress;
+            return old_target != self.target;
         }
 
         if input.force_hidden {
-            self.progress = 0.0;
             self.target = 0.0;
             self.pending_since = None;
-            return self.progress;
+            return old_target != self.target;
         }
 
         if input.pinned_open {
@@ -84,6 +84,17 @@ impl AutoHide {
             }
         }
 
+        old_target != self.target
+    }
+
+    pub fn advance(&mut self, now: Duration, settings: AutoHideSettings) -> f32 {
+        let delta = now.saturating_sub(self.last_update);
+        self.last_update = now;
+
+        if !self.is_animating() {
+            return self.progress;
+        }
+
         let step = if settings.animation.is_zero() {
             1.0
         } else {
@@ -97,6 +108,26 @@ impl AutoHide {
         }
 
         self.progress
+    }
+
+    #[cfg(test)]
+    pub fn update(&mut self, input: AutoHideInput, settings: AutoHideSettings) -> f32 {
+        self.update_target(input, settings);
+        if !input.enabled {
+            self.progress = 1.0;
+            self.target = 1.0;
+            self.pending_since = None;
+            self.last_update = input.now;
+            return self.progress;
+        }
+        if input.force_hidden {
+            self.progress = 0.0;
+            self.target = 0.0;
+            self.pending_since = None;
+            self.last_update = input.now;
+            return self.progress;
+        }
+        self.advance(input.now, settings)
     }
 }
 

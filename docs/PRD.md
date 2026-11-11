@@ -79,7 +79,7 @@ A behavior is not Verified only because a code path exists. Evidence lives in
 
 | ID | Requirement | Status | Acceptance criteria |
 |---|---|---|---|
-| R16 | Show the dock when the pointer reaches the bottom work-area edge | Verified | A 2 px trigger strip shows the dock after the show delay. The dock hides after the hide delay when the pointer leaves |
+| R16 | Show the dock when the pointer reaches the bottom screen or taskbar edge | Verified | A trigger strip spanning from the native taskbar to the display boundary shows the dock after the show delay. The dock hides after the hide delay when the pointer leaves |
 | R17 | Avoid flicker on a quick pointer pass | Verified | The state machine does not show the dock on a short pass. A unit test covers the state transition |
 | R18 | Make the hidden dock click-through | Verified | At zero progress, `WS_EX_TRANSPARENT` is set and the invisible window does not intercept clicks |
 | R19 | Keep the dock visible while the context menu is open | Verified | `menu_open` pins the dock. The menu can be dismissed with Escape |
@@ -127,7 +127,7 @@ are not proposed new features.
 
 | ID | Feature | Current state | Acceptance criteria |
 |---|---|---|---|
-| U02 | Live work-area and display changes | Config geometry is live. A one-second poll repositions on work-area, display, and DPI changes. A real multi-DPI or resolution change is not yet exercised | DPI change, display change, and taskbar hide or restore reposition the dock without a restart. The trigger strip is rechecked |
+| U02 | Live display changes | Config geometry is live. A one-second poll repositions on display bounds and DPI changes. A real multi-DPI or resolution change is not yet exercised | DPI change and display change reposition the dock without a restart. The trigger strip is rechecked |
 | U03 | App-list polish | Pinned app management, `show_running_apps`, middle-click launch, and horizontal scrolling exist. Tooltips and a clearer overflow affordance do not | Middle-click launches a second instance for pinned apps. Tooltips show the app name. A long app list remains usable within the configured width |
 | U04 | UWP identity | Implemented | `ApplicationFrameHost.exe` windows map to the child `Windows.UI.Core.CoreWindow` process. On 2026-11-11 Settings resolved to `SystemSettings.exe` with the name Settings. The icon uses the frame or path fallback; a visual icon check is still missing |
 | U05 | Windows 11 blur verification | Mica and Acrylic code exists and is gated on build 22621. It is not verified on Windows 11 | Mica and Acrylic are exercised on Windows 11 22H2 or newer. The radius behavior in those modes is recorded |
