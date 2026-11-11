@@ -237,6 +237,7 @@ Historical evidence does not automatically verify the integrated code.
 | 2026-11-11 | Release publish | Annotated tag `v0.2.0` on `a92e5b0` triggered release run 42932966632. The build job passed and published `Dockwind 0.2.0` at https://github.com/jshsinaga/dockwind/releases/tag/v0.2.0 with asset `Dockwind-0.2.0-setup.exe` (4,775,376 bytes) |
 | 2026-11-11 | Tray | Icon visible in the notification area. Right-click showed Settings, Reload config, Start with Windows, Restore taskbar, and Quit. The Settings item opened the settings window |
 | 2026-11-11 | UWP mapping | Settings opened an `ApplicationFrameHost` frame with a `Windows.UI.Core.CoreWindow` child owned by `SystemSettings.exe`. The debug log mapped frame PID 11608 to app PID 6764, path `SystemSettings.exe`, name `Settings`; the app list refreshed 5 items. The visual icon was not checked |
+| 2026-11-11 | Startup bounds and shadow removal | Applied startup set_bounds, show: true in WindowOptions for immediate SetWindowPlacement calculation, and DWM border/shadow removal (DWMNCRP_DISABLED, DWMWA_BORDER_COLOR, WS_POPUP, DWMWCP_DONOTROUND). Startup window dimensions match configured width/height without requiring a click. Unit tests in win::dwm passed |
 | 2026-11-11 | Shutdown latency | Three release runs with `auto_hide = false` exited in 98 ms, 77 ms, and 77 ms after `Ctrl+Alt+Shift+Q` |
 | 2026-11-11 | Full gate | `scripts/check.ps1` passed on the current source: fmt, check, clippy with `-D warnings`, **94 tests**, release build, link parser self-test (16 cases), and 33 Markdown links in 13 files |
 | 2026-11-11 | Installer | `installer/dockwind.iss`, `scripts/build-installer.ps1`, and `scripts/bump-version.ps1` produced the final `dist\Dockwind-0.2.0-setup.exe` with Inno Setup 6.7.3. Silent 0.1.0 install and 0.2.0 upgrade exited 0. The installed settings title read `Dockwind Settings 0.2.0`. The Start Menu shortcut existed after install and was removed by silent uninstall. The install directory was removed and the config was preserved. The installer was rebuilt after the TOML preservation, settings-mutex, marker-test, UWP mapping, and uninstall force-stop changes; silent install and uninstall exited 0. A first-run install with no existing Dockwind config started the app, created the default config, and added the tray window; uninstall kept the config. An install with the desktop-shortcut task created both shortcuts. Uninstall while the taskbar was hidden force-stopped the app, restored auto-hide 1, showed the taskbar, removed the install directory and both shortcuts, and preserved the config. A clean Windows profile is still untested |
@@ -250,6 +251,10 @@ Not verified on the current integrated code:
 - Windows 11 behavior.
 - Mica or Acrylic.
 - Real multi-DPI desktop.
+
+Startup geometry, first-frame DirectComposition presentation without user click,
+and borderless popup styles were manually verified on 2026-11-11 on Windows 10
+(build 19045).
 
 The full gate passed on 2026-11-11. The evidence above applies to the current
 source.

@@ -49,6 +49,15 @@ impl AppController {
         this.refresh();
 
         cx.spawn(async move |this, cx| {
+            Timer::after(Duration::from_millis(0)).await;
+            let _ = this.update(cx, |this, cx| {
+                this.refresh();
+                cx.notify();
+            });
+        })
+        .detach();
+
+        cx.spawn(async move |this, cx| {
             while let Some(config) = config_updates.next().await {
                 if this
                     .update(cx, |this, cx| this.apply_config(config, cx))

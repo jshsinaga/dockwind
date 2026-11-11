@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, bail, ensure};
 use tracing::debug;
 use windows::Win32::{
-    Foundation::{CloseHandle, HWND, LPARAM},
+    Foundation::{CloseHandle, HWND, LPARAM, SetLastError, WIN32_ERROR},
     Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute},
     System::Threading::{
         AttachThreadInput, GetCurrentProcessId, GetCurrentThreadId, OpenProcess,
@@ -37,8 +37,10 @@ pub fn list_app_windows() -> Result<Vec<WindowInfo>> {
     let mut handles = Vec::new();
     // SAFETY: the callback only appends to the vector behind `lparam`, which stays
     // alive for the duration of EnumWindows. A false result means an error because
-    // the callback always returns TRUE.
+    // the callback always returns TRUE. SetLastError(0) clears any stale Win32 error
+    // before enumeration begins.
     unsafe {
+        SetLastError(WIN32_ERROR(0));
         EnumWindows(
             Some(enum_windows_proc),
             LPARAM(&mut handles as *mut Vec<HWND> as isize),

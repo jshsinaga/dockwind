@@ -106,6 +106,14 @@ impl DockView {
         })
         .detach();
 
+        cx.spawn(async move |this, cx| {
+            Timer::after(Duration::from_millis(0)).await;
+            let _ = this.update(cx, |_, cx| {
+                cx.notify();
+            });
+        })
+        .detach();
+
         this
     }
 
@@ -208,6 +216,7 @@ impl DockView {
             warn!(%error, "failed to apply the dock geometry");
             return false;
         }
+        win::dwm::force_render(self.geometry.hwnd);
 
         self.geometry.bounds = bounds;
         self.geometry.trigger = trigger;

@@ -7,20 +7,23 @@ use tracing::{info, warn};
 use windows::{
     Wdk::System::SystemServices::RtlGetVersion,
     Win32::{
-        Foundation::HWND,
+        Foundation::{HWND, LPARAM, WPARAM},
         Graphics::Dwm::{
-            DWM_SYSTEMBACKDROP_TYPE, DWM_WINDOW_CORNER_PREFERENCE, DWMSBT_MAINWINDOW,
-            DWMSBT_TRANSIENTWINDOW, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_WINDOW_CORNER_PREFERENCE,
-            DWMWCP_DONOTROUND, DWMWCP_ROUND, DwmSetWindowAttribute,
+            DWM_SYSTEMBACKDROP_TYPE, DWM_WINDOW_CORNER_PREFERENCE, DWMNCRP_DISABLED,
+            DWMSBT_MAINWINDOW, DWMSBT_TRANSIENTWINDOW, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE,
+            DWMWA_NCRENDERING_POLICY, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_WINDOW_CORNER_PREFERENCE,
+            DWMWCP_DONOTROUND, DwmSetWindowAttribute,
         },
         System::SystemInformation::OSVERSIONINFOW,
         System::Threading::{AttachThreadInput, GetCurrentThreadId},
         UI::WindowsAndMessaging::{
-            GWL_EXSTYLE, GetForegroundWindow, GetWindowLongPtrW, GetWindowThreadProcessId,
-            HWND_TOPMOST, IsWindowVisible, SW_SHOWNOACTIVATE, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-            SWP_NOMOVE, SWP_NOSIZE, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
-            ShowWindow, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-            WS_EX_TRANSPARENT,
+            GWL_EXSTYLE, GWL_STYLE, GetForegroundWindow, GetWindowLongPtrW,
+            GetWindowThreadProcessId, HWND_TOPMOST, IsWindowVisible, SW_SHOWNOACTIVATE,
+            SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SendMessageW,
+            SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, WM_USER, WS_BORDER,
+            WS_CAPTION, WS_EX_APPWINDOW, WS_EX_CLIENTEDGE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+            WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_EX_WINDOWEDGE, WS_OVERLAPPED, WS_POPUP,
+            WS_THICKFRAME,
         },
     },
 };
@@ -80,13 +83,41 @@ pub fn apply_dock_styles(window: &Window, previous_foreground: HWND) -> Result<(
     // value, not success, so the required styles are read back afterwards. The
     // SetWindowPos call uses only size/position flags and no activation.
     unsafe {
+        let mut style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+        style |= WS_POPUP.0 as isize;
+        style &= !((WS_OVERLAPPED | WS_CAPTION | WS_BORDER | WS_THICKFRAME).0 as isize);
+        let _previous_style = SetWindowLongPtrW(hwnd, GWL_STYLE, style);
+
         let mut ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
         ex_style |= WS_EX_TOOLWINDOW.0 as isize;
         ex_style |= WS_EX_TOPMOST.0 as isize;
         ex_style |= WS_EX_NOACTIVATE.0 as isize;
         ex_style &= !(WS_EX_APPWINDOW.0 as isize);
+        ex_style &= !((WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE).0 as isize);
 
         let _previous = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style);
+
+        let ncrp = DWMNCRP_DISABLED.0;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_NCRENDERING_POLICY,
+            &ncrp as *const i32 as *const c_void,
+            std::mem::size_of::<i32>() as u32,
+        );
+
+        if let Ok(build) = windows_build()
+            && build >= 22000
+        {
+            let border_color = DWMWA_COLOR_NONE;
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_BORDER_COLOR,
+                &border_color as *const u32 as *const c_void,
+                std::mem::size_of::<u32>() as u32,
+            );
+            let _ = set_corner_preference(hwnd, DWMWCP_DONOTROUND);
+        }
+
         SetWindowPos(
             hwnd,
             Some(HWND_TOPMOST),
@@ -119,9 +150,13 @@ pub fn apply_dock_styles(window: &Window, previous_foreground: HWND) -> Result<(
             "window is missing WS_EX_NOACTIVATE"
         );
 
+        let style_bits = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+        ensure!(style_bits & WS_POPUP.0 != 0, "window is missing WS_POPUP");
+
         info!(
             hwnd = %format!("0x{:X}", hwnd.0 as isize),
             ex_style = %format!("0x{bits:08X}"),
+            style = %format!("0x{style_bits:08X}"),
             toolwindow = true,
             appwindow = false,
             topmost = true,
@@ -161,11 +196,29 @@ pub fn set_bounds(hwnd: isize, bounds: Bounds<Pixels>, scale_factor: f32) -> Res
             y,
             width,
             height,
-            SWP_NOACTIVATE,
+            SWP_NOACTIVATE | SWP_FRAMECHANGED,
         )
         .context("SetWindowPos(dock bounds) failed")?;
     }
     Ok(())
+}
+
+const WM_GPUI_FORCE_UPDATE_WINDOW: u32 = WM_USER + 5;
+
+pub fn force_render(hwnd: isize) {
+    if hwnd == 0 {
+        return;
+    }
+    let hwnd = HWND(hwnd as *mut c_void);
+    // SAFETY: `hwnd` belongs to the live dock window.
+    unsafe {
+        let _ = SendMessageW(
+            hwnd,
+            WM_GPUI_FORCE_UPDATE_WINDOW,
+            Some(WPARAM(0)),
+            Some(LPARAM(0)),
+        );
+    }
 }
 
 /// Shows the dock after GPUI has drawn its first frame, without activating it.
@@ -180,6 +233,13 @@ pub fn show_without_activating(hwnd: isize) -> Result<()> {
     // ShowWindow returns the previous state rather than success. The second
     // SetWindowPos reinforces topmost now that the window is visible.
     unsafe {
+        let _ = SendMessageW(
+            hwnd,
+            WM_GPUI_FORCE_UPDATE_WINDOW,
+            Some(WPARAM(0)),
+            Some(LPARAM(0)),
+        );
+
         // ShowWindow reports the previous visibility, not success; IsWindowVisible
         // below is the actual check.
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
@@ -187,6 +247,14 @@ pub fn show_without_activating(hwnd: isize) -> Result<()> {
             IsWindowVisible(hwnd).as_bool(),
             "failed to show the dock window"
         );
+
+        let _ = SendMessageW(
+            hwnd,
+            WM_GPUI_FORCE_UPDATE_WINDOW,
+            Some(WPARAM(0)),
+            Some(LPARAM(0)),
+        );
+
         SetWindowPos(
             hwnd,
             Some(HWND_TOPMOST),
@@ -278,7 +346,9 @@ pub fn apply_backdrop_to_hwnd(hwnd: isize, mode: BlurMode) -> Result<()> {
                 warn!(%error, "DWM backdrop failed; keeping transparent");
                 return Ok(());
             }
-            set_corner_preference(hwnd, DWMWCP_ROUND)?;
+            if build >= 22000 {
+                set_corner_preference(hwnd, DWMWCP_DONOTROUND)?;
+            }
             info!(build, mode = ?mode, "DWM backdrop applied");
         }
     }
@@ -362,5 +432,14 @@ mod tests {
         assert_eq!(backdrop_value(BlurMode::None), None);
         assert_eq!(backdrop_value(BlurMode::Mica), Some(2));
         assert_eq!(backdrop_value(BlurMode::Acrylic), Some(3));
+    }
+
+    #[test]
+    fn set_bounds_rejects_invalid_scale_factors() {
+        let bounds = Bounds::default();
+        assert!(set_bounds(0, bounds, 0.0).is_err());
+        assert!(set_bounds(0, bounds, -1.0).is_err());
+        assert!(set_bounds(0, bounds, f32::NAN).is_err());
+        assert!(set_bounds(0, bounds, f32::INFINITY).is_err());
     }
 }
