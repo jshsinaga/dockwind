@@ -19,6 +19,26 @@ use windows::core::{HSTRING, Interface, PCWSTR, w};
 
 use crate::config::parse_rgba_hex;
 
+#[derive(Debug)]
+struct ComApartmentGuard(bool);
+
+impl ComApartmentGuard {
+    fn new() -> Self {
+        // SAFETY: CoInitializeEx initializes the COM apartment on the calling thread.
+        let ok = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok() };
+        Self(ok)
+    }
+}
+
+impl Drop for ComApartmentGuard {
+    fn drop(&mut self) {
+        if self.0 {
+            // SAFETY: CoUninitialize balances a successful CoInitializeEx on this thread.
+            unsafe { CoUninitialize() };
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstalledApp {
     pub name: String,
@@ -26,6 +46,7 @@ pub struct InstalledApp {
 }
 
 pub fn scan_installed_apps() -> Vec<InstalledApp> {
+    let _com = ComApartmentGuard::new();
     let mut search_directories = Vec::new();
     if let Some(app_data) = dirs::data_dir() {
         search_directories.push(app_data.join(r"Microsoft\Windows\Start Menu\Programs"));
@@ -76,9 +97,9 @@ pub fn scan_installed_apps() -> Vec<InstalledApp> {
 }
 
 pub fn resolve_shortcut(lnk_path: &Path) -> Option<PathBuf> {
+    let _com = ComApartmentGuard::new();
     // SAFETY: COM calls to resolve shell shortcut using IShellLinkW and IPersistFile.
     unsafe {
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).ok()?;
         let persist: IPersistFile = link.cast().ok()?;
         let path_hstring = HSTRING::from(lnk_path.as_os_str());
@@ -152,15 +173,8 @@ pub fn pick_file_async() -> futures::channel::oneshot::Receiver<Result<Option<Pa
     let spawn_result = std::thread::Builder::new()
         .name("dockwind-pick-file".to_string())
         .spawn(move || {
-            // SAFETY: CoInitializeEx initializes COM on this dedicated thread for the open file dialog.
-            unsafe {
-                let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-            }
+            let _com = ComApartmentGuard::new();
             let result = pick_app_dialog();
-            // SAFETY: CoUninitialize balances CoInitializeEx on this dedicated thread.
-            unsafe {
-                CoUninitialize();
-            }
             let _ = sender.send(result);
         });
     if let Err(error) = spawn_result {

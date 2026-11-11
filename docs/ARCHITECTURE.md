@@ -46,7 +46,7 @@ module exists only when it has code.
 | `src/ui/theme.rs` | Color, contrast, radius, padding mapping | Derived theme |
 | `src/win/worker.rs` | Manual-reset stop event and `MsgWaitForMultipleObjectsEx` cancellation shared by the event, taskbar, hotkey, and tray workers | Worker cancellation primitive |
 | `src/win/appbar.rs` | AppBar registration, reserved rect, callback window thread, remove on release | AppBar reservation |
-| `src/ui/settings.rs` | GPUI settings window view, reactive tab navigation, steppers, toggles, presets, atomic save | Settings window lifetime |
+| `src/ui/settings/mod.rs` | GPUI settings window view, reactive tab navigation, submodules (appearance, behavior, clock, pinned, modals, controls), atomic save | Settings window lifetime |
 | `src/win/dialogs.rs` | Win32 file picker, color picker, and settings single-instance focus check | Common dialogs |
 | `src/win/tray.rs` | Tray icon worker, menu, `TaskbarCreated` recovery, two-second visible-taskbar icon check | Tray icon and menu |
 | `src/win/*.rs` | Win32 wrappers for windows, DWM, monitors, icons, events, taskbar, appbar, hotkey, menu, settings, tray, autostart, single instance, cursor, launch | OS resources |

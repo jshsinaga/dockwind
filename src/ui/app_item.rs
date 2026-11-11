@@ -57,7 +57,7 @@ pub fn render_app_item(
     };
 
     div()
-        .id(SharedString::from(item.key.to_string_lossy().to_string()))
+        .id(SharedString::from(item.key.to_string_lossy().into_owned()))
         .relative()
         .flex()
         .flex_col()

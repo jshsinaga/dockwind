@@ -439,7 +439,7 @@ mod tests {
         let writes = Arc::new(AtomicUsize::new(0));
         let producer_stop = Arc::clone(&stop);
         let producer_writes = Arc::clone(&writes);
-        let writer_path = path.clone();
+        let writer_path = path;
         let handle = std::thread::spawn(move || {
             while !producer_stop.load(Ordering::SeqCst) {
                 replace(&writer_path, "#102030");

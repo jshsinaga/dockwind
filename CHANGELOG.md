@@ -3,6 +3,30 @@
 All notable changes to Dockwind are recorded here. Versions follow
 `MAJOR.MINOR.PATCH` from `Cargo.toml`.
 
+## 0.3.0 - 2026-11-11
+
+### Added
+
+- Redesigned and modular GPUI settings window (`src/ui/settings/`) with Appearance, Clock & Date, Behavior, and Pinned Applications tabs.
+- Installed application picker modal with real-time text search, A to Z alphabet pill filtering, and application icon display.
+- Windows shell shortcut (`.lnk`) resolution to target native `.exe` executables through `IShellLinkW` COM interface.
+- Built-in theme preset library: Catppuccin Mocha, Frosted Glass, Nordic Frost, OLED Pure Dark, and Midnight Azure.
+- Rich appearance controls: manual vs auto width mode, dock width and height steppers, 4-way container padding, corner radius, border width and color, drop shadow toggle, and opacity adjustment.
+- Advanced clock customization: system font picker with typography previews, font styling (bold, italic, underline), custom strftime pattern with live cheat sheet, font color picker, and top, center, bottom vertical alignments.
+- Behavior controls: auto-hide toggle, animation curve selector (Ease Out, Ease In, Ease In-Out, Linear, Ease, Bounce), trigger area height, launch on startup toggle, and AppBar space reservation toggle.
+- Confirmation dialogs: warning modal before enabling native taskbar hiding with recovery instructions, and confirmation modal before removing a pinned application.
+- Drag-and-drop handles and up/down reorder buttons for pinned applications.
+- VSync synchronized slide animations for auto-hide transitions.
+- UWP application window support mapping `ApplicationFrameHost.exe` to hosted applications.
+
+### Fixed
+
+- Eliminated COM apartment reference leaks in installed application scanning and shortcut resolution with RAII `ComApartmentGuard`.
+- Removed redundant memory clones across config validation, dock model window grouping, and watcher shutdown tests.
+- Replaced monolithic 4058-line settings implementation with clean modular architecture (`mod`, `appearance`, `behavior`, `clock`, `pinned`, `modals`, `controls`).
+- Corrected initial dock surface placement, window chrome borders, and first-frame rendering.
+- Dock anchored directly above the native taskbar when taskbar hiding is disabled.
+
 ## 0.2.0 - 2026-11-11
 
 ### Added

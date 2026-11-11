@@ -50,12 +50,13 @@ pub fn merge(
             .iter()
             .find(|window| window.is_foreground)
             .map(|window| window.hwnd);
-        let target = windows
-            .iter()
-            .find(|window| window.is_foreground)
-            .or_else(|| windows.iter().find(|window| !window.is_minimized))
-            .or_else(|| windows.first())
-            .map(|window| window.hwnd);
+        let target = active.or_else(|| {
+            windows
+                .iter()
+                .find(|window| !window.is_minimized)
+                .or_else(|| windows.first())
+                .map(|window| window.hwnd)
+        });
 
         items.push(DockItem {
             key: PathBuf::from(&app.path),
@@ -91,15 +92,17 @@ pub fn merge(
             .iter()
             .find(|window| window.is_foreground)
             .map(|window| window.hwnd);
-        let target = windows
-            .iter()
-            .find(|window| window.is_foreground)
-            .or_else(|| windows.iter().find(|window| !window.is_minimized))
-            .or_else(|| windows.first())
-            .map(|window| window.hwnd);
+        let target = active.or_else(|| {
+            windows
+                .iter()
+                .find(|window| !window.is_minimized)
+                .or_else(|| windows.first())
+                .map(|window| window.hwnd)
+        });
         let name = windows
             .iter()
-            .find_map(|window| window.display_name.clone())
+            .find_map(|window| window.display_name.as_deref())
+            .map(ToString::to_string)
             .or_else(|| {
                 path.file_stem()
                     .map(|stem| stem.to_string_lossy().to_string())

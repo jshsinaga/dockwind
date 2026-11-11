@@ -168,16 +168,15 @@ impl Config {
             self.clock.date_font_size = defaults.clock.date_font_size;
         }
 
-        if let Some(color) = self.clock.font_color.clone() {
-            match parse_rgba_hex(&color) {
-                Some(_) => {}
-                None => {
-                    warnings.push(format!(
-                        "clock font_color '{color}' is not #RRGGBB or #RRGGBBAA; clearing"
-                    ));
-                    self.clock.font_color = None;
-                }
-            }
+        let font_color_invalid = self
+            .clock
+            .font_color
+            .as_deref()
+            .is_some_and(|color| parse_rgba_hex(color).is_none());
+        if font_color_invalid && let Some(color) = self.clock.font_color.take() {
+            warnings.push(format!(
+                "clock font_color '{color}' is not #RRGGBB or #RRGGBBAA; clearing"
+            ));
         }
 
         if !valid_strftime(&self.clock.time_format) {
@@ -193,7 +192,7 @@ impl Config {
                 "date_format '{}' is invalid; using {}",
                 self.clock.date_format, defaults.clock.date_format
             ));
-            self.clock.date_format = defaults.clock.date_format.clone();
+            self.clock.date_format = defaults.clock.date_format;
         }
 
         LoadedConfig {
