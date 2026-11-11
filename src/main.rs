@@ -42,7 +42,10 @@ fn main() {
                 std::process::exit(1);
             }
         };
-        if let Err(error) = win::settings::open_blocking(path) {
+        if win::dialogs::focus_existing_settings_window() {
+            return;
+        }
+        if let Err(error) = ui::open_settings_standalone(path) {
             eprintln!("failed to open settings: {error:#}");
             std::process::exit(1);
         }

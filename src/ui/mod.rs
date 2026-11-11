@@ -1,9 +1,11 @@
 mod app_item;
 mod clock;
 mod dock;
+mod settings;
 mod theme;
 
 pub use dock::{DockGeometry, DockView};
+pub use settings::{open_settings_standalone, open_settings_window};
 
 use std::cell::Cell;
 

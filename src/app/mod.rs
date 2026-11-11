@@ -118,7 +118,7 @@ impl AppController {
     fn handle_tray_event(&mut self, event: TrayEvent, cx: &mut Context<Self>) {
         match event {
             TrayEvent::OpenSettings => {
-                if let Err(error) = win::settings::open(self.config_path.clone()) {
+                if let Err(error) = crate::ui::open_settings_window(cx, self.config_path.clone()) {
                     warn!(%error, "failed to open settings from the tray");
                 }
             }

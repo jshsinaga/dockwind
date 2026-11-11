@@ -998,3 +998,46 @@ from above the taskbar to the display edge.
 
 Evidence: On 2026-11-11, unit tests confirmed `dock_rect` centers above the taskbar
 at `y=936` on 1080p, while `trigger_rect` spans `y=1032..1080`.
+
+## D047: Redesign settings window in native GPUI
+
+Date: 2026-11-11
+
+Replace the legacy Win32 GDI settings dialog (`src/win/settings.rs`) with a modern,
+reactive GPUI-based window (`src/ui/settings.rs`). The new window uses pure GPUI
+styled components matching Dockwind's dark theme (Catppuccin Mocha / dark slate palette)
+with categorized tab navigation:
+1. "Tampilan" (Appearance): Numeric steppers for width, height, icon size, padding,
+   corner radius, offset, and opacity; segmented buttons for orientation (Bottom/Top)
+   and DWM blur mode (None/Mica/Acrylic); color swatch palette presets and native
+   `ChooseColorW` color picker dialog.
+2. "Perilaku" (Behavior): Reactive toggle switches for auto-hide, hide in fullscreen,
+   show running apps, hide native taskbar, reserve desktop space (AppBar), and
+   start with Windows (Autostart); steppers for show/hide delay and animation duration;
+   pill presets for the quit hotkey.
+3. "Jam & Tanggal" (Clock): Live clock widget preview; preset selectors for 24-hour,
+   12-hour, seconds, and dates.
+4. "Aplikasi Tersemat" (Pinned Apps): Interactive list of pinned applications with
+   executable picker (`GetOpenFileNameW`), selection, move up, move down, and removal.
+5. Footer: Real-time dirty state indicator ("Ada perubahan yang belum disimpan" /
+   "Semua perubahan tersimpan"), Close button (`window.remove_window()`), and
+   "Terapkan & Simpan" button preserving TOML formatting and comments via
+   `save_atomic_preserving`.
+
+Single-instance focus check (`focus_existing_settings_window`) uses `FindWindowW`
+by window title "Dockwind Settings" to bring an already open settings window to the
+foreground instead of launching duplicate instances. Standalone execution via
+`dockwind --settings` runs a dedicated GPUI event loop that cleanly exits when the
+window is closed.
+
+Reason: The previous Win32 dialog relied on raw Windows 95 Common Controls with
+manual coordinate layout, hardcoded edit fields, and lacked visual consistency with
+the modern GPUI dock. GPUI natively supports multi-window applications, clean
+DirectWrite typography, and immediate-mode reactivity.
+
+Trade-off: The settings window runs on GPUI/DirectX. Win32 common dialogs (`GetOpenFileNameW`,
+`ChooseColorW`) are retained in `src/win/dialogs.rs` for native system integration.
+
+Evidence: Unit tests verified `SettingsView` change detection and tab switching.
+Verified compilation on `cargo check --all-targets --locked`, `cargo clippy --all-targets --locked -- -D warnings`,
+and release build.

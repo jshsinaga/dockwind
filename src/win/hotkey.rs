@@ -50,6 +50,7 @@ impl Drop for HotkeyWorker {
 
 /// Registers the global quit hotkey on a dedicated message-loop thread.
 /// Validates a configured hotkey without registering it.
+#[cfg(test)]
 pub fn validate(value: &str) -> Result<(), String> {
     parse_hotkey(value).map(|_| ())
 }

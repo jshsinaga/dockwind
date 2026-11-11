@@ -419,7 +419,7 @@ impl DockView {
         match action {
             MenuAction::OpenSettings => {
                 let path = self.controller.read(cx).config_path().to_path_buf();
-                if let Err(error) = win::settings::open(path) {
+                if let Err(error) = super::open_settings_window(cx, path) {
                     warn!(%error, "failed to open the settings window");
                 }
             }

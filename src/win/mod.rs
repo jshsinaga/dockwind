@@ -1,6 +1,7 @@
 pub mod appbar;
 pub mod autostart;
 pub mod cursor;
+pub mod dialogs;
 pub mod dwm;
 pub mod events;
 pub mod hotkey;
@@ -8,7 +9,6 @@ pub mod icons;
 pub mod launch;
 pub mod menu;
 pub mod monitors;
-pub mod settings;
 pub mod single_instance;
 pub mod taskbar;
 pub mod tray;
