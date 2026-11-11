@@ -79,7 +79,18 @@ fn icon_from_window(hwnd: HWND) -> Option<Arc<RenderImage>> {
 }
 
 pub fn icon_from_path(path: &Path) -> Option<Arc<RenderImage>> {
-    let path = HSTRING::from(path.as_os_str());
+    let resolved_target;
+    let target_path = if path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("lnk"))
+    {
+        resolved_target = crate::win::dialogs::resolve_shortcut(path);
+        resolved_target.as_deref().unwrap_or(path)
+    } else {
+        path
+    };
+
+    let path = HSTRING::from(target_path.as_os_str());
     let mut info = SHFILEINFOW::default();
     // SAFETY: the path is a live null-terminated HSTRING and `info` has the size
     // passed to the API. The returned icon is owned by the caller and destroyed in

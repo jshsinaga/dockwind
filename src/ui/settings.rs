@@ -164,6 +164,7 @@ pub enum ActiveInput {
     ClockTimeFormat,
     ClockDateFormat,
     ClockFontColor,
+    AppPickerSearch,
 }
 
 #[derive(Clone, Copy)]
@@ -205,6 +206,10 @@ pub struct SettingsView {
     delete_confirm_index: Option<usize>,
     status_message: Option<(SharedString, bool)>,
     scroll_handle: ScrollHandle,
+    installed_apps: Option<Vec<win::dialogs::InstalledApp>>,
+    showing_app_picker: bool,
+    app_picker_search: String,
+    app_picker_filter: Option<char>,
     showing_taskbar_confirm: bool,
     active_input: Option<ActiveInput>,
     input_buffer: String,
@@ -226,6 +231,10 @@ impl SettingsView {
             delete_confirm_index: None,
             status_message: None,
             scroll_handle: ScrollHandle::default(),
+            installed_apps: None,
+            showing_app_picker: false,
+            app_picker_search: String::new(),
+            app_picker_filter: None,
             showing_taskbar_confirm: false,
             active_input: None,
             input_buffer: String::new(),
@@ -240,6 +249,13 @@ impl SettingsView {
     }
 
     fn handle_key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        if self.showing_app_picker && event.keystroke.key == "escape" {
+            self.showing_app_picker = false;
+            self.active_input = None;
+            cx.notify();
+            return;
+        }
+
         if self.delete_confirm_index.is_some() && event.keystroke.key == "escape" {
             self.delete_confirm_index = None;
             cx.notify();
@@ -289,7 +305,9 @@ impl SettingsView {
                         cx.notify();
                     }
                 }
-                ActiveInput::ClockTimeFormat | ActiveInput::ClockDateFormat => {
+                ActiveInput::ClockTimeFormat
+                | ActiveInput::ClockDateFormat
+                | ActiveInput::AppPickerSearch => {
                     if self.input_buffer.len() < 64 {
                         self.input_buffer.push(ch);
                         self.live_update_input(field);
@@ -336,6 +354,9 @@ impl SettingsView {
                 } else if trimmed.is_empty() {
                     self.draft.clock.font_color = None;
                 }
+            }
+            ActiveInput::AppPickerSearch => {
+                self.app_picker_search = self.input_buffer.clone();
             }
         }
     }
@@ -473,6 +494,7 @@ impl SettingsView {
                             })
                             .on_click(cx.listener(move |this: &mut Self, _, _, cx| {
                                 this.active_tab = tab;
+                                this.showing_app_picker = false;
                                 this.delete_confirm_index = None;
                                 this.showing_taskbar_confirm = false;
                                 cx.notify();
@@ -2577,48 +2599,83 @@ impl SettingsView {
                     )
                     .child(
                         div()
-                            .id("btn-add-pinned")
-                            .px_3()
-                            .py_1p5()
-                            .rounded_md()
-                            .bg(rgba(0x89B4FAFF))
-                            .hover(|s| s.bg(rgba(0xB4BEFEFF)))
-                            .text_xs()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgba(0x11111BFF))
-                            .cursor_pointer()
-                            .on_click(cx.listener(|_this: &mut Self, _, _, cx| {
-                                let receiver = win::dialogs::pick_file_async();
-                                cx.spawn(async move |this, cx| {
-                                    if let Ok(Ok(Some(path))) = receiver.await {
-                                        let stem = path
-                                            .file_stem()
-                                            .and_then(|s| s.to_str())
-                                            .unwrap_or("App");
-                                        let mut chars = stem.chars();
-                                        let name = match chars.next() {
-                                            None => "App".to_string(),
-                                            Some(first) => {
-                                                first.to_uppercase().collect::<String>()
-                                                    + chars.as_str()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .id("btn-add-pinned")
+                                    .px_3()
+                                    .py_1p5()
+                                    .rounded_md()
+                                    .bg(rgba(0x89B4FAFF))
+                                    .hover(|s| s.bg(rgba(0xB4BEFEFF)))
+                                    .text_xs()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(rgba(0x11111BFF))
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|this: &mut Self, _, _, cx| {
+                                        if this.installed_apps.is_none() {
+                                            this.installed_apps =
+                                                Some(win::dialogs::scan_installed_apps());
+                                        }
+                                        this.showing_app_picker = true;
+                                        this.app_picker_search.clear();
+                                        this.app_picker_filter = None;
+                                        this.active_input = Some(ActiveInput::AppPickerSearch);
+                                        this.input_buffer.clear();
+                                        this.status_message = None;
+                                        cx.notify();
+                                    }))
+                                    .child("+ Add Application..."),
+                            )
+                            .child(
+                                div()
+                                    .id("btn-browse-pinned")
+                                    .px_3()
+                                    .py_1p5()
+                                    .rounded_md()
+                                    .bg(rgba(0x313244FF))
+                                    .hover(|s| s.bg(rgba(0x45475AFF)))
+                                    .text_xs()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(rgba(0xCDD6F4FF))
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|_this: &mut Self, _, _, cx| {
+                                        let receiver = win::dialogs::pick_file_async();
+                                        cx.spawn(async move |this, cx| {
+                                            if let Ok(Ok(Some(path))) = receiver.await {
+                                                let final_path = win::dialogs::resolve_shortcut(&path)
+                                                    .unwrap_or(path);
+                                                let stem = final_path
+                                                    .file_stem()
+                                                    .and_then(|s| s.to_str())
+                                                    .unwrap_or("App");
+                                                let mut chars = stem.chars();
+                                                let name = match chars.next() {
+                                                    None => "App".to_string(),
+                                                    Some(first) => {
+                                                        first.to_uppercase().collect::<String>()
+                                                            + chars.as_str()
+                                                    }
+                                                };
+                                                let _ = this.update(cx, |this, cx| {
+                                                    this.draft.pinned.push(PinnedApp {
+                                                        name,
+                                                        path: final_path.to_string_lossy().to_string(),
+                                                        args: Vec::new(),
+                                                    });
+                                                    this.selected_pinned_index =
+                                                        Some(this.draft.pinned.len() - 1);
+                                                    this.status_message = None;
+                                                    cx.notify();
+                                                });
                                             }
-                                        };
-                                        let _ = this.update(cx, |this, cx| {
-                                            this.draft.pinned.push(PinnedApp {
-                                                name,
-                                                path: path.to_string_lossy().to_string(),
-                                                args: Vec::new(),
-                                            });
-                                            this.selected_pinned_index =
-                                                Some(this.draft.pinned.len() - 1);
-                                            this.status_message = None;
-                                            cx.notify();
-                                        });
-                                    }
-                                })
-                                .detach();
-                            }))
-                            .child("+ Add Application..."),
+                                        })
+                                        .detach();
+                                    }))
+                                    .child("Browse (.exe)..."),
+                            ),
                     ),
             )
             .child(
@@ -2991,6 +3048,480 @@ impl SettingsView {
             )
             .into_any_element()
     }
+
+    fn render_app_picker_dialog(&self, cx: &mut Context<Self>) -> AnyElement {
+        let is_search_active = self.active_input == Some(ActiveInput::AppPickerSearch);
+        let search_text = if is_search_active {
+            &self.input_buffer
+        } else {
+            &self.app_picker_search
+        };
+        let search_lower = search_text.trim().to_lowercase();
+        let filter_letter = self.app_picker_filter;
+
+        let all_apps = self.installed_apps.as_deref().unwrap_or(&[]);
+        let total_count = all_apps.len();
+        let filtered_apps: Vec<_> = all_apps
+            .iter()
+            .filter(|app| {
+                if let Some(letter) = filter_letter {
+                    let first_char = app.name.chars().next().unwrap_or(' ');
+                    if !first_char.eq_ignore_ascii_case(&letter) {
+                        return false;
+                    }
+                }
+                if !search_lower.is_empty() && !app.name.to_lowercase().contains(&search_lower) {
+                    return false;
+                }
+                true
+            })
+            .collect();
+
+        let filtered_count = filtered_apps.len();
+
+        let mut alphabet_pills = Vec::new();
+        let all_selected = self.app_picker_filter.is_none();
+        alphabet_pills.push(
+            div()
+                .id("filter-letter-all")
+                .px_2()
+                .py_0p5()
+                .rounded_sm()
+                .bg(if all_selected {
+                    rgba(0x89B4FAFF)
+                } else {
+                    rgba(0x181825FF)
+                })
+                .text_xs()
+                .font_weight(if all_selected {
+                    FontWeight::BOLD
+                } else {
+                    FontWeight::NORMAL
+                })
+                .text_color(if all_selected {
+                    rgba(0x11111BFF)
+                } else {
+                    rgba(0xA6ADC8FF)
+                })
+                .cursor_pointer()
+                .on_click(cx.listener(|this: &mut Self, _, _, cx| {
+                    this.app_picker_filter = None;
+                    cx.notify();
+                }))
+                .child("All")
+                .into_any_element(),
+        );
+
+        for letter in 'A'..='Z' {
+            let is_letter_selected = self.app_picker_filter == Some(letter);
+            alphabet_pills.push(
+                div()
+                    .id(SharedString::from(format!("filter-letter-{letter}")))
+                    .px_1p5()
+                    .py_0p5()
+                    .rounded_sm()
+                    .bg(if is_letter_selected {
+                        rgba(0x89B4FAFF)
+                    } else {
+                        rgba(0x181825FF)
+                    })
+                    .text_xs()
+                    .font_weight(if is_letter_selected {
+                        FontWeight::BOLD
+                    } else {
+                        FontWeight::NORMAL
+                    })
+                    .text_color(if is_letter_selected {
+                        rgba(0x11111BFF)
+                    } else {
+                        rgba(0xA6ADC8FF)
+                    })
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this: &mut Self, _, _, cx| {
+                        this.app_picker_filter = if this.app_picker_filter == Some(letter) {
+                            None
+                        } else {
+                            Some(letter)
+                        };
+                        cx.notify();
+                    }))
+                    .child(letter.to_string())
+                    .into_any_element(),
+            );
+        }
+
+        let app_rows: Vec<AnyElement> = if filtered_apps.is_empty() {
+            vec![
+                div()
+                    .py_8()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_xs()
+                    .text_color(rgba(0x6C7086FF))
+                    .child("No applications found matching your criteria.")
+                    .into_any_element(),
+            ]
+        } else {
+            filtered_apps
+                .into_iter()
+                .enumerate()
+                .map(|(index, app)| {
+                    let app_name = app.name.clone();
+                    let app_path_display = app.path.to_string_lossy().to_string();
+
+                    let icon = {
+                        let mut cache = self.icon_cache.borrow_mut();
+                        cache
+                            .entry(app.path.clone())
+                            .or_insert_with(|| crate::win::icons::icon_from_path(&app.path))
+                            .clone()
+                    };
+
+                    let icon_element = match icon {
+                        Some(img_data) => {
+                            img(img_data).size(px(24.0)).rounded_md().into_any_element()
+                        }
+                        None => div()
+                            .size(px(24.0))
+                            .rounded_md()
+                            .bg(rgba(0x313244FF))
+                            .border_1()
+                            .border_color(rgba(0x45475A80))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_xs()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(rgba(0xCDD6F4FF))
+                            .child(
+                                app.name
+                                    .chars()
+                                    .next()
+                                    .map(|c| c.to_uppercase().to_string())
+                                    .unwrap_or_else(|| "?".to_string()),
+                            )
+                            .into_any_element(),
+                    };
+
+                    let target_name = app_name.clone();
+                    let target_path_str = app_path_display.clone();
+
+                    div()
+                        .id(SharedString::from(format!("app-picker-row-{index}")))
+                        .px_3()
+                        .py_2()
+                        .rounded_lg()
+                        .bg(rgba(0x18182580))
+                        .hover(|s| s.bg(rgba(0x31324480)))
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this: &mut Self, _, _, cx| {
+                            this.draft.pinned.push(PinnedApp {
+                                name: target_name.clone(),
+                                path: target_path_str.clone(),
+                                args: Vec::new(),
+                            });
+                            this.selected_pinned_index = Some(this.draft.pinned.len() - 1);
+                            this.showing_app_picker = false;
+                            this.active_input = None;
+                            this.status_message = None;
+                            cx.notify();
+                        }))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_3()
+                                .overflow_hidden()
+                                .child(icon_element)
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_0p5()
+                                        .overflow_hidden()
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_color(rgba(0xCDD6F4FF))
+                                                .child(app_name),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(rgba(0x6C7086FF))
+                                                .child(app_path_display),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .px_2p5()
+                                .py_1()
+                                .rounded_md()
+                                .bg(rgba(0x89B4FA26))
+                                .hover(|s| s.bg(rgba(0x89B4FA4D)))
+                                .text_xs()
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(rgba(0x89B4FAFF))
+                                .child("+ Pin"),
+                        )
+                        .into_any_element()
+                })
+                .collect()
+        };
+
+        div()
+            .id("app-picker-backdrop")
+            .absolute()
+            .top(px(0.0))
+            .left(px(0.0))
+            .size_full()
+            .bg(rgba(0x000000B0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .p_6()
+            .child(
+                div()
+                    .id("app-picker-modal")
+                    .w(px(640.0))
+                    .max_h(px(580.0))
+                    .p_5()
+                    .rounded_2xl()
+                    .bg(rgba(0x181825FF))
+                    .border_1()
+                    .border_color(rgba(0x313244FF))
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2p5()
+                                    .child(
+                                        div()
+                                            .text_base()
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(rgba(0xFFFFFFFF))
+                                            .child("Select Installed Application"),
+                                    )
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .py_0p5()
+                                            .rounded_full()
+                                            .bg(rgba(0x313244FF))
+                                            .text_xs()
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(rgba(0x89B4FAFF))
+                                            .child(format!(
+                                                "{filtered_count} / {total_count} apps"
+                                            )),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .id("btn-close-app-picker")
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_md()
+                                    .bg(rgba(0x31324480))
+                                    .hover(|s| s.bg(rgba(0x45475AFF)))
+                                    .text_xs()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(rgba(0xCDD6F4FF))
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|this: &mut Self, _, _, cx| {
+                                        this.showing_app_picker = false;
+                                        this.active_input = None;
+                                        cx.notify();
+                                    }))
+                                    .child("X"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("app-picker-search-bar")
+                            .px_3()
+                            .py_2()
+                            .rounded_lg()
+                            .bg(rgba(0x11111BFF))
+                            .border_1()
+                            .border_color(if is_search_active {
+                                rgba(0x89B4FAFF)
+                            } else {
+                                rgba(0x313244FF)
+                            })
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .cursor_text()
+                            .on_click(cx.listener(|this: &mut Self, _, _, cx| {
+                                this.active_input = Some(ActiveInput::AppPickerSearch);
+                                this.input_buffer = this.app_picker_search.clone();
+                                cx.notify();
+                            }))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(if search_text.is_empty() {
+                                        rgba(0x6C7086FF)
+                                    } else {
+                                        rgba(0xCDD6F4FF)
+                                    })
+                                    .child(if search_text.is_empty() {
+                                        SharedString::from(
+                                            "Search installed applications (type to filter)...",
+                                        )
+                                    } else {
+                                        SharedString::from(search_text.to_string())
+                                    }),
+                            )
+                            .children(if !search_text.is_empty() {
+                                Some(
+                                    div()
+                                        .id("btn-clear-search")
+                                        .px_1p5()
+                                        .py_0p5()
+                                        .rounded_sm()
+                                        .bg(rgba(0x313244FF))
+                                        .hover(|s| s.bg(rgba(0x45475AFF)))
+                                        .text_xs()
+                                        .text_color(rgba(0xCDD6F4FF))
+                                        .cursor_pointer()
+                                        .on_click(cx.listener(|this: &mut Self, _, _, cx| {
+                                            this.app_picker_search.clear();
+                                            this.input_buffer.clear();
+                                            this.active_input = Some(ActiveInput::AppPickerSearch);
+                                            cx.notify();
+                                        }))
+                                        .child("Clear"),
+                                )
+                            } else {
+                                None
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .items_center()
+                            .gap_1()
+                            .p_1()
+                            .rounded_lg()
+                            .bg(rgba(0x11111BFF))
+                            .children(alphabet_pills),
+                    )
+                    .child(
+                        div()
+                            .id("app-picker-list-scroll")
+                            .h(px(300.0))
+                            .overflow_y_scroll()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .p_1()
+                            .rounded_xl()
+                            .bg(rgba(0x11111B80))
+                            .border_1()
+                            .border_color(rgba(0x31324480))
+                            .children(app_rows),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .pt_2()
+                            .border_t_1()
+                            .border_color(rgba(0x31324480))
+                            .child(
+                                div()
+                                    .id("btn-modal-browse-file")
+                                    .px_3()
+                                    .py_1p5()
+                                    .rounded_md()
+                                    .bg(rgba(0x313244FF))
+                                    .hover(|s| s.bg(rgba(0x45475AFF)))
+                                    .text_xs()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(rgba(0xCDD6F4FF))
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|this: &mut Self, _, _, cx| {
+                                        this.showing_app_picker = false;
+                                        this.active_input = None;
+                                        let receiver = win::dialogs::pick_file_async();
+                                        cx.spawn(async move |this, cx| {
+                                            if let Ok(Ok(Some(path))) = receiver.await {
+                                                let final_path =
+                                                    win::dialogs::resolve_shortcut(&path)
+                                                        .unwrap_or(path);
+                                                let stem = final_path
+                                                    .file_stem()
+                                                    .and_then(|s| s.to_str())
+                                                    .unwrap_or("App");
+                                                let mut chars = stem.chars();
+                                                let name = match chars.next() {
+                                                    None => "App".to_string(),
+                                                    Some(first) => {
+                                                        first.to_uppercase().collect::<String>()
+                                                            + chars.as_str()
+                                                    }
+                                                };
+                                                let _ = this.update(cx, |this, cx| {
+                                                    this.draft.pinned.push(PinnedApp {
+                                                        name,
+                                                        path: final_path
+                                                            .to_string_lossy()
+                                                            .to_string(),
+                                                        args: Vec::new(),
+                                                    });
+                                                    this.selected_pinned_index =
+                                                        Some(this.draft.pinned.len() - 1);
+                                                    this.status_message = None;
+                                                    cx.notify();
+                                                });
+                                            }
+                                        })
+                                        .detach();
+                                        cx.notify();
+                                    }))
+                                    .child("Browse for (.exe) file instead..."),
+                            )
+                            .child(
+                                div()
+                                    .id("btn-modal-cancel-picker")
+                                    .px_4()
+                                    .py_1p5()
+                                    .rounded_md()
+                                    .bg(rgba(0x313244FF))
+                                    .hover(|s| s.bg(rgba(0x45475AFF)))
+                                    .text_xs()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(rgba(0xCDD6F4FF))
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|this: &mut Self, _, _, cx| {
+                                        this.showing_app_picker = false;
+                                        this.active_input = None;
+                                        cx.notify();
+                                    }))
+                                    .child("Cancel"),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
 }
 
 impl Render for SettingsView {
@@ -3032,6 +3563,8 @@ impl Render for SettingsView {
             .child(self.render_footer(cx))
             .children(if self.showing_taskbar_confirm {
                 Some(self.render_taskbar_confirm_dialog(cx))
+            } else if self.showing_app_picker {
+                Some(self.render_app_picker_dialog(cx))
             } else {
                 self.delete_confirm_index
                     .map(|idx| self.render_delete_confirm_dialog(idx, cx))
@@ -3168,6 +3701,7 @@ fn render_text_input(
                 ActiveInput::ClockFontColor => {
                     this.draft.clock.font_color.clone().unwrap_or_default()
                 }
+                ActiveInput::AppPickerSearch => this.app_picker_search.clone(),
             };
             this.status_message = None;
             cx.notify();
@@ -3496,5 +4030,29 @@ mod tests {
         view.input_buffer = "#FFFFFF".to_string();
         assert_eq!(view.active_input, Some(ActiveInput::BackgroundHex));
         assert_eq!(view.input_buffer, "#FFFFFF");
+    }
+
+    #[test]
+    fn settings_view_app_picker_state() {
+        let path = PathBuf::from("config.toml");
+        let config = Config::default();
+        let mut view = SettingsView::new(path, config, false);
+        assert!(!view.showing_app_picker);
+        assert!(view.app_picker_search.is_empty());
+        assert_eq!(view.app_picker_filter, None);
+        assert!(view.installed_apps.is_none());
+
+        view.showing_app_picker = true;
+        view.app_picker_search = "Code".to_string();
+        view.app_picker_filter = Some('C');
+        view.installed_apps = Some(vec![win::dialogs::InstalledApp {
+            name: "Visual Studio Code".to_string(),
+            path: PathBuf::from(r"C:\Tools\Code.exe"),
+        }]);
+
+        assert!(view.showing_app_picker);
+        assert_eq!(view.app_picker_search, "Code");
+        assert_eq!(view.app_picker_filter, Some('C'));
+        assert_eq!(view.installed_apps.as_ref().map(|a| a.len()), Some(1));
     }
 }
