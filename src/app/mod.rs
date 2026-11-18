@@ -227,8 +227,16 @@ impl AppController {
         true
     }
 
-    pub fn activate_or_launch(&mut self, index: usize) {
-        let Some(item) = self.items.get(index) else {
+    fn current_item(&self, rendered: &DockItem) -> Option<&DockItem> {
+        self.items.iter().find(|item| {
+            item.key == rendered.key
+                && item.is_pinned == rendered.is_pinned
+                && item.args == rendered.args
+        })
+    }
+
+    pub fn activate_or_launch(&mut self, rendered: &DockItem) {
+        let Some(item) = self.current_item(rendered) else {
             return;
         };
 
@@ -249,8 +257,8 @@ impl AppController {
     }
 
     /// Middle-click launches a pinned app again instead of activating its window.
-    pub fn launch_second_instance(&mut self, index: usize) {
-        let Some(item) = self.items.get(index) else {
+    pub fn launch_second_instance(&mut self, rendered: &DockItem) {
+        let Some(item) = self.current_item(rendered) else {
             return;
         };
         if !item.is_pinned {
@@ -312,6 +320,38 @@ mod tests {
         };
         assert_eq!(controller.config(), &config);
         assert!(controller.items().is_empty());
+    }
+
+    #[test]
+    fn click_resolves_the_same_app_after_items_are_reordered() {
+        let mut config = Config::default();
+        config.pinned = vec![
+            crate::config::PinnedApp {
+                name: "Editor profile".to_string(),
+                path: "editor.exe".to_string(),
+                args: vec!["--profile".to_string(), "work".to_string()],
+            },
+            crate::config::PinnedApp {
+                name: "Editor".to_string(),
+                path: "editor.exe".to_string(),
+                args: Vec::new(),
+            },
+        ];
+        let rendered = dock::merge(&config.pinned, &[], true);
+        let mut items = rendered.clone();
+        items.reverse();
+        let mut controller = AppController {
+            config,
+            items,
+            windows: Vec::new(),
+            refresh_window_list: channel(1).0,
+            config_path: PathBuf::from("config.toml"),
+            taskbar: Rc::new(RefCell::new(TaskbarRuntime::default())),
+        };
+
+        assert_eq!(controller.current_item(&rendered[0]), Some(&rendered[0]));
+        controller.items.pop();
+        assert!(controller.current_item(&rendered[0]).is_none());
     }
 
     #[test]

@@ -36,7 +36,7 @@ pub struct DockView {
     applied_config: Config,
     theme: Theme,
     clock: Entity<ClockView>,
-    items: Vec<DockItem>,
+    items: Vec<Arc<DockItem>>,
     icons: HashMap<PathBuf, Option<Arc<RenderImage>>>,
     loading_icons: bool,
     icon_size: Pixels,
@@ -60,7 +60,13 @@ impl DockView {
     ) -> Self {
         let (config, items) = {
             let controller = controller.read(cx);
-            (controller.config().clone(), controller.items().to_vec())
+            let items = controller
+                .items()
+                .iter()
+                .cloned()
+                .map(Arc::new)
+                .collect::<Vec<_>>();
+            (controller.config().clone(), items)
         };
         let clock = cx.new(|cx| ClockView::new(cx, &config.clock));
         let auto_hide = AutoHide::new(config.behavior.auto_hide);
@@ -132,7 +138,13 @@ impl DockView {
     fn sync_controller(&mut self, controller: &Entity<AppController>, cx: &mut Context<Self>) {
         let (config, items) = {
             let controller = controller.read(cx);
-            (controller.config().clone(), controller.items().to_vec())
+            let items = controller
+                .items()
+                .iter()
+                .cloned()
+                .map(Arc::new)
+                .collect::<Vec<_>>();
+            (controller.config().clone(), items)
         };
         let count_changed = self.items.len() != items.len();
         self.items = items;
@@ -513,17 +525,6 @@ impl DockView {
             }
         }
     }
-
-    fn on_item_click(
-        &mut self,
-        index: usize,
-        _event: &ClickEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.controller
-            .update(cx, |controller, _| controller.activate_or_launch(index));
-    }
 }
 
 impl Render for DockView {
@@ -647,14 +648,18 @@ impl Render for DockView {
             crate::config::VerticalAlign::Bottom => apps_div.items_end(),
         };
 
-        let items_elements = self.items.iter().enumerate().map(|(index, item)| {
+        let items_elements = self.items.iter().map(|item| {
             let icon = self.icons.get(&item.key).and_then(Clone::clone);
-            let on_click = cx.listener(move |this, event: &ClickEvent, window, cx| {
-                this.on_item_click(index, event, window, cx);
-            });
-            let on_middle = cx.listener(move |this, _event: &MouseDownEvent, _window, cx| {
+            let clicked = Arc::clone(item);
+            let middle_clicked = Arc::clone(item);
+            let on_click = cx.listener(move |this, _: &ClickEvent, _, cx| {
                 this.controller.update(cx, |controller, _| {
-                    controller.launch_second_instance(index);
+                    controller.activate_or_launch(&clicked);
+                });
+            });
+            let on_middle = cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                this.controller.update(cx, |controller, _| {
+                    controller.launch_second_instance(&middle_clicked);
                 });
             });
             render_app_item(item, icon, &self.theme, self.icon_size, on_click, on_middle)
