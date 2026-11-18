@@ -41,6 +41,8 @@ pub enum ActiveInput {
     AppPickerSearch,
     LayoutName,
     PinnedAppName(usize),
+    PinnedAppArgument(usize, usize),
+    NewPinnedAppArgument(usize),
 }
 
 #[derive(Clone, Copy)]
@@ -96,6 +98,7 @@ pub struct SettingsView {
     pub(super) active_input: Option<ActiveInput>,
     pub(super) input_buffer: String,
     input_selected: bool,
+    new_pin_argument: String,
     pub(super) layout_name: String,
     renaming_layout: Option<String>,
     pub(super) focus_handle: Option<FocusHandle>,
@@ -130,6 +133,7 @@ impl SettingsView {
             active_input: None,
             input_buffer: String::new(),
             input_selected: false,
+            new_pin_argument: String::new(),
             layout_name: String::new(),
             renaming_layout: None,
             focus_handle: None,
@@ -238,6 +242,13 @@ impl SettingsView {
         };
         if key == "escape" || key == "enter" {
             self.live_update_input(field);
+            if key == "enter"
+                && let ActiveInput::NewPinnedAppArgument(index) = field
+            {
+                self.add_pin_argument(index);
+                cx.notify();
+                return;
+            }
             if field == ActiveInput::LayoutName {
                 if key == "enter" {
                     self.save_layout_name();
@@ -257,6 +268,10 @@ impl SettingsView {
             field,
             ActiveInput::BackgroundHex | ActiveInput::BorderColorHex | ActiveInput::ClockFontColor
         );
+        let text_limit = match field {
+            ActiveInput::PinnedAppArgument(_, _) | ActiveInput::NewPinnedAppArgument(_) => 4096,
+            _ => 64,
+        };
         let editing_shortcut = modifiers.control && !modifiers.alt;
         if editing_shortcut && key == "a" {
             self.input_selected = !self.input_buffer.is_empty();
@@ -289,7 +304,7 @@ impl SettingsView {
                 self.input_buffer = text
                     .chars()
                     .filter(|ch| !ch.is_control())
-                    .take(64)
+                    .take(text_limit)
                     .collect();
             }
             self.input_selected = false;
@@ -303,13 +318,13 @@ impl SettingsView {
             let Some(text) = &event.keystroke.key_char else {
                 return;
             };
-            self.insert_input_text(text, hex_field);
+            self.insert_input_text(text, hex_field, text_limit);
         }
         self.live_update_input(field);
         cx.notify();
     }
 
-    fn insert_input_text(&mut self, text: &str, hex_field: bool) {
+    fn insert_input_text(&mut self, text: &str, hex_field: bool, text_limit: usize) {
         for ch in text.chars().filter(|ch| !ch.is_control()) {
             if hex_field
                 && !ch.is_ascii_hexdigit()
@@ -324,7 +339,7 @@ impl SettingsView {
                 if self.input_buffer.len() < 9 {
                     self.input_buffer.push(ch.to_ascii_uppercase());
                 }
-            } else if self.input_buffer.chars().count() < 64 {
+            } else if self.input_buffer.chars().count() < text_limit {
                 self.input_buffer.push(ch);
             }
         }
@@ -376,6 +391,19 @@ impl SettingsView {
                 {
                     app.name = name.to_owned();
                 }
+            }
+            ActiveInput::PinnedAppArgument(pin, argument) => {
+                if let Some(value) = self
+                    .draft
+                    .pinned
+                    .get_mut(pin)
+                    .and_then(|app| app.args.get_mut(argument))
+                {
+                    value.clone_from(&self.input_buffer);
+                }
+            }
+            ActiveInput::NewPinnedAppArgument(_) => {
+                self.new_pin_argument.clone_from(&self.input_buffer)
             }
             ActiveInput::LayoutName => self.layout_name.clone_from(&self.input_buffer),
             ActiveInput::AppPickerSearch => {
@@ -823,16 +851,16 @@ mod tests {
         );
         view.input_buffer = "#112233".into();
         view.input_selected = true;
-        view.insert_input_text("z", true);
+        view.insert_input_text("z", true, 64);
         assert_eq!(view.input_buffer, "#112233");
         assert!(view.input_selected);
 
-        view.insert_input_text("#abcdee80", true);
+        view.insert_input_text("#abcdee80", true, 64);
         assert_eq!(view.input_buffer, "#ABCDEE80");
         assert!(!view.input_selected);
 
         view.input_selected = true;
-        view.insert_input_text("New layout", false);
+        view.insert_input_text("New layout", false, 64);
         assert_eq!(view.input_buffer, "New layout");
     }
 

@@ -42,6 +42,7 @@ impl SettingsView {
     }
 
     pub(super) fn add_pinned_app(&mut self, app: PinnedApp) {
+        self.finish_pinned_edit();
         self.draft.pinned.push(app);
         self.selected_pinned_index = Some(self.draft.pinned.len() - 1);
         self.showing_app_picker = false;
@@ -49,11 +50,118 @@ impl SettingsView {
         self.status_message = None;
     }
 
-    pub(super) fn finish_pinned_name_edit(&mut self) {
-        if matches!(self.active_input, Some(ActiveInput::PinnedAppName(_))) {
+    pub(super) fn finish_pinned_edit(&mut self) {
+        self.new_pin_argument.clear();
+        if matches!(
+            self.active_input,
+            Some(
+                ActiveInput::PinnedAppName(_)
+                    | ActiveInput::PinnedAppArgument(_, _)
+                    | ActiveInput::NewPinnedAppArgument(_)
+            )
+        ) {
             self.active_input = None;
             self.input_selected = false;
         }
+    }
+
+    pub(super) fn add_pin_argument(&mut self, index: usize) {
+        if !self.new_pin_argument.is_empty()
+            && let Some(app) = self.draft.pinned.get_mut(index)
+        {
+            app.args.push(std::mem::take(&mut self.new_pin_argument));
+            self.input_buffer.clear();
+            self.input_selected = false;
+            self.status_message = None;
+        }
+    }
+
+    fn render_pin_arguments(
+        &self,
+        index: usize,
+        app: &PinnedApp,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div()
+            .p_3()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgba(0xCDD6F4FF))
+                    .child("Launch arguments"),
+            )
+            .children(app.args.iter().enumerate().map(|(argument_index, value)| {
+                div()
+                    .id(("pin-argument", argument_index))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().flex_1().min_w(px(0.0)).child(render_text_input(
+                        "argument-value",
+                        ActiveInput::PinnedAppArgument(index, argument_index),
+                        value,
+                        "Empty argument",
+                        self,
+                        cx,
+                    )))
+                    .child(
+                        div()
+                            .id("remove-argument")
+                            .px_3()
+                            .py_1()
+                            .rounded_md()
+                            .text_xs()
+                            .text_color(rgba(0xF38BA8FF))
+                            .hover(|style| style.bg(rgba(0x313244FF)))
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.finish_pinned_edit();
+                                if let Some(app) = this.draft.pinned.get_mut(index)
+                                    && argument_index < app.args.len()
+                                {
+                                    app.args.remove(argument_index);
+                                    this.status_message = None;
+                                    cx.notify();
+                                }
+                            }))
+                            .child("Remove"),
+                    )
+            }))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().flex_1().min_w(px(0.0)).child(render_text_input(
+                        "new-pin-argument",
+                        ActiveInput::NewPinnedAppArgument(index),
+                        &self.new_pin_argument,
+                        "New argument",
+                        self,
+                        cx,
+                    )))
+                    .child(
+                        div()
+                            .id("add-argument")
+                            .px_3()
+                            .py_1()
+                            .rounded_md()
+                            .bg(rgba(0x313244FF))
+                            .hover(|style| style.bg(rgba(0x45475AFF)))
+                            .text_xs()
+                            .text_color(rgba(0xCDD6F4FF))
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.add_pin_argument(index);
+                                cx.notify();
+                            }))
+                            .child("Add argument"),
+                    ),
+            )
     }
 
     pub(super) fn render_pinned_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -99,7 +207,7 @@ impl SettingsView {
                         .into_any_element(),
                 };
 
-                div()
+                let row = div()
                     .id(SharedString::from(format!("pinned-app-{index}")))
                     .px_3()
                     .py_2()
@@ -121,7 +229,7 @@ impl SettingsView {
                     .gap_3()
                     .on_click(cx.listener(move |this: &mut Self, _, _, cx| {
                         if this.selected_pinned_index != Some(index) {
-                            this.finish_pinned_name_edit();
+                            this.finish_pinned_edit();
                             this.selected_pinned_index = Some(index);
                         }
                         cx.notify();
@@ -134,7 +242,7 @@ impl SettingsView {
                                 && to < this.draft.pinned.len()
                                 && from != to
                             {
-                                this.finish_pinned_name_edit();
+                                this.finish_pinned_edit();
                                 let item = this.draft.pinned.remove(from);
                                 this.draft.pinned.insert(to, item);
                                 this.selected_pinned_index = Some(to);
@@ -235,7 +343,7 @@ impl SettingsView {
                                     .on_click(cx.listener(move |this: &mut Self, _, _, cx| {
                                         if index > 0 && index < this.draft.pinned.len() {
                                             cx.stop_propagation();
-                                            this.finish_pinned_name_edit();
+                                            this.finish_pinned_edit();
                                             this.draft.pinned.swap(index, index - 1);
                                             this.selected_pinned_index = Some(index - 1);
                                             this.status_message = None;
@@ -265,7 +373,7 @@ impl SettingsView {
                                     .on_click(cx.listener(move |this: &mut Self, _, _, cx| {
                                         if index + 1 < this.draft.pinned.len() {
                                             cx.stop_propagation();
-                                            this.finish_pinned_name_edit();
+                                            this.finish_pinned_edit();
                                             this.draft.pinned.swap(index, index + 1);
                                             this.selected_pinned_index = Some(index + 1);
                                             this.status_message = None;
@@ -295,6 +403,13 @@ impl SettingsView {
                                     .child("X"),
                             ),
                     )
+                    .into_any_element();
+
+                div()
+                    .child(row)
+                    .when(is_selected, |section| {
+                        section.child(self.render_pin_arguments(index, app, cx))
+                    })
                     .into_any_element()
             })
             .collect();
@@ -425,6 +540,26 @@ fn pinned_app_from_path(path: &Path) -> PinnedApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pin_arguments_keep_spaces_and_update_the_selected_entry() {
+        let mut view = SettingsView::new(
+            "config.toml".into(),
+            crate::config::Config::default(),
+            String::new(),
+            false,
+        );
+        let pin = pinned_app_from_path(Path::new("Editor.exe"));
+        view.draft.pinned = vec![pin.clone(), pin];
+        view.new_pin_argument = "C:/Work files/project.txt".into();
+        view.add_pin_argument(1);
+        assert_eq!(view.draft.pinned[1].args, ["C:/Work files/project.txt"]);
+        assert!(view.draft.pinned[0].args.is_empty());
+
+        view.input_buffer = "new value".into();
+        view.live_update_input(ActiveInput::PinnedAppArgument(1, 0));
+        assert_eq!(view.draft.pinned[1].args, ["new value"]);
+    }
 
     #[test]
     fn editing_a_pin_names_only_that_entry_and_keeps_its_arguments() {

@@ -242,7 +242,9 @@ typography. `alignment` controls horizontal text alignment (`right`, `center`, `
 | `args` | array of strings | No, defaults to empty | Quoted and passed to `ShellExecuteW` |
 
 Pinned apps keep their file order. In Settings, select a pinned app row to
-edit its display name. The existing path and launch arguments stay with the pin. Running windows from the same executable are
+edit its display name and launch arguments. Add one value per argument field.
+Enter spaces as part of the value, and Dockwind handles Windows quoting when
+launching the app. Running windows from the same executable are
 merged into the pinned item. A missing `name` or `path` field is a parse failure.
 An empty path string is not validated at load time. The launch action reports the
 error when clicked.

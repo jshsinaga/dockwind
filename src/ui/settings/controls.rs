@@ -252,7 +252,10 @@ pub fn render_text_input(
         .justify_between()
         .on_click(cx.listener(move |this: &mut SettingsView, _, _, cx| {
             this.active_input = Some(field);
-            this.input_selected = matches!(field, ActiveInput::PinnedAppName(_));
+            this.input_selected = matches!(
+                field,
+                ActiveInput::PinnedAppName(_) | ActiveInput::PinnedAppArgument(_, _)
+            );
             this.input_buffer = match field {
                 ActiveInput::BackgroundHex => this.draft.appearance.background.clone(),
                 ActiveInput::BorderColorHex => this.draft.appearance.border_color.clone(),
@@ -267,6 +270,14 @@ pub fn render_text_input(
                     .get(index)
                     .map(|app| app.name.clone())
                     .unwrap_or_default(),
+                ActiveInput::PinnedAppArgument(pin, argument) => this
+                    .draft
+                    .pinned
+                    .get(pin)
+                    .and_then(|app| app.args.get(argument))
+                    .cloned()
+                    .unwrap_or_default(),
+                ActiveInput::NewPinnedAppArgument(_) => this.new_pin_argument.clone(),
                 ActiveInput::LayoutName => this.layout_name.clone(),
                 ActiveInput::AppPickerSearch => this.app_picker_search.clone(),
             };
@@ -276,6 +287,7 @@ pub fn render_text_input(
         .child(
             div()
                 .text_xs()
+                .truncate()
                 .font_family(SharedString::from("monospace"))
                 .when(selected, |text| text.bg(rgba(0x89B4FAFF)))
                 .text_color(if selected {

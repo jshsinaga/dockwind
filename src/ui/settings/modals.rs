@@ -334,7 +334,7 @@ impl SettingsView {
                                         if let Some(target_idx) = this.delete_confirm_index
                                             && target_idx < this.draft.pinned.len()
                                         {
-                                            this.finish_pinned_name_edit();
+                                            this.finish_pinned_edit();
                                             this.draft.pinned.remove(target_idx);
                                             if this.draft.pinned.is_empty() {
                                                 this.selected_pinned_index = None;
