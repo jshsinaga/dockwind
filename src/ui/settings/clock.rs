@@ -5,7 +5,7 @@ use gpui::{Context, FontWeight, IntoElement, SharedString, div, prelude::*, px, 
 
 use super::controls::*;
 use super::{ActiveInput, SettingsView};
-use crate::config::{ClockAlignment, VerticalAlign, parse_rgba_hex};
+use crate::config::{Clock, ClockAlignment, VerticalAlign, parse_rgba_hex, valid_strftime};
 
 impl SettingsView {
     pub(super) fn render_clock_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -684,6 +684,16 @@ impl SettingsView {
     }
 }
 
+pub(super) fn clock_format_error(clock: &Clock) -> Option<&'static str> {
+    if !valid_strftime(&clock.time_format) {
+        Some("Fix the invalid time format before saving.")
+    } else if !valid_strftime(&clock.date_format) {
+        Some("Fix the invalid date format before saving.")
+    } else {
+        None
+    }
+}
+
 fn preview_format(now: &DateTime<Local>, format: &str) -> Option<String> {
     let mut preview = String::new();
     write!(preview, "{}", now.format(format)).ok()?;
@@ -693,6 +703,26 @@ fn preview_format(now: &DateTime<Local>, format: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn save_validation_identifies_the_invalid_clock_field() {
+        let mut clock = Clock {
+            time_format: "%".into(),
+            ..Clock::default()
+        };
+        assert_eq!(
+            clock_format_error(&clock),
+            Some("Fix the invalid time format before saving.")
+        );
+        clock.time_format = "%H:%M".into();
+        clock.date_format = "%Q".into();
+        assert_eq!(
+            clock_format_error(&clock),
+            Some("Fix the invalid date format before saving.")
+        );
+        clock.date_format.clear();
+        assert_eq!(clock_format_error(&clock), None);
+    }
 
     #[test]
     fn clock_preview_handles_incomplete_and_invalid_draft_formats() {

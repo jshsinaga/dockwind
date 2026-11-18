@@ -202,7 +202,7 @@ impl Config {
     }
 }
 
-fn valid_strftime(value: &str) -> bool {
+pub fn valid_strftime(value: &str) -> bool {
     StrftimeItems::new(value).all(|item| !matches!(item, Item::Error))
 }
 

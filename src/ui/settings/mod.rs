@@ -359,6 +359,12 @@ impl SettingsView {
         if let Some(field) = self.active_input.take() {
             self.live_update_input(field);
         }
+        if let Some(message) = clock::clock_format_error(&self.draft.clock) {
+            self.status_message = Some((message.into(), true));
+            cx.notify();
+            return;
+        }
+
         let expected = (!overwrite).then_some(self.saved_source.as_str());
         self.overwrite_pending = false;
         match self

@@ -8,5 +8,5 @@ pub use model::{
     IndicatorStyle, ItemAlignment, PinnedApp, VerticalAlign, WidthMode,
 };
 pub use store::{ConfigError, default_path};
-pub use validation::parse_rgba_hex;
+pub use validation::{parse_rgba_hex, valid_strftime};
 pub use watch::{ConfigWatcher, watch};

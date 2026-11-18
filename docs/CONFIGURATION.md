@@ -222,7 +222,9 @@ shows a restart notice.
 | `alignment` | enum | `right` | `right`, `center`, or `left` | Live |
 | `vertical_align` | enum | `center` | `center`, `top`, or `bottom` | Live |
 
-Invalid time or date formats are replaced with defaults and logged. The clock
+Settings rejects invalid time or date formats and keeps the draft open.
+When loading invalid formats from a manually edited file, Dockwind uses the
+default formats and logs a warning. The clock
 uses the process locale. `locale` is accepted for compatibility but is unused.
 `line_gap` sets the spacing in pixels between the time and date lines; negative
 values allow the lines to sit closer together or overlap while preserving symmetric
