@@ -17,31 +17,45 @@ pub struct ClockView {
 
 impl ClockView {
     pub fn new(cx: &mut Context<Self>, config: &Clock) -> Self {
-        let now = Local::now();
         let mut this = Self {
             config: config.clone(),
             time_text: String::new(),
             date_text: String::new(),
             timer: None,
         };
-        this.refresh(now);
-        this.start_timer(cx);
+        if config.show {
+            this.refresh(Local::now());
+            this.start_timer(cx);
+        }
         this
     }
 
     pub fn set_config(&mut self, config: &Clock, cx: &mut Context<Self>) {
-        let restart = needs_seconds(&self.config) != needs_seconds(config);
-        self.config = config.clone();
-        self.refresh(Local::now());
-        if restart {
-            self.start_timer(cx);
+        if self.config == *config {
+            return;
         }
-        cx.notify();
+        let restart = !self.config.show || needs_seconds(&self.config) != needs_seconds(config);
+        self.config.clone_from(config);
+        if config.show {
+            self.refresh(Local::now());
+            if restart {
+                self.start_timer(cx);
+            }
+            cx.notify();
+        } else {
+            self.timer.take();
+        }
     }
 
-    fn refresh(&mut self, now: chrono::DateTime<Local>) {
-        self.time_text = now.format(&self.config.time_format).to_string();
-        self.date_text = now.format(&self.config.date_format).to_string();
+    fn refresh(&mut self, now: chrono::DateTime<Local>) -> bool {
+        let time_text = now.format(&self.config.time_format).to_string();
+        let date_text = now.format(&self.config.date_format).to_string();
+        if self.time_text == time_text && self.date_text == date_text {
+            return false;
+        }
+        self.time_text = time_text;
+        self.date_text = date_text;
+        true
     }
 
     fn start_timer(&mut self, cx: &mut Context<Self>) {
@@ -56,8 +70,9 @@ impl ClockView {
 
                 let now = Local::now();
                 let updated = this.update(cx, |this, cx| {
-                    this.refresh(now);
-                    cx.notify();
+                    if this.refresh(now) {
+                        cx.notify();
+                    }
                 });
                 if updated.is_err() {
                     break;
@@ -166,6 +181,20 @@ impl Render for ClockView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tick_redraws_only_when_the_displayed_text_changes() {
+        let now = Local::now();
+        let mut clock = ClockView {
+            config: Clock::default(),
+            time_text: String::new(),
+            date_text: String::new(),
+            timer: None,
+        };
+        assert!(clock.refresh(now));
+        assert!(!clock.refresh(now));
+        assert!(clock.refresh(now + chrono::Duration::minutes(1)));
+    }
 
     #[test]
     fn detects_second_precision_formats() {
