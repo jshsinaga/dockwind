@@ -1,8 +1,10 @@
 use std::collections::HashSet;
+use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 use windows::Win32::Foundation::{COLORREF, HWND};
+use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT};
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
     CoUninitialize, IPersistFile, STGM_READ,
@@ -128,9 +130,15 @@ fn collect_shortcuts_recursive(directory: &Path, apps: &mut Vec<InstalledApp>) {
         return;
     };
     for entry in entries.flatten() {
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
         let path = entry.path();
-        if path.is_dir() {
-            collect_shortcuts_recursive(&path, apps);
+        let attributes = metadata.file_attributes();
+        if attributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0 {
+            if can_scan_directory(attributes) {
+                collect_shortcuts_recursive(&path, apps);
+            }
         } else if let Some(extension) = path.extension() {
             if extension.eq_ignore_ascii_case("lnk")
                 && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
@@ -150,6 +158,11 @@ fn collect_shortcuts_recursive(directory: &Path, apps: &mut Vec<InstalledApp>) {
             }
         }
     }
+}
+
+fn can_scan_directory(attributes: u32) -> bool {
+    // A reparse point can redirect traversal outside this search root or back to a parent.
+    attributes & FILE_ATTRIBUTE_REPARSE_POINT.0 == 0
 }
 
 pub fn pick_color_async(
@@ -277,19 +290,30 @@ mod tests {
     }
 
     #[test]
-    fn test_scan_installed_apps_returns_list() {
-        let apps = scan_installed_apps();
-        assert!(!apps.is_empty());
-        for app in &apps {
-            assert!(!app.name.is_empty());
-            assert!(app.path.exists());
-            assert_eq!(
-                app.path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .map(|s| s.to_lowercase()),
-                Some("exe".to_string())
-            );
-        }
+    fn scan_finds_executables_in_normal_subdirectories() {
+        let root = tempfile::tempdir().expect("temporary scan root");
+        let nested = root.path().join("Tools");
+        std::fs::create_dir(&nested).expect("create nested directory");
+        let executable = nested.join("Editor.exe");
+        std::fs::write(&executable, "").expect("create executable fixture");
+        std::fs::write(nested.join("Notes.txt"), "").expect("create unrelated file");
+
+        let mut apps = Vec::new();
+        collect_shortcuts_recursive(root.path(), &mut apps);
+        assert_eq!(
+            apps,
+            vec![InstalledApp {
+                name: "Editor".into(),
+                path: executable
+            }]
+        );
+    }
+
+    #[test]
+    fn scan_does_not_descend_into_directory_reparse_points() {
+        assert!(can_scan_directory(FILE_ATTRIBUTE_DIRECTORY.0));
+        assert!(!can_scan_directory(
+            FILE_ATTRIBUTE_DIRECTORY.0 | FILE_ATTRIBUTE_REPARSE_POINT.0
+        ));
     }
 }

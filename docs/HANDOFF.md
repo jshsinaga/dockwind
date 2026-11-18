@@ -209,7 +209,9 @@ On Windows, run `scripts/check.ps1`, then verify these paths:
 - Pin more apps than fit on a narrow work area. Scroll to both ends and check that
   the clock remains visible, including with a long custom date format.
 - Open Settings on a small display. Search and scroll the installed-app picker,
-  paste an RGBA background color, and save with Ctrl+S. Externally edit the
+  paste an RGBA background color, and save with Ctrl+S. With a directory
+  junction inside a Start Menu Programs folder, confirm the picker opens and
+  shows apps from regular subfolders. Externally edit the
   TOML file while Settings has a draft and check the overwrite prompt.
 
 App overflow controls passed the Linux GPUI harness (73 tests) and Clippy.
