@@ -202,6 +202,8 @@ On Windows, run `scripts/check.ps1`, then verify these paths:
 - Open and close apps rapidly while the dock is visible. Check that placeholders
   give way to app icons and that clicks still target the tile under the pointer.
   Check an app whose executable has no icon but whose running window does.
+  Pin the same executable twice with different arguments and confirm each
+  tile has independent hover and press feedback.
 - Pin more apps than fit on a narrow work area. Scroll to both ends and check that
   the clock remains visible, including with a long custom date format.
 - Open Settings on a small display. Search and scroll the installed-app picker,

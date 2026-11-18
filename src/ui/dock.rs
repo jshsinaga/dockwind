@@ -737,7 +737,7 @@ impl Render for DockView {
             crate::config::VerticalAlign::Bottom => apps_div.items_end(),
         };
 
-        let items_elements = self.items.iter().map(|item| {
+        let items_elements = self.items.iter().enumerate().map(|(index, item)| {
             let icon = self
                 .icons
                 .get(&item.key)
@@ -754,7 +754,15 @@ impl Render for DockView {
                     controller.launch_second_instance(&middle_clicked);
                 });
             });
-            render_app_item(item, icon, &self.theme, self.icon_size, on_click, on_middle)
+            render_app_item(
+                index,
+                item,
+                icon,
+                &self.theme,
+                self.icon_size,
+                on_click,
+                on_middle,
+            )
         });
 
         let clock_space = if self.applied_config.clock.show {

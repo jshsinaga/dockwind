@@ -9,6 +9,7 @@ use super::theme::Theme;
 use crate::dock::DockItem;
 
 pub fn render_app_item(
+    index: usize,
     item: &DockItem,
     icon: Option<Arc<RenderImage>>,
     theme: &Theme,
@@ -63,7 +64,10 @@ pub fn render_app_item(
     let resting_alpha = if item.is_active { 0.08 } else { 0.0 };
 
     div()
-        .id(SharedString::from(item.key.to_string_lossy().into_owned()))
+        .id((
+            SharedString::from(item.key.to_string_lossy().into_owned()),
+            index,
+        ))
         .flex()
         .flex_col()
         .flex_shrink_0()
