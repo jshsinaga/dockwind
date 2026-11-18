@@ -13,6 +13,7 @@ image = "0.25"
 notify = "8"
 raw-window-handle = "0.6"
 serde = { version = "1", features = ["derive"] }
+tempfile = "3"
 thiserror = "2"
 toml = "1"
 toml_edit = "0.22"
@@ -42,9 +43,6 @@ windows = { version = "0.61", features = [
 
 [build-dependencies]
 embed-resource = "3"
-
-[dev-dependencies]
-tempfile = "3"
 
 [profile.release]
 lto = "thin"

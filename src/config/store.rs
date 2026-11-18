@@ -60,11 +60,13 @@ impl Config {
     }
 
     pub fn load_or_create_with_source(path: &Path) -> Result<(LoadedConfig, String), ConfigError> {
-        if !path.exists() {
-            write_default(path, &Config::default())?;
-        }
-
-        let source = read_config(path)?;
+        let source = match read_config_if_present(path)? {
+            Some(source) => source,
+            None => {
+                write_default(path, &Config::default())?;
+                read_config(path)?
+            }
+        };
         let loaded = match Self::parse_config(path, &source) {
             Ok(loaded) => loaded,
             Err(ConfigError::Parse { message, .. }) => LoadedConfig {
@@ -99,15 +101,7 @@ impl Config {
         path: &Path,
         expected_source: Option<&str>,
     ) -> Result<(LoadedConfig, String), ConfigError> {
-        let existing = match read_config(path) {
-            Ok(source) => Some(source),
-            Err(ConfigError::Read { source, .. })
-                if source.kind() == std::io::ErrorKind::NotFound =>
-            {
-                None
-            }
-            Err(error) => return Err(error),
-        };
+        let existing = read_config_if_present(path)?;
         if let Some(expected_source) = expected_source
             && existing.as_deref() != Some(expected_source)
         {
@@ -117,7 +111,7 @@ impl Config {
         }
 
         let loaded = self.clone().sanitize();
-        let contents = if let Some(existing) = existing {
+        let contents = if let Some(existing) = existing.as_deref() {
             let mut document: DocumentMut =
                 existing
                     .parse::<DocumentMut>()
@@ -134,7 +128,15 @@ impl Config {
                  # Written by the Dockwind settings window. Edit and save to reload.\n\n{body}"
             )
         };
-        write_atomic(path, &contents)?;
+        let temporary = stage_config(path, &contents)?;
+        if read_config_if_present(path)? != existing {
+            return Err(ConfigError::ChangedOnDisk {
+                path: path.to_path_buf(),
+            });
+        }
+        temporary
+            .persist(path)
+            .map_err(|error| config_write_error(path, error.error))?;
         Ok((loaded, contents))
     }
 }
@@ -146,41 +148,37 @@ fn read_config(path: &Path) -> Result<String, ConfigError> {
     })
 }
 
-fn write_atomic(path: &Path, contents: &str) -> Result<(), ConfigError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|source| ConfigError::Write {
-            path: path.to_path_buf(),
-            source,
-        })?;
+fn read_config_if_present(path: &Path) -> Result<Option<String>, ConfigError> {
+    match read_config(path) {
+        Ok(source) => Ok(Some(source)),
+        Err(ConfigError::Read { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+            Ok(None)
+        }
+        Err(error) => Err(error),
     }
+}
 
-    let temporary = path.with_extension("toml.tmp");
-    let mut file = fs::File::create(&temporary).map_err(|source| ConfigError::Write {
-        path: temporary.clone(),
+fn config_write_error(path: &Path, source: std::io::Error) -> ConfigError {
+    ConfigError::Write {
+        path: path.to_path_buf(),
         source,
-    })?;
-    let write_result = file
+    }
+}
+
+fn stage_config(path: &Path, contents: &str) -> Result<tempfile::NamedTempFile, ConfigError> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent).map_err(|error| config_write_error(path, error))?;
+
+    let mut temporary =
+        tempfile::NamedTempFile::new_in(parent).map_err(|error| config_write_error(path, error))?;
+    temporary
         .write_all(contents.as_bytes())
-        .and_then(|()| file.sync_all())
-        .map_err(|source| ConfigError::Write {
-            path: temporary.clone(),
-            source,
-        });
-    drop(file);
-
-    if let Err(error) = write_result {
-        let _ = fs::remove_file(&temporary);
-        return Err(error);
-    }
-
-    if let Err(source) = fs::rename(&temporary, path) {
-        let _ = fs::remove_file(&temporary);
-        return Err(ConfigError::Write {
-            path: path.to_path_buf(),
-            source,
-        });
-    }
-    Ok(())
+        .and_then(|()| temporary.as_file().sync_all())
+        .map_err(|error| config_write_error(temporary.path(), error))?;
+    Ok(temporary)
 }
 
 fn table_mut<'a>(document: &'a mut DocumentMut, key: &str) -> &'a mut Table {
@@ -326,22 +324,16 @@ fn update_document(document: &mut DocumentMut, config: &Config) {
 }
 
 fn write_default(path: &Path, config: &Config) -> Result<(), ConfigError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|source| ConfigError::Write {
-            path: path.to_path_buf(),
-            source,
-        })?;
-    }
-
     let body = toml::to_string_pretty(config)?;
     let contents = format!(
         "# Dockwind configuration\n\
          # Generated on first run. Edit and save to reload.\n\n{body}"
     );
-    fs::write(path, contents).map_err(|source| ConfigError::Write {
-        path: path.to_path_buf(),
-        source,
-    })
+    match stage_config(path, &contents)?.persist_noclobber(path) {
+        Ok(_) => Ok(()),
+        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(error) => Err(config_write_error(path, error.error)),
+    }
 }
 
 #[cfg(test)]
@@ -391,10 +383,48 @@ mod tests {
             .save_atomic_preserving(&path, None)
             .expect("save config");
         assert_eq!(saved.config, config);
-        assert!(!directory.path().join("config.toml.tmp").exists());
+        assert_eq!(
+            fs::read_dir(directory.path())
+                .expect("list config directory")
+                .count(),
+            1
+        );
 
         let loaded = Config::load_existing(&path).expect("reload saved config");
         assert_eq!(loaded.config, config);
+    }
+
+    #[test]
+    fn settings_save_leaves_an_existing_temporary_file_alone() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("config.toml");
+        let other_file = path.with_extension("toml.tmp");
+        fs::write(&other_file, "another writer").expect("write other file");
+
+        Config::default()
+            .save_atomic_preserving(&path, None)
+            .expect("save config");
+        assert_eq!(
+            fs::read_to_string(&other_file).expect("read other file"),
+            "another writer"
+        );
+    }
+
+    #[test]
+    fn default_creation_preserves_a_file_another_writer_created() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("config.toml");
+        fs::write(&path, "[appearance]\nwidth = 700\n").expect("write config");
+
+        write_default(&path, &Config::default()).expect("handle concurrent creation");
+        assert_eq!(
+            Config::load_existing(&path)
+                .expect("read config")
+                .config
+                .appearance
+                .width,
+            700
+        );
     }
 
     #[test]
