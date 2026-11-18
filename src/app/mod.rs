@@ -202,6 +202,8 @@ impl AppController {
         );
         let taskbar_changed =
             self.config.behavior.hide_native_taskbar != config.behavior.hide_native_taskbar;
+        let app_list_changed = self.config.pinned != config.pinned
+            || self.config.behavior.show_running_apps != config.behavior.show_running_apps;
         self.config = config;
 
         if taskbar_changed {
@@ -217,7 +219,9 @@ impl AppController {
             }
         }
 
-        self.rebuild_items();
+        if app_list_changed {
+            self.rebuild_items();
+        }
         cx.notify();
     }
 

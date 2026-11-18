@@ -165,32 +165,42 @@ impl DockView {
     /// Reads the controller state. Config-derived view state is only recomputed when
     /// the active configuration actually changed.
     fn sync_controller(&mut self, controller: &Entity<AppController>, cx: &mut Context<Self>) {
-        let (config, items) = {
-            let controller = controller.read(cx);
-            let items = controller
-                .items()
-                .iter()
-                .cloned()
-                .map(Arc::new)
-                .collect::<Vec<_>>();
-            (controller.config().clone(), items)
-        };
-        let count_changed = self.items.len() != items.len();
-        self.items = items;
-        self.load_missing_icons(cx);
-        if self.applied_config.appearance.width_mode == crate::config::WidthMode::Auto
-            && count_changed
-        {
-            let config = self.applied_config.clone();
-            self.apply_geometry(&config);
+        let controller = controller.read(cx);
+        let config = controller.config();
+        let count_changed = self.items.len() != controller.items().len();
+        let items_changed = self
+            .items
+            .iter()
+            .map(Arc::as_ref)
+            .ne(controller.items().iter());
+        if items_changed {
+            self.items = controller.items().iter().cloned().map(Arc::new).collect();
+        }
+        let config = (config != &self.applied_config).then(|| config.clone());
+
+        if items_changed {
+            self.load_missing_icons(cx);
         }
 
-        if config == self.applied_config {
+        if let Some(config) = config {
+            if !items_changed
+                && config.appearance == self.applied_config.appearance
+                && config.behavior == self.applied_config.behavior
+                && config.clock == self.applied_config.clock
+                && config.pinned == self.applied_config.pinned
+            {
+                // A saved-layout-only edit changes the menu, which reads this on demand.
+                self.applied_config = config;
+            } else {
+                self.apply_config(config, count_changed, cx);
+            }
+        } else if items_changed {
+            if count_changed && self.applied_config.appearance.width_mode == WidthMode::Auto {
+                let config = self.applied_config.clone();
+                self.apply_geometry(&config);
+            }
             cx.notify();
-            return;
         }
-
-        self.apply_config(config, cx);
     }
 
     fn load_missing_icons(&mut self, cx: &mut Context<Self>) {
@@ -239,7 +249,7 @@ impl DockView {
         .detach();
     }
 
-    fn apply_config(&mut self, config: Config, cx: &mut Context<Self>) {
+    fn apply_config(&mut self, config: Config, count_changed: bool, cx: &mut Context<Self>) {
         let theme = match Theme::from_config(&config.appearance) {
             Ok(theme) => theme,
             Err(error) => {
@@ -283,7 +293,7 @@ impl DockView {
         if !config.behavior.auto_hide && self.applied_config.behavior.auto_hide {
             self.auto_hide = AutoHide::new(false);
         }
-        if geometry_changed {
+        if geometry_changed || (count_changed && config.appearance.width_mode == WidthMode::Auto) {
             self.apply_geometry(&config);
             self.sync_appbar(&config);
         }
