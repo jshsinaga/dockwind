@@ -232,7 +232,7 @@ check passes.
 ```text
 config.toml --(notify, 200 ms debounce)--> ConfigWatcher --> Config --> AppController
 AppController --> DockView
-WinEvent hook --(unbounded channel)--> AppController --(120 ms debounce)--> enumerate
+WinEvent hook --(bounded channel)--> refresh task --> background enumeration --> AppController
 cursor timer --> cursor + fullscreen state --> AutoHide --> progress --> UI + click-through
 monitor poll --> primary display bounds + DPI --> dock rect + trigger --> SetWindowPos
 right click --> DockView --> deferred task --> native menu --> AppController command
@@ -248,8 +248,10 @@ taskbar watch timer (2 s) --> taskbar watcher --> refresh hide
 2. `AppController` owns the active config and the app list. `DockView` observes
    the controller and recomputes config-derived view state only when the config
    changes.
-3. Window events are coalesced for 120 ms, then `AppController` re-enumerates all
-   top-level windows. Icons are cached by executable path in the view.
+3. The refresh task coalesces window events for 50 ms and enumerates top-level
+   windows on the background executor. A 250 ms idle timer catches missed
+   events. The controller merges each completed snapshot with the current
+   config on the UI thread. Icons are cached by executable path in the view.
 4. The dock polls the cursor and fullscreen state. The pure auto-hide state
    machine returns progress. The view applies offset, opacity, and click-through.
 5. The native menu runs in a deferred task. `menu_open` pins the dock while the

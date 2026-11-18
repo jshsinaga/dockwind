@@ -347,6 +347,10 @@ impl DockView {
             }
         }
 
+        if !self.applied_config.behavior.auto_hide {
+            return;
+        }
+
         let cursor = match win::cursor::cursor_pos(self.geometry.scale_factor) {
             Ok(cursor) => cursor,
             Err(error) => {
@@ -384,7 +388,7 @@ impl DockView {
             now,
             pointer_in_dock: contains(dock_interaction_bounds, cursor),
             pointer_in_trigger: contains(self.geometry.trigger, cursor),
-            enabled: self.applied_config.behavior.auto_hide,
+            enabled: true,
             force_hidden,
             pinned_open: self.menu_open,
         };
@@ -394,11 +398,14 @@ impl DockView {
     }
 
     fn poll_interval(&self) -> Duration {
-        if self.applied_config.behavior.auto_hide {
-            Duration::from_millis(16)
+        let milliseconds = if !self.applied_config.behavior.auto_hide {
+            100
+        } else if self.progress == 0.0 && !self.auto_hide.is_animating() {
+            32
         } else {
-            Duration::from_millis(100)
-        }
+            16
+        };
+        Duration::from_millis(milliseconds)
     }
 
     fn set_click_through(&self, enabled: bool) {
@@ -482,9 +489,8 @@ impl DockView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.controller.update(cx, |controller, cx| {
-            controller.activate_or_launch(index, cx)
-        });
+        self.controller
+            .update(cx, |controller, _| controller.activate_or_launch(index));
     }
 }
 

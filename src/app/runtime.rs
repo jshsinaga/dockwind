@@ -4,7 +4,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, anyhow};
-use futures::channel::mpsc::UnboundedReceiver;
+use futures::channel::mpsc::{Receiver, UnboundedReceiver};
 use gpui::{AppContext, Application, Entity};
 use tracing::{error, info, warn};
 use tracing_appender::non_blocking::WorkerGuard;
@@ -35,7 +35,7 @@ struct Runtime {
     config_path: PathBuf,
     config: Option<Config>,
     config_updates: Option<UnboundedReceiver<Config>>,
-    window_events: Option<UnboundedReceiver<()>>,
+    window_events: Option<Receiver<()>>,
     hotkey_events: Option<UnboundedReceiver<()>>,
     tray_events: Option<UnboundedReceiver<TrayEvent>>,
     config_watcher: Option<ConfigWatcher>,

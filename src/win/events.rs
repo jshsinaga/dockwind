@@ -3,7 +3,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
-use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
+use futures::channel::mpsc::{Receiver, Sender, channel};
 use tracing::{error, warn};
 use windows::Win32::UI::{
     Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent},
@@ -21,7 +21,7 @@ const READY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Registered by the running event thread so the out-of-context hook callback can
 /// forward events. `None` while no worker is running.
-static EVENT_SENDER: Mutex<Option<UnboundedSender<()>>> = Mutex::new(None);
+static EVENT_SENDER: Mutex<Option<Sender<()>>> = Mutex::new(None);
 
 /// Owns the window event thread. Call [`EventWorker::shutdown`] before the process
 /// exits so the hook is removed and the thread is joined.
@@ -48,8 +48,8 @@ impl Drop for EventWorker {
 }
 
 /// Starts the dedicated window event thread and returns its receiver.
-pub fn spawn() -> Result<(EventWorker, UnboundedReceiver<()>)> {
-    let (sender, receiver) = unbounded();
+pub fn spawn() -> Result<(EventWorker, Receiver<()>)> {
+    let (sender, receiver) = channel(1);
     {
         let mut slot = EVENT_SENDER
             .lock()
@@ -235,11 +235,12 @@ unsafe extern "system" fn callback(
 
     // A poisoned lock cannot make the sender invalid; recover the guard instead of
     // panicking in the callback.
-    let slot = EVENT_SENDER
+    let mut slot = EVENT_SENDER
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(sender) = slot.as_ref() {
-        let _ = sender.unbounded_send(());
+    if let Some(sender) = slot.as_mut() {
+        // A pending notification already schedules a full refresh.
+        let _ = sender.try_send(());
     }
 }
 
