@@ -200,7 +200,8 @@ On Windows, run `scripts/check.ps1`, then verify these paths:
 - Reveal and dismiss the dock after idle time at both screen edges. Check slide,
   fade, and stable tile positions with light and dark appearances. Turn off
   Windows animation effects and repeat to verify the dock skips the transition
-  while retaining its show and hide delays.
+  while retaining its show and hide delays. With animations enabled, return
+  the pointer to the dock area mid-hide and check that the transition reverses.
 - Open and close apps rapidly while the dock is visible. Check that placeholders
   give way to app icons and that clicks still target the tile under the pointer.
   Check an app whose executable has no icon but whose running window does.

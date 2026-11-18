@@ -128,6 +128,8 @@ color. The dock has one surface and one hierarchy.
   180 ms. Turning off animation effects in Windows skips the dock transition
   while retaining its show and hide delays.
 - Progress from 0 to 1 drives vertical offset and opacity.
+- If the pointer returns to the dock area during a hide transition, the dock
+  reverses direction. A fully hidden dock relies on the edge trigger.
 - At progress 0, the window is click-through.
 - An open context menu pins the dock visible.
 - A fullscreen app forces the dock hidden when `hide_in_fullscreen` is true.

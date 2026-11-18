@@ -61,7 +61,8 @@ impl AutoHide {
             return old_target != self.target;
         }
 
-        if input.pinned_open {
+        if input.pinned_open || (self.target == 0.0 && self.progress > 0.0 && input.pointer_in_dock)
+        {
             self.target = 1.0;
             self.pending_since = None;
         } else if self.target < 1.0 {
@@ -191,6 +192,30 @@ mod tests {
 
         let progress = auto_hide.advance(Duration::from_millis(10_098), settings());
         assert!((progress - 0.1).abs() < 0.0001);
+    }
+
+    #[test]
+    fn returning_to_the_dock_reverses_an_incomplete_hide() {
+        let mut auto_hide = AutoHide::new(false);
+        auto_hide.update_target(input(0, false, false), settings());
+        assert!(auto_hide.update_target(input(400, false, false), settings()));
+        let hiding = auto_hide.advance(Duration::from_millis(460), settings());
+        assert!(hiding > 0.0 && hiding < 1.0);
+
+        assert!(auto_hide.update_target(input(460, true, false), settings()));
+        let revealing = auto_hide.advance(Duration::from_millis(480), settings());
+        assert!(revealing > hiding);
+    }
+
+    #[test]
+    fn a_fully_hidden_dock_still_requires_the_edge_trigger() {
+        let mut auto_hide = AutoHide::new(true);
+        assert!(!auto_hide.update_target(input(0, true, false), settings()));
+        assert!(!auto_hide.update_target(input(100, true, false), settings()));
+        assert_eq!(
+            auto_hide.advance(Duration::from_millis(100), settings()),
+            0.0
+        );
     }
 
     #[test]
