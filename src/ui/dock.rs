@@ -578,9 +578,16 @@ impl DockView {
         &self,
         forward: bool,
         width: Pixels,
+        overflow: Pixels,
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let text = self.theme.text;
+        let offset = self.app_scroll.offset().x;
+        let enabled = if forward {
+            offset > -overflow + px(0.5)
+        } else {
+            offset < px(-0.5)
+        };
         div()
             .id(if forward {
                 "dock-scroll-right"
@@ -594,23 +601,29 @@ impl DockView {
             .items_center()
             .justify_center()
             .rounded(px(6.0))
-            .text_color(Rgba { a: 0.75, ..text })
-            .cursor_pointer()
-            .hover(move |style| style.bg(Rgba { a: 0.13, ..text }).text_color(text))
-            .active(move |style| style.bg(Rgba { a: 0.20, ..text }))
-            .on_click(cx.listener(move |this, _, _, cx| {
-                let handle = &this.app_scroll;
-                let mut offset = handle.offset();
-                let width = handle.bounds().size.width;
-                let page = (width - this.icon_size - px(8.0)).max(width * 0.5);
-                let delta = if forward { -page } else { page };
-                let next = scroll_offset(offset.x, delta, handle.max_offset().width);
-                if next != offset.x {
-                    offset.x = next;
-                    handle.set_offset(offset);
-                    cx.notify();
-                }
-            }))
+            .text_color(Rgba {
+                a: if enabled { 0.75 } else { 0.25 },
+                ..text
+            })
+            .when(enabled, |button| {
+                button
+                    .cursor_pointer()
+                    .hover(move |style| style.bg(Rgba { a: 0.13, ..text }).text_color(text))
+                    .active(move |style| style.bg(Rgba { a: 0.20, ..text }))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let handle = &this.app_scroll;
+                        let mut offset = handle.offset();
+                        let width = handle.bounds().size.width;
+                        let page = (width - this.icon_size - px(8.0)).max(width * 0.5);
+                        let delta = if forward { -page } else { page };
+                        let next = scroll_offset(offset.x, delta, handle.max_offset().width);
+                        if next != offset.x {
+                            offset.x = next;
+                            handle.set_offset(offset);
+                            cx.notify();
+                        }
+                    }))
+            })
             .child(if forward { "›" } else { "‹" })
     }
 }
@@ -776,6 +789,7 @@ impl Render for DockView {
         let app_width = (inner_width - clock_space).max(px(0.0));
         let control_width = px(24.0);
         let show_controls = strip_width > app_width && app_width >= control_width * 3.0;
+        let overflow = strip_width - (app_width - control_width * 2.0);
         let viewport = div()
             .id("dock-apps")
             .flex()
@@ -791,11 +805,11 @@ impl Render for DockView {
             .min_w(px(0.0))
             .items_center()
             .when(show_controls, |row| {
-                row.child(self.render_scroll_control(false, control_width, cx))
+                row.child(self.render_scroll_control(false, control_width, overflow, cx))
             })
             .child(viewport)
             .when(show_controls, |row| {
-                row.child(self.render_scroll_control(true, control_width, cx))
+                row.child(self.render_scroll_control(true, control_width, overflow, cx))
             });
 
         let dock_bar = if self.applied_config.clock.show {
