@@ -379,7 +379,8 @@ Do not write in place. A crash during an in-place write can leave a corrupt file
 ### 6.4 External Edits and Conflicts
 
 The settings window records the file contents when it opens. Before Apply it reads
-the file again. If the contents changed, it asks before overwriting. If the file
+the file again. If the contents changed, choose Discard draft & reload to load
+the latest valid file, or Overwrite config to save the draft. If the file
 was deleted, it asks before recreating it. A failed save leaves the existing file
 intact and reports the error.
 

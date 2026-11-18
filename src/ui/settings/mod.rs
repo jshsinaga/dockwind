@@ -339,6 +339,20 @@ impl SettingsView {
         }
     }
 
+    fn reload_draft_from_disk(&mut self) -> Result<(), ConfigError> {
+        let (loaded, source) = Config::load_existing_with_source(&self.config_path)?;
+        self.saved_source = source;
+        self.saved = loaded.config;
+        self.draft.clone_from(&self.saved);
+        self.autostart_draft = self.autostart_saved;
+        self.overwrite_pending = false;
+        self.selected_pinned_index = None;
+        self.delete_confirm_index = None;
+        self.clear_layout_name();
+        self.status_message = Some(("Loaded config from disk.".into(), false));
+        Ok(())
+    }
+
     fn apply_and_save(&mut self, overwrite: bool, cx: &mut Context<Self>) {
         if let Some(field) = self.active_input.take() {
             self.live_update_input(field);
@@ -484,14 +498,7 @@ impl SettingsView {
     }
 
     fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let (status_text, status_color) = if self.overwrite_pending {
-            (
-                SharedString::from(
-                    "Config changed on disk. Reopen Settings to load it, or overwrite with this draft.",
-                ),
-                rgba(0xF9E2AFFF),
-            )
-        } else if let Some((msg, is_error)) = &self.status_message {
+        let (status_text, status_color) = if let Some((msg, is_error)) = &self.status_message {
             (
                 msg.clone(),
                 if *is_error {
@@ -499,6 +506,11 @@ impl SettingsView {
                 } else {
                     rgba(0xA6E3A1FF)
                 },
+            )
+        } else if self.overwrite_pending {
+            (
+                SharedString::from("Config changed on disk. Choose which version to keep."),
+                rgba(0xF9E2AFFF),
             )
         } else if self.has_unsaved_changes() {
             (SharedString::from("● Unsaved changes"), rgba(0xF9E2AFFF))
@@ -516,10 +528,12 @@ impl SettingsView {
             .items_center()
             .justify_between()
             .gap_4()
+            .when(self.overwrite_pending, |footer| footer.flex_wrap())
             .child(
                 div()
                     .flex_1()
                     .min_w(px(0.0))
+                    .when(self.overwrite_pending, |status| status.w_full().flex_none())
                     .text_xs()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(status_color)
@@ -529,8 +543,32 @@ impl SettingsView {
                 div()
                     .flex()
                     .items_center()
-                    .flex_shrink_0()
+                    .flex_wrap()
                     .gap_3()
+                    .when(self.overwrite_pending, |actions| {
+                        actions.child(
+                            div()
+                                .id("btn-reload-settings")
+                                .px_4()
+                                .py_2()
+                                .rounded_lg()
+                                .bg(rgba(0x313244FF))
+                                .hover(|style| style.bg(rgba(0x45475AFF)))
+                                .text_xs()
+                                .text_color(rgba(0xCDD6F4FF))
+                                .cursor_pointer()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    if let Err(error) = this.reload_draft_from_disk() {
+                                        this.status_message = Some((
+                                            format!("Failed to reload config: {error}").into(),
+                                            true,
+                                        ));
+                                    }
+                                    cx.notify();
+                                }))
+                                .child("Discard draft & reload"),
+                        )
+                    })
                     .child(
                         div()
                             .id("btn-close-settings")
@@ -713,6 +751,27 @@ mod tests {
     use super::controls::HOTKEY_PRESETS;
     use super::*;
     use crate::config::PinnedApp;
+
+    #[test]
+    fn reloading_a_conflict_keeps_the_draft_until_disk_config_is_valid() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let path = directory.path().join("config.toml");
+        let mut view = SettingsView::new(path.clone(), Config::default(), String::new(), false);
+        view.draft.appearance.width = 700;
+        view.overwrite_pending = true;
+        std::fs::write(&path, "invalid = [").expect("write bad config");
+        assert!(view.reload_draft_from_disk().is_err());
+        assert_eq!(view.draft.appearance.width, 700);
+        assert!(view.overwrite_pending);
+
+        let source = "[appearance]\nwidth = 640\n";
+        std::fs::write(&path, source).expect("write valid config");
+        view.reload_draft_from_disk().expect("reload disk config");
+        assert_eq!(view.draft.appearance.width, 640);
+        assert_eq!(view.saved_source, source);
+        assert!(!view.has_unsaved_changes());
+        assert!(!view.overwrite_pending);
+    }
 
     #[test]
     fn hotkey_presets_are_valid() {

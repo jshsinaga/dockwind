@@ -83,7 +83,13 @@ impl Config {
     }
 
     pub fn load_existing(path: &Path) -> Result<LoadedConfig, ConfigError> {
-        Self::parse_config(path, &read_config(path)?)
+        Self::load_existing_with_source(path).map(|(loaded, _)| loaded)
+    }
+
+    pub fn load_existing_with_source(path: &Path) -> Result<(LoadedConfig, String), ConfigError> {
+        let source = read_config(path)?;
+        let loaded = Self::parse_config(path, &source)?;
+        Ok((loaded, source))
     }
 
     fn parse_config(path: &Path, contents: &str) -> Result<LoadedConfig, ConfigError> {
