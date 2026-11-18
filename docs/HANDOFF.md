@@ -201,6 +201,7 @@ On Windows, run `scripts/check.ps1`, then verify these paths:
   fade, and stable tile positions with light and dark appearances.
 - Open and close apps rapidly while the dock is visible. Check that placeholders
   give way to app icons and that clicks still target the tile under the pointer.
+  Check an app whose executable has no icon but whose running window does.
 - Pin more apps than fit on a narrow work area. Scroll to both ends and check that
   the clock remains visible, including with a long custom date format.
 - Open Settings on a small display. Search and scroll the installed-app picker,

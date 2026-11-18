@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -31,13 +31,34 @@ pub struct DockGeometry {
     pub monitor: MonitorInfo,
 }
 
+#[derive(Default)]
+struct CachedIcon {
+    image: Option<Arc<RenderImage>>,
+    attempted_windows: HashSet<Option<isize>>,
+}
+
+impl CachedIcon {
+    fn needs_lookup(&self, window: Option<isize>) -> bool {
+        self.image.is_none() && !self.attempted_windows.contains(&window)
+    }
+
+    fn record_result(&mut self, window: Option<isize>, image: Option<Arc<RenderImage>>) {
+        if let Some(image) = image {
+            self.image = Some(image);
+            self.attempted_windows.clear();
+        } else {
+            self.attempted_windows.insert(window);
+        }
+    }
+}
+
 pub struct DockView {
     controller: Entity<AppController>,
     applied_config: Config,
     theme: Theme,
     clock: Entity<ClockView>,
     items: Vec<Arc<DockItem>>,
-    icons: HashMap<PathBuf, Option<Arc<RenderImage>>>,
+    icons: HashMap<PathBuf, CachedIcon>,
     loading_icons: bool,
     app_scroll: ScrollHandle,
     icon_size: Pixels,
@@ -172,8 +193,13 @@ impl DockView {
         }
         let mut requests = HashMap::new();
         for item in &self.items {
-            if !self.icons.contains_key(&item.key) {
-                requests.insert(item.key.clone(), item.target_window());
+            let hwnd = item.target_window();
+            if self
+                .icons
+                .get(&item.key)
+                .is_none_or(|icon| icon.needs_lookup(hwnd))
+            {
+                requests.insert(item.key.clone(), hwnd);
             }
         }
         if requests.is_empty() {
@@ -186,14 +212,19 @@ impl DockView {
                 .into_iter()
                 .map(|(path, hwnd)| {
                     let icon = win::icons::load_icon(&path, hwnd);
-                    (path, icon)
+                    (path, hwnd, icon)
                 })
                 .collect::<Vec<_>>()
         });
         cx.spawn(async move |this, cx| {
             let loaded = load.await;
             let _ = this.update(cx, |this, cx| {
-                this.icons.extend(loaded);
+                for (path, hwnd, icon) in loaded {
+                    this.icons
+                        .entry(path)
+                        .or_default()
+                        .record_result(hwnd, icon);
+                }
                 this.loading_icons = false;
                 this.load_missing_icons(cx);
                 cx.notify();
@@ -707,7 +738,10 @@ impl Render for DockView {
         };
 
         let items_elements = self.items.iter().map(|item| {
-            let icon = self.icons.get(&item.key).and_then(Clone::clone);
+            let icon = self
+                .icons
+                .get(&item.key)
+                .and_then(|icon| icon.image.clone());
             let clicked = Arc::clone(item);
             let middle_clicked = Arc::clone(item);
             let on_click = cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -836,6 +870,19 @@ fn auto_hide_settings(config: &Config) -> AutoHideSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_icon_lookup_can_retry_for_a_new_window() {
+        let mut icon = CachedIcon::default();
+        icon.record_result(None, None);
+        assert!(!icon.needs_lookup(None));
+        assert!(icon.needs_lookup(Some(1)));
+
+        icon.record_result(Some(1), None);
+        icon.record_result(Some(2), None);
+        assert!(!icon.needs_lookup(Some(1)));
+        assert!(icon.needs_lookup(Some(3)));
+    }
 
     #[test]
     fn scroll_buttons_stop_at_both_ends_of_the_strip() {
