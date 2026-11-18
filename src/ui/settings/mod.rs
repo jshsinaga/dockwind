@@ -76,6 +76,7 @@ pub struct SettingsView {
     pub(super) saved: Config,
     saved_source: String,
     overwrite_pending: bool,
+    showing_close_confirm: bool,
     pub(super) autostart_draft: bool,
     pub(super) autostart_saved: bool,
     pub(super) active_tab: SettingsTab,
@@ -106,6 +107,7 @@ impl SettingsView {
             saved: config,
             saved_source,
             overwrite_pending: false,
+            showing_close_confirm: false,
             autostart_draft: autostart,
             autostart_saved: autostart,
             active_tab: SettingsTab::Appearance,
@@ -165,9 +167,25 @@ impl SettingsView {
             .scroll_to_item_strict(0, ScrollStrategy::Top);
     }
 
+    fn can_close(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.has_unsaved_changes() {
+            return true;
+        }
+        self.showing_close_confirm = true;
+        cx.notify();
+        false
+    }
+
     fn handle_key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         let key = &event.keystroke.key;
         let modifiers = event.keystroke.modifiers;
+        if self.showing_close_confirm {
+            if key == "escape" {
+                self.showing_close_confirm = false;
+                cx.notify();
+            }
+            return;
+        }
         if key == "escape" {
             if self.showing_taskbar_confirm {
                 self.showing_taskbar_confirm = false;
@@ -506,8 +524,10 @@ impl SettingsView {
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(rgba(0xCDD6F4FF))
                             .cursor_pointer()
-                            .on_click(cx.listener(|_, _, window, _| {
-                                window.remove_window();
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                if this.can_close(cx) {
+                                    window.remove_window();
+                                }
                             }))
                             .child("Close"),
                     )
@@ -574,7 +594,9 @@ impl Render for SettingsView {
                     }),
             )
             .child(self.render_footer(cx))
-            .children(if self.showing_taskbar_confirm {
+            .children(if self.showing_close_confirm {
+                Some(self.render_close_confirm_dialog(cx))
+            } else if self.showing_taskbar_confirm {
                 Some(self.render_taskbar_confirm_dialog(cx))
             } else if self.showing_app_picker {
                 Some(self.render_app_picker_dialog(cx))
@@ -627,14 +649,19 @@ pub fn open_settings_window(cx: &mut App, config_path: PathBuf) -> Result<()> {
     let autostart_enabled = win::autostart::is_enabled().unwrap_or(false);
 
     cx.open_window(options, |window, cx| {
-        cx.new(|cx| {
+        let view = cx.new(|cx| {
             let mut view =
                 SettingsView::new(config_path, loaded.config, saved_source, autostart_enabled);
             let focus = cx.focus_handle();
             window.focus(&focus);
             view.focus_handle = Some(focus);
             view
-        })
+        });
+        let settings = view.downgrade();
+        window.on_window_should_close(cx, move |_, cx| {
+            settings.update(cx, SettingsView::can_close).unwrap_or(true)
+        });
+        view
     })
     .context("failed to open GPUI settings window")?;
 

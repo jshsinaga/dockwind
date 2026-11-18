@@ -360,7 +360,8 @@ GPUI dock window. The reason is recorded in `docs/decisions.md`.
 
 - Controls hold the draft.
 - Apply validates, saves, and updates the controls with sanitized values.
-- Close discards unsaved edits and closes the window.
+- Closing Settings with unsaved edits offers Keep editing, Discard, and
+  Save & Close. A failed save keeps Settings open.
 - Validation failures show a message box and do not write the file.
 - Autostart is applied immediately. It is not a config field.
 

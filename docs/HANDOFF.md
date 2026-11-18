@@ -217,6 +217,8 @@ layout, change the pinned draft, and load Work. Apply, restart Dockwind, and
 reopen Settings to confirm the pin order and saved layout remain available.
 Switch layouts from the dock menu and verify the checked layout, then try
 saving an older Settings draft and confirm it detects the disk change.
+With edits pending, check Close and the title-bar close button. Exercise
+Keep editing, Discard, and Save & Close, including an external config conflict.
 
 ### Historical evidence, baseline `482bd7a`
 

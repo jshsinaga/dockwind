@@ -8,6 +8,85 @@ use crate::config::PinnedApp;
 use crate::win;
 
 impl SettingsView {
+    pub(super) fn render_close_confirm_dialog(&self, cx: &mut Context<Self>) -> AnyElement {
+        enum Choice {
+            KeepEditing,
+            Discard,
+            Save,
+        }
+
+        div()
+            .id("close-settings-confirm")
+            .absolute()
+            .size_full()
+            .top_0()
+            .left_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .p_6()
+            .bg(rgba(0x000000B0))
+            .occlude()
+            .child(
+                div()
+                    .w(px(460.0))
+                    .max_w_full()
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .p_5()
+                    .rounded_xl()
+                    .bg(rgba(0x181825FF))
+                    .border_1()
+                    .border_color(rgba(0x313244FF))
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgba(0xCDD6F4FF))
+                            .child("Save changes before closing?"),
+                    )
+                    .child(
+                        div().flex().flex_wrap().justify_end().gap_2().children(
+                            [
+                                ("keep-editing", "Keep editing", Choice::KeepEditing),
+                                ("discard-draft", "Discard", Choice::Discard),
+                                ("save-and-close", "Save & Close", Choice::Save),
+                            ]
+                            .into_iter()
+                            .map(|(id, label, choice)| {
+                                div()
+                                    .id(id)
+                                    .px_3()
+                                    .py_2()
+                                    .rounded_md()
+                                    .bg(rgba(0x313244FF))
+                                    .hover(|style| style.bg(rgba(0x45475AFF)))
+                                    .text_xs()
+                                    .text_color(rgba(0xCDD6F4FF))
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.showing_close_confirm = false;
+                                        match choice {
+                                            Choice::KeepEditing => cx.notify(),
+                                            Choice::Discard => window.remove_window(),
+                                            Choice::Save => {
+                                                this.apply_and_save(false, cx);
+                                                if !this.has_unsaved_changes()
+                                                    && !this.overwrite_pending
+                                                {
+                                                    window.remove_window();
+                                                }
+                                            }
+                                        }
+                                    }))
+                                    .child(label)
+                            }),
+                        ),
+                    ),
+            )
+            .into_any_element()
+    }
+
     pub(super) fn render_taskbar_confirm_dialog(&self, cx: &mut Context<Self>) -> AnyElement {
         div()
             .id("taskbar-confirm-backdrop")
