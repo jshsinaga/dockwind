@@ -647,8 +647,7 @@ impl SettingsView {
                                 ActiveInput::BackgroundHex,
                                 background_hex,
                                 "#1E1E2E",
-                                self.active_input,
-                                &self.input_buffer,
+                                self,
                                 cx,
                             ))
                             .child(
@@ -844,8 +843,7 @@ impl SettingsView {
                                 ActiveInput::BorderColorHex,
                                 &border_hex,
                                 "#FFFFFF33",
-                                self.active_input,
-                                &self.input_buffer,
+                                self,
                                 cx,
                             )),
                     ),

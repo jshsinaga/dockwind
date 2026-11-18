@@ -722,12 +722,16 @@ impl SettingsView {
                             .cursor_text()
                             .on_click(cx.listener(|this: &mut Self, _, _, cx| {
                                 this.active_input = Some(ActiveInput::AppPickerSearch);
+                                this.input_selected = false;
                                 this.input_buffer = this.app_picker_search.clone();
                                 cx.notify();
                             }))
                             .child(
                                 div()
                                     .text_xs()
+                                    .when(is_search_active && self.input_selected, |text| {
+                                        text.bg(rgba(0x45475AFF))
+                                    })
                                     .text_color(if search_text.is_empty() {
                                         rgba(0x6C7086FF)
                                     } else {
@@ -757,6 +761,7 @@ impl SettingsView {
                                             this.reset_app_picker_scroll();
                                             this.input_buffer.clear();
                                             this.active_input = Some(ActiveInput::AppPickerSearch);
+                                            this.input_selected = false;
                                             cx.notify();
                                         }))
                                         .child("Clear"),

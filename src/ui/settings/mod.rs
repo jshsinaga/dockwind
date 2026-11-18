@@ -94,6 +94,7 @@ pub struct SettingsView {
     pub(super) showing_taskbar_confirm: bool,
     pub(super) active_input: Option<ActiveInput>,
     pub(super) input_buffer: String,
+    input_selected: bool,
     pub(super) layout_name: String,
     renaming_layout: Option<String>,
     pub(super) focus_handle: Option<FocusHandle>,
@@ -127,6 +128,7 @@ impl SettingsView {
             showing_taskbar_confirm: false,
             active_input: None,
             input_buffer: String::new(),
+            input_selected: false,
             layout_name: String::new(),
             renaming_layout: None,
             focus_handle: None,
@@ -144,6 +146,7 @@ impl SettingsView {
         self.app_picker_search.clear();
         self.app_picker_filter = None;
         self.active_input = Some(ActiveInput::AppPickerSearch);
+        self.input_selected = false;
         self.input_buffer.clear();
         self.status_message = None;
         self.reset_app_picker_scroll();
@@ -253,6 +256,11 @@ impl SettingsView {
             field,
             ActiveInput::BackgroundHex | ActiveInput::BorderColorHex | ActiveInput::ClockFontColor
         );
+        if modifiers.control && !modifiers.alt && key == "a" {
+            self.input_selected = !self.input_buffer.is_empty();
+            cx.notify();
+            return;
+        }
         if modifiers.control && !modifiers.alt && key == "v" {
             let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
                 return;
@@ -270,26 +278,42 @@ impl SettingsView {
                     .take(64)
                     .collect();
             }
-        } else if key == "backspace" {
-            self.input_buffer.pop();
+            self.input_selected = false;
+        } else if key == "backspace" || (key == "delete" && self.input_selected) {
+            if std::mem::take(&mut self.input_selected) {
+                self.input_buffer.clear();
+            } else {
+                self.input_buffer.pop();
+            }
         } else {
             let Some(text) = &event.keystroke.key_char else {
                 return;
             };
-            for ch in text.chars().filter(|ch| !ch.is_control()) {
-                if hex_field {
-                    if self.input_buffer.len() < 9
-                        && (ch.is_ascii_hexdigit() || (ch == '#' && self.input_buffer.is_empty()))
-                    {
-                        self.input_buffer.push(ch.to_ascii_uppercase());
-                    }
-                } else if self.input_buffer.chars().count() < 64 {
-                    self.input_buffer.push(ch);
-                }
-            }
+            self.insert_input_text(text, hex_field);
         }
         self.live_update_input(field);
         cx.notify();
+    }
+
+    fn insert_input_text(&mut self, text: &str, hex_field: bool) {
+        for ch in text.chars().filter(|ch| !ch.is_control()) {
+            if hex_field
+                && !ch.is_ascii_hexdigit()
+                && !(ch == '#' && (self.input_selected || self.input_buffer.is_empty()))
+            {
+                continue;
+            }
+            if std::mem::take(&mut self.input_selected) {
+                self.input_buffer.clear();
+            }
+            if hex_field {
+                if self.input_buffer.len() < 9 {
+                    self.input_buffer.push(ch.to_ascii_uppercase());
+                }
+            } else if self.input_buffer.chars().count() < 64 {
+                self.input_buffer.push(ch);
+            }
+        }
     }
 
     fn live_update_input(&mut self, field: ActiveInput) {
@@ -759,6 +783,29 @@ mod tests {
     use super::controls::HOTKEY_PRESETS;
     use super::*;
     use crate::config::PinnedApp;
+
+    #[test]
+    fn typing_replaces_selected_text_only_with_allowed_characters() {
+        let mut view = SettingsView::new(
+            "config.toml".into(),
+            Config::default(),
+            String::new(),
+            false,
+        );
+        view.input_buffer = "#112233".into();
+        view.input_selected = true;
+        view.insert_input_text("z", true);
+        assert_eq!(view.input_buffer, "#112233");
+        assert!(view.input_selected);
+
+        view.insert_input_text("#abcdee80", true);
+        assert_eq!(view.input_buffer, "#ABCDEE80");
+        assert!(!view.input_selected);
+
+        view.input_selected = true;
+        view.insert_input_text("New layout", false);
+        assert_eq!(view.input_buffer, "New layout");
+    }
 
     #[test]
     fn reloading_a_conflict_keeps_the_draft_until_disk_config_is_valid() {

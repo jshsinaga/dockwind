@@ -211,13 +211,16 @@ pub fn render_text_input(
     field: ActiveInput,
     current_value: &str,
     placeholder: &'static str,
-    active_field: Option<ActiveInput>,
-    input_buffer: &str,
+    settings: &SettingsView,
     cx: &mut Context<SettingsView>,
 ) -> AnyElement {
-    let is_active = active_field == Some(field);
+    let is_active = settings.active_input == Some(field);
+    let selected = is_active && settings.input_selected;
+    let input_buffer = &settings.input_buffer;
     let display_text = if is_active {
-        if input_buffer.is_empty() {
+        if selected {
+            input_buffer.clone()
+        } else if input_buffer.is_empty() {
             "|".to_string()
         } else {
             format!("{input_buffer}|")
@@ -249,6 +252,7 @@ pub fn render_text_input(
         .justify_between()
         .on_click(cx.listener(move |this: &mut SettingsView, _, _, cx| {
             this.active_input = Some(field);
+            this.input_selected = false;
             this.input_buffer = match field {
                 ActiveInput::BackgroundHex => this.draft.appearance.background.clone(),
                 ActiveInput::BorderColorHex => this.draft.appearance.border_color.clone(),
@@ -267,7 +271,10 @@ pub fn render_text_input(
             div()
                 .text_xs()
                 .font_family(SharedString::from("monospace"))
-                .text_color(if is_active {
+                .when(selected, |text| text.bg(rgba(0x89B4FAFF)))
+                .text_color(if selected {
+                    rgba(0x11111BFF)
+                } else if is_active {
                     rgba(0xFFFFFFFF)
                 } else if is_empty {
                     rgba(0x6C7086FF)

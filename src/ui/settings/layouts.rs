@@ -43,6 +43,7 @@ impl SettingsView {
         self.layout_name = name.to_owned();
         self.input_buffer.clone_from(&self.layout_name);
         self.active_input = Some(ActiveInput::LayoutName);
+        self.input_selected = true;
         self.status_message = None;
     }
 
@@ -58,8 +59,7 @@ impl SettingsView {
                 ActiveInput::LayoutName,
                 &self.layout_name,
                 "Layout name",
-                self.active_input,
-                &self.input_buffer,
+                self,
                 cx,
             ))
             .child(

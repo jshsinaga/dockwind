@@ -218,7 +218,8 @@ On Windows, run `scripts/check.ps1`, then verify these paths:
   while the hex field is active, select a color, and check that Apply & Save
   uses the chosen color and preserves alpha. In the clock preview, type a
   standalone percent sign, then complete a valid format. Check that the
-  preview recovers without closing Settings. Hide the clock, wait across a
+  preview recovers without closing Settings. Use Ctrl+A in a clock, color,
+  layout-name, and app-search field. Confirm typing replaces the selection. Hide the clock, wait across a
   minute boundary, then show it again and check that the displayed time is current. Browse into another directory
   and verify existing relative-path pins still resolve afterward. Externally edit the
   TOML file while Settings has a draft and check the overwrite prompt.
