@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use gpui::{Context, FontWeight, IntoElement, SharedString, div, img, prelude::*, px, rgba};
 
-use super::{ActiveInput, DraggedPinnedApp, SettingsView};
+use super::{DraggedPinnedApp, SettingsView};
 use crate::config::PinnedApp;
 use crate::win;
 

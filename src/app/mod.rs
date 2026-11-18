@@ -105,7 +105,7 @@ impl AppController {
                             }
                         }
                     }
-                    _ = Timer::after(Duration::from_millis(250)).fuse() => {}
+                    _ = FutureExt::fuse(Timer::after(Duration::from_millis(250))) => {}
                 }
             }
         })
