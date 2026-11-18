@@ -66,6 +66,7 @@ pub fn render_app_item(
         .id(SharedString::from(item.key.to_string_lossy().into_owned()))
         .flex()
         .flex_col()
+        .flex_shrink_0()
         .items_center()
         .justify_center()
         .gap_1()

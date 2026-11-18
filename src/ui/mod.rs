@@ -12,7 +12,7 @@ use std::cell::Cell;
 use anyhow::{Context as _, Result};
 use gpui::{
     App, AppContext, Entity, Render, SharedString, TitlebarOptions, Window,
-    WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, div, prelude::*, px, size,
+    WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, div, prelude::*,
 };
 use tracing::{info, warn};
 
@@ -43,23 +43,10 @@ pub fn open_dock_window(
 ) -> Result<()> {
     let monitor =
         win::monitors::MonitorInfo::primary().context("failed to read the primary monitor")?;
-    let initial_width = if config.appearance.width_mode == crate::config::WidthMode::Auto {
-        let (_, _, left, right) = config.appearance.effective_padding();
-        let app_count = controller.read(cx).items().len().max(1) as u32;
-        let icon_total = app_count * (config.appearance.icon_size + 8);
-        let spacing_total = app_count.saturating_sub(1) * config.appearance.item_spacing;
-        let clock_width = if config.clock.show {
-            (config.clock.time_font_size * 7).max(130)
-        } else {
-            0u32
-        };
-        (left + right + icon_total + spacing_total + clock_width + 24).max(120)
-    } else {
-        config.appearance.width
-    };
-    let content_size = size(
-        px(initial_width as f32),
-        px(config.appearance.height as f32),
+    let content_size = dock::dock_size(
+        config,
+        controller.read(cx).items().len(),
+        monitor.work_area.size.width,
     );
     let bounds = win::monitors::dock_rect(
         &monitor,

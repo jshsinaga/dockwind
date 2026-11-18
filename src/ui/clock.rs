@@ -86,9 +86,13 @@ fn needs_seconds(format: &str) -> bool {
 impl Render for ClockView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let mut time_el = div()
+            .max_w_full()
+            .truncate()
             .text_size(px(self.config.time_font_size as f32))
             .child(self.time_text.clone());
         let mut date_el = div()
+            .max_w_full()
+            .truncate()
             .text_size(px(self.config.date_font_size as f32))
             .child(self.date_text.clone());
 

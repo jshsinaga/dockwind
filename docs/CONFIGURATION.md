@@ -136,7 +136,10 @@ over `padding` when specified.
 
 `width_mode = "auto"` automatically calculates dock width based on item count, icon
 size, spacing, padding, and clock element width. `width_mode = "manual"` uses the
-fixed `width` value.
+fixed `width` value. Both modes are capped at the display's available width.
+App items scroll horizontally when the row exceeds the available space beside
+the clock. Center alignment with `alignment_anchor = "dock"` balances the clock's
+space when the items fit within the centered region.
 
 `indicator_style = "dot"` renders a circular status indicator under running/active apps;
 `indicator_style = "line"` renders a rounded pill line indicator.

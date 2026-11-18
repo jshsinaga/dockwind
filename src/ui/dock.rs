@@ -1,8 +1,8 @@
 use std::time::{Duration, Instant};
 
 use gpui::{
-    Bounds, ClickEvent, Context, Entity, MouseButton, MouseDownEvent, Pixels, Point, Render, Timer,
-    Window, div, prelude::*, px,
+    Bounds, ClickEvent, Context, Entity, MouseButton, MouseDownEvent, Pixels, Point, Render, Size,
+    Timer, Window, div, prelude::*, px, size,
 };
 use tracing::{debug, error, info, warn};
 use windows::Win32::Foundation::RECT;
@@ -11,7 +11,7 @@ use super::app_item::render_app_item;
 use super::clock::ClockView;
 use super::theme::Theme;
 use crate::app::AppController;
-use crate::config::{BlurMode, Config, DockEdge};
+use crate::config::{AlignmentAnchor, Appearance, BlurMode, Clock, Config, DockEdge, WidthMode};
 use crate::dock::{AutoHide, AutoHideInput, AutoHideSettings, DockItem};
 use crate::win::appbar::{AppBarEdge, AppBarHandle};
 use crate::win::menu::MenuAction;
@@ -176,6 +176,7 @@ impl DockView {
             self.applied_config.behavior.hide_native_taskbar != config.behavior.hide_native_taskbar,
             self.applied_config.clock.show != config.clock.show,
             self.applied_config.clock.time_font_size != config.clock.time_font_size,
+            self.applied_config.clock.date_font_size != config.clock.date_font_size,
         ]
         .into_iter()
         .any(|changed| changed);
@@ -218,21 +219,7 @@ impl DockView {
     }
 
     fn apply_geometry_with_monitor(&mut self, config: &Config, monitor: &MonitorInfo) -> bool {
-        let width = if config.appearance.width_mode == crate::config::WidthMode::Auto {
-            let (_, _, left, right) = config.appearance.effective_padding();
-            let app_count = self.items.len().max(1) as u32;
-            let icon_total = app_count * (config.appearance.icon_size + 8);
-            let spacing_total = app_count.saturating_sub(1) * config.appearance.item_spacing;
-            let clock_width = if config.clock.show {
-                (config.clock.time_font_size * 7).max(130)
-            } else {
-                0u32
-            };
-            (left + right + icon_total + spacing_total + clock_width + 24).max(120)
-        } else {
-            config.appearance.width
-        };
-        let content_size = gpui::size(px(width as f32), px(config.appearance.height as f32));
+        let content_size = dock_size(config, self.items.len(), monitor.work_area.size.width);
         let bounds = win::monitors::dock_rect(
             monitor,
             content_size,
@@ -334,7 +321,9 @@ impl DockView {
             match MonitorInfo::primary() {
                 Ok(monitor)
                     if monitor.bounds != self.geometry.monitor.bounds
-                        || monitor.scale_factor != self.geometry.monitor.scale_factor =>
+                        || monitor.scale_factor != self.geometry.monitor.scale_factor
+                        || (!self.applied_config.behavior.reserve_space
+                            && monitor.work_area != self.geometry.monitor.work_area) =>
                 {
                     let config = self.applied_config.clone();
                     if self.apply_geometry_with_monitor(&config, &monitor) {
@@ -596,13 +585,20 @@ impl Render for DockView {
             dock_bar = dock_bar.shadow_lg();
         }
 
+        let strip_width = app_strip_width(&self.applied_config.appearance, self.items.len());
+        let inner_width =
+            (self.geometry.bounds.size.width - pl - pr - self.theme.border_width * 2.0)
+                .max(px(0.0));
+        let clock_gap = px(12.0);
+        let clock_width = preferred_clock_width(&self.applied_config.clock)
+            .min((inner_width * 0.45 - clock_gap).max(px(0.0)));
+
         let mut apps_div = div()
-            .id("dock-apps")
             .flex()
-            .flex_1()
-            .min_w(px(0.0))
-            .gap(self.theme.item_spacing)
-            .overflow_x_scroll();
+            .w(strip_width)
+            .min_w_full()
+            .flex_shrink_0()
+            .gap(self.theme.item_spacing);
 
         apps_div = match self.theme.item_alignment {
             crate::config::ItemAlignment::Center => apps_div.justify_center(),
@@ -614,15 +610,6 @@ impl Render for DockView {
             crate::config::VerticalAlign::Center => apps_div.items_center(),
             crate::config::VerticalAlign::Top => apps_div.items_start(),
             crate::config::VerticalAlign::Bottom => apps_div.items_end(),
-        };
-
-        let show_clock = self.applied_config.clock.show;
-
-        let mut clock_container = div().flex().flex_col();
-        clock_container = match self.applied_config.clock.vertical_align {
-            crate::config::VerticalAlign::Center => clock_container.justify_center(),
-            crate::config::VerticalAlign::Top => clock_container.justify_start(),
-            crate::config::VerticalAlign::Bottom => clock_container.justify_end(),
         };
 
         let items_elements =
@@ -643,32 +630,78 @@ impl Render for DockView {
                     render_app_item(item, icon, &self.theme, self.icon_size, on_click, on_middle)
                 });
 
-        let apps_children = apps_div.children(items_elements);
+        let apps = div()
+            .id("dock-apps")
+            .flex()
+            .flex_1()
+            .min_w(px(0.0))
+            .overflow_x_scroll()
+            .child(apps_div.children(items_elements));
 
-        let dock_bar = if show_clock {
-            match self.theme.alignment_anchor {
-                crate::config::AlignmentAnchor::Dock => {
-                    let absolute_clock = clock_container
-                        .absolute()
-                        .right(pr)
-                        .top_0()
-                        .bottom_0()
-                        .pt(pt)
-                        .pb(pb)
-                        .child(self.clock.clone());
-                    dock_bar.child(apps_children).child(absolute_clock)
-                }
-                crate::config::AlignmentAnchor::Clock => {
-                    let relative_clock = clock_container.h_full().child(self.clock.clone());
-                    dock_bar.child(apps_children).child(relative_clock)
-                }
-            }
+        let dock_bar = if self.applied_config.clock.show {
+            let clock_space = clock_width + clock_gap;
+            // Center on the dock when there is room to balance the clock's space.
+            let balance_clock = self.theme.alignment_anchor == AlignmentAnchor::Dock
+                && self.theme.item_alignment == crate::config::ItemAlignment::Center
+                && strip_width + clock_space * 2.0 <= inner_width;
+            let mut clock = div()
+                .w(clock_width)
+                .h_full()
+                .ml(clock_gap)
+                .flex_shrink_0()
+                .overflow_hidden()
+                .flex()
+                .flex_col();
+            clock = match self.applied_config.clock.vertical_align {
+                crate::config::VerticalAlign::Center => clock.justify_center(),
+                crate::config::VerticalAlign::Top => clock.justify_start(),
+                crate::config::VerticalAlign::Bottom => clock.justify_end(),
+            };
+            dock_bar
+                .when(balance_clock, |bar| {
+                    bar.child(div().w(clock_space).flex_shrink_0())
+                })
+                .child(apps)
+                .child(clock.child(self.clock.clone()))
         } else {
-            dock_bar.child(apps_children)
+            dock_bar.child(apps)
         };
 
         div().size_full().child(dock_bar)
     }
+}
+
+pub(super) fn dock_size(
+    config: &Config,
+    item_count: usize,
+    work_area_width: Pixels,
+) -> Size<Pixels> {
+    let appearance = &config.appearance;
+    let width = match appearance.width_mode {
+        WidthMode::Manual => px(appearance.width as f32),
+        WidthMode::Auto => {
+            let (_, _, left, right) = appearance.effective_padding();
+            let padding = px((left + right + appearance.border_width * 2) as f32);
+            let apps = app_strip_width(appearance, item_count.max(1));
+            (padding + apps + preferred_clock_width(&config.clock) + px(24.0)).max(px(120.0))
+        }
+    };
+    size(width.min(work_area_width), px(appearance.height as f32))
+}
+
+fn app_strip_width(appearance: &Appearance, item_count: usize) -> Pixels {
+    let tiles = (appearance.icon_size + 8) as f32 * item_count as f32;
+    let gaps = appearance.item_spacing as f32 * item_count.saturating_sub(1) as f32;
+    px(tiles + gaps)
+}
+
+fn preferred_clock_width(clock: &Clock) -> Pixels {
+    if !clock.show {
+        return px(0.0);
+    }
+    px((clock.time_font_size * 7)
+        .max(clock.date_font_size * 11)
+        .max(130) as f32)
 }
 
 fn contains(bounds: Bounds<Pixels>, point: Point<Pixels>) -> bool {
@@ -683,5 +716,20 @@ fn auto_hide_settings(config: &Config) -> AutoHideSettings {
         show_delay: Duration::from_millis(config.behavior.show_delay_ms),
         hide_delay: Duration::from_millis(config.behavior.hide_delay_ms),
         animation: Duration::from_millis(config.behavior.animation_ms),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn width_is_capped_to_the_work_area_in_both_modes() {
+        let mut config = Config::default();
+        assert_eq!(dock_size(&config, 2, px(320.0)).width, px(320.0));
+
+        config.appearance.width_mode = WidthMode::Auto;
+        assert_eq!(dock_size(&config, 100, px(800.0)).width, px(800.0));
+        assert!(dock_size(&config, 2, px(800.0)).width < px(800.0));
     }
 }
