@@ -397,9 +397,6 @@ impl SettingsView {
                 .into_any_element(),
         };
 
-        let target_name = app_name.clone();
-        let target_path_str = app_path_display.clone();
-
         div()
             .id(SharedString::from(format!("app-picker-row-{index}")))
             .px_3()
@@ -412,15 +409,7 @@ impl SettingsView {
             .justify_between()
             .cursor_pointer()
             .on_click(cx.listener(move |this: &mut Self, _, _, cx| {
-                this.draft.pinned.push(PinnedApp {
-                    name: target_name.clone(),
-                    path: target_path_str.clone(),
-                    args: Vec::new(),
-                });
-                this.selected_pinned_index = Some(this.draft.pinned.len() - 1);
-                this.showing_app_picker = false;
-                this.active_input = None;
-                this.status_message = None;
+                this.pin_app_picker_result(index);
                 cx.notify();
             }))
             .child(
@@ -472,6 +461,52 @@ impl SettingsView {
             .into_any_element()
     }
 
+    fn app_picker_results(&self) -> Vec<usize> {
+        let search_lower = self.app_picker_search.to_lowercase().replace('/', "\\");
+        let search_terms = search_lower.split_whitespace().collect::<Vec<_>>();
+        self.installed_apps
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .enumerate()
+            .filter(|(_, app)| {
+                let matches_letter = self.app_picker_filter.is_none_or(|letter| {
+                    app.name
+                        .chars()
+                        .next()
+                        .is_some_and(|first| first.eq_ignore_ascii_case(&letter))
+                });
+                matches_letter && matches_app_query(app, &search_terms)
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    pub(super) fn pin_single_app_picker_result(&mut self) {
+        if let [index] = self.app_picker_results().as_slice() {
+            self.pin_app_picker_result(*index);
+        }
+    }
+
+    fn pin_app_picker_result(&mut self, index: usize) {
+        let Some(app) = self
+            .installed_apps
+            .as_ref()
+            .and_then(|apps| apps.get(index))
+        else {
+            return;
+        };
+        self.draft.pinned.push(PinnedApp {
+            name: app.name.clone(),
+            path: app.path.to_string_lossy().into_owned(),
+            args: Vec::new(),
+        });
+        self.selected_pinned_index = Some(self.draft.pinned.len() - 1);
+        self.showing_app_picker = false;
+        self.active_input = None;
+        self.status_message = None;
+    }
+
     pub(super) fn render_app_picker_dialog(&self, cx: &mut Context<Self>) -> AnyElement {
         let is_search_active = self.active_input == Some(ActiveInput::AppPickerSearch);
         let search_text = if is_search_active {
@@ -479,26 +514,9 @@ impl SettingsView {
         } else {
             &self.app_picker_search
         };
-        let search_lower = search_text.to_lowercase().replace('/', "\\");
-        let search_terms = search_lower.split_whitespace().collect::<Vec<_>>();
-        let filter_letter = self.app_picker_filter;
-
         let all_apps = self.installed_apps.as_deref().unwrap_or(&[]);
         let total_count = all_apps.len();
-        let filtered_apps: Vec<_> = all_apps
-            .iter()
-            .enumerate()
-            .filter(|(_, app)| {
-                if let Some(letter) = filter_letter {
-                    let first_char = app.name.chars().next().unwrap_or(' ');
-                    if !first_char.eq_ignore_ascii_case(&letter) {
-                        return false;
-                    }
-                }
-                matches_app_query(app, &search_terms)
-            })
-            .map(|(index, _)| index)
-            .collect();
+        let filtered_apps = self.app_picker_results();
 
         let filtered_count = filtered_apps.len();
 
@@ -660,7 +678,12 @@ impl SettingsView {
                                             .font_weight(FontWeight::MEDIUM)
                                             .text_color(rgba(0x89B4FAFF))
                                             .child(format!(
-                                                "{filtered_count} / {total_count} apps"
+                                                "{filtered_count} / {total_count} apps{}",
+                                                if filtered_count == 1 {
+                                                    " · Enter to pin"
+                                                } else {
+                                                    ""
+                                                }
                                             )),
                                     ),
                             )
@@ -885,5 +908,33 @@ mod tests {
         assert!(matches_app_query(&app, &[r"files\microsoft"]));
         assert!(!matches_app_query(&app, &["code.exe", "notepad"]));
         assert!(matches_app_query(&app, &[]));
+    }
+
+    #[test]
+    fn enter_pins_only_an_unambiguous_result() {
+        let mut view = SettingsView::new(
+            "config.toml".into(),
+            crate::config::Config::default(),
+            String::new(),
+            false,
+        );
+        view.installed_apps = Some(vec![
+            win::dialogs::InstalledApp {
+                name: "Editor".into(),
+                path: "editor.exe".into(),
+            },
+            win::dialogs::InstalledApp {
+                name: "Calendar".into(),
+                path: "calendar.exe".into(),
+            },
+        ]);
+        view.showing_app_picker = true;
+        view.pin_single_app_picker_result();
+        assert!(view.draft.pinned.is_empty());
+
+        view.app_picker_search = "editor.exe".into();
+        view.pin_single_app_picker_result();
+        assert_eq!(view.draft.pinned[0].name, "Editor");
+        assert!(!view.showing_app_picker);
     }
 }

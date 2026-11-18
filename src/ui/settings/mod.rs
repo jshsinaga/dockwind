@@ -219,6 +219,14 @@ impl SettingsView {
             return;
         }
 
+        if self.showing_app_picker && key == "enter" {
+            if !event.is_held {
+                self.pin_single_app_picker_result();
+                cx.notify();
+            }
+            return;
+        }
+
         let Some(field) = self.active_input else {
             return;
         };
