@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 
@@ -53,38 +54,39 @@ pub fn list_app_windows() -> Result<Vec<WindowInfo>> {
     // SAFETY: GetForegroundWindow is read-only and may return null.
     let foreground = unsafe { GetForegroundWindow() };
     let mut result = Vec::new();
+    let mut process_paths = HashMap::new();
 
     for hwnd in handles {
-        let flags = window_flags(hwnd, current_pid);
+        let pid = window_process_id(hwnd);
+        if pid == current_pid {
+            continue;
+        }
+        let title = window_title(hwnd);
+        let flags = window_flags(hwnd, !title.trim().is_empty());
         if !is_taskbar_worthy(&flags) {
             continue;
         }
 
-        let title = window_title(hwnd);
-        let pid = window_process_id(hwnd);
-        let exe_path = match process_path(pid) {
-            Ok(path) => path,
-            Err(error) => {
-                debug!(%error, pid, "skipping window without an executable path");
-                continue;
-            }
+        let Some(exe_path) = process_paths
+            .entry(pid)
+            .or_insert_with(|| match process_path(pid) {
+                Ok(path) => Some(path),
+                Err(error) => {
+                    debug!(%error, pid, "skipping windows without an executable path");
+                    None
+                }
+            })
+        else {
+            continue;
         };
 
-        let (exe_path, display_name) = if is_application_frame_host(&exe_path) {
-            match frame_host_app(hwnd, pid) {
+        let (exe_path, display_name) = if is_application_frame_host(exe_path) {
+            match frame_host_app(hwnd, pid, &title) {
                 Some((path, name)) => (path, Some(name)),
-                None => {
-                    let title = window_title(hwnd);
-                    let display = if title.trim().is_empty() {
-                        None
-                    } else {
-                        Some(title)
-                    };
-                    (exe_path, display)
-                }
+                None => (exe_path.clone(), Some(title.clone())),
             }
         } else {
-            (exe_path, None)
+            (exe_path.clone(), None)
         };
 
         result.push(WindowInfo {
@@ -112,7 +114,7 @@ fn is_application_frame_host(path: &Path) -> bool {
 /// In Windows 10, the hosted content is in a child window.
 /// In Windows 11, the hosted content is in a top-level `Windows.UI.Core.CoreWindow`.
 /// If both fail, falls back to the frame process itself with the window title.
-fn frame_host_app(frame: HWND, frame_pid: u32) -> Option<(PathBuf, String)> {
+fn frame_host_app(frame: HWND, frame_pid: u32, title: &str) -> Option<(PathBuf, String)> {
     let mut children = Vec::new();
     // SAFETY: `children` lives for the call and the callback only appends to it.
     let enumerated = unsafe {
@@ -135,14 +137,7 @@ fn frame_host_app(frame: HWND, frame_pid: u32) -> Option<(PathBuf, String)> {
             if is_application_frame_host(&path) {
                 continue;
             }
-            let title = window_title(frame);
-            let name = if title.trim().is_empty() {
-                path.file_stem()
-                    .map(|stem| stem.to_string_lossy().to_string())
-                    .unwrap_or_else(|| path.to_string_lossy().to_string())
-            } else {
-                title
-            };
+            let name = title.to_owned();
             debug!(
                 frame_pid,
                 app_pid = pid,
@@ -155,8 +150,7 @@ fn frame_host_app(frame: HWND, frame_pid: u32) -> Option<(PathBuf, String)> {
     }
 
     // Windows 11: CoreWindow is a top-level window matching the frame title.
-    let title = window_title(frame);
-    if let Some((path, name)) = find_core_window_app(&title) {
+    if let Some((path, name)) = find_core_window_app(title) {
         debug!(
             frame_pid,
             path = %path.display(),
@@ -164,14 +158,6 @@ fn frame_host_app(frame: HWND, frame_pid: u32) -> Option<(PathBuf, String)> {
             "mapped UWP frame host via CoreWindow"
         );
         return Some((path, name));
-    }
-
-    // Fallback: Use ApplicationFrameHost itself with the frame title so the window is
-    // never lost.
-    if !title.trim().is_empty()
-        && let Ok(path) = process_path(frame_pid)
-    {
-        return Some((path, title));
     }
 
     None
@@ -297,7 +283,7 @@ pub fn activate_or_minimize(hwnd: isize) -> Result<()> {
     }
 }
 
-fn window_flags(hwnd: HWND, current_pid: u32) -> WindowFlags {
+fn window_flags(hwnd: HWND, has_title: bool) -> WindowFlags {
     // SAFETY: all calls take a handle from EnumWindows. Style and owner queries are
     // read-only; GetWindow(GW_OWNER) returns an error when the window has no owner.
     let (ex_style, owner) = unsafe {
@@ -315,8 +301,8 @@ fn window_flags(hwnd: HWND, current_pid: u32) -> WindowFlags {
         has_owner: owner,
         is_toolwindow: ex_style & WS_EX_TOOLWINDOW.0 != 0,
         is_appwindow: ex_style & WS_EX_APPWINDOW.0 != 0,
-        has_title: !window_title(hwnd).trim().is_empty(),
-        is_own_process: window_process_id(hwnd) == current_pid,
+        has_title,
+        is_own_process: false,
     }
 }
 
