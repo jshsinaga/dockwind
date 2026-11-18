@@ -87,7 +87,7 @@ impl Runtime {
             taskbar.borrow_mut().enable()?;
         }
 
-        let (config_watcher, config_updates) = config::watch(&config_path, loaded.config.clone())?;
+        let (config_watcher, config_updates) = config::watch(&config_path)?;
 
         // A missing tray icon is a logged degradation. The dock and its config
         // remain usable, so it must not fail startup.
