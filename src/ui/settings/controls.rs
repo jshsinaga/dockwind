@@ -250,15 +250,7 @@ pub fn render_text_input(
         .on_click(cx.listener(move |this: &mut SettingsView, _, _, cx| {
             this.active_input = Some(field);
             this.input_buffer = match field {
-                ActiveInput::BackgroundHex => {
-                    let hex = this.draft.appearance.background.clone();
-                    let clean = hex.strip_prefix('#').unwrap_or(&hex);
-                    if clean.len() >= 6 {
-                        format!("#{}", &clean[..6])
-                    } else {
-                        hex
-                    }
-                }
+                ActiveInput::BackgroundHex => this.draft.appearance.background.clone(),
                 ActiveInput::BorderColorHex => this.draft.appearance.border_color.clone(),
                 ActiveInput::ClockTimeFormat => this.draft.clock.time_format.clone(),
                 ActiveInput::ClockDateFormat => this.draft.clock.date_format.clone(),
