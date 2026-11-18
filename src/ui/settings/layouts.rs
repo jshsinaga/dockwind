@@ -88,6 +88,26 @@ impl SettingsView {
             })
     }
 
+    fn duplicate_pinned_layout(&mut self, name: &str) {
+        let Some(apps) = self.draft.pinned_layouts.get(name).cloned() else {
+            return;
+        };
+        let base = format!("{name} copy");
+        let mut copy = base.clone();
+        let mut suffix = 2;
+        while self
+            .draft
+            .pinned_layouts
+            .keys()
+            .any(|existing| existing.eq_ignore_ascii_case(&copy))
+        {
+            copy = format!("{base} {suffix}");
+            suffix += 1;
+        }
+        self.status_message = Some((format!("Created layout {copy}.").into(), false));
+        self.draft.pinned_layouts.insert(copy, apps);
+    }
+
     fn load_pinned_layout(&mut self, name: &str) {
         if let Some(apps) = self.draft.pinned_layouts.get(name) {
             self.draft.pinned.clone_from(apps);
@@ -134,6 +154,7 @@ impl SettingsView {
                 }
                 let load_name = name.clone();
                 let rename_name = name.clone();
+                let duplicate_name = name.clone();
                 let update_name = name.clone();
                 let delete_name = name.clone();
                 div()
@@ -169,6 +190,12 @@ impl SettingsView {
                     .child(layout_button("rename", "Rename").on_click(cx.listener(
                         move |this, _, _, cx| {
                             this.begin_layout_rename(&rename_name);
+                            cx.notify();
+                        },
+                    )))
+                    .child(layout_button("duplicate", "Duplicate").on_click(cx.listener(
+                        move |this, _, _, cx| {
+                            this.duplicate_pinned_layout(&duplicate_name);
                             cx.notify();
                         },
                     )))
@@ -261,5 +288,32 @@ mod tests {
         assert!(!view.draft.pinned_layouts.contains_key("Work"));
         assert!(view.draft.pinned.is_empty());
         assert!(view.renaming_layout.is_none());
+    }
+
+    #[test]
+    fn duplicating_a_layout_preserves_arguments_and_uses_a_unique_name() {
+        let mut view = SettingsView::new(
+            "config.toml".into(),
+            Config::default(),
+            String::new(),
+            false,
+        );
+        let apps = vec![PinnedApp {
+            name: "Editor".into(),
+            path: "editor.exe".into(),
+            args: vec!["--work".into()],
+        }];
+        view.draft
+            .pinned_layouts
+            .insert("Work".into(), apps.clone());
+        view.draft
+            .pinned_layouts
+            .insert("work copy".into(), Vec::new());
+
+        view.duplicate_pinned_layout("Work");
+        view.duplicate_pinned_layout("Work");
+        assert_eq!(view.draft.pinned_layouts.get("Work copy 2"), Some(&apps));
+        assert_eq!(view.draft.pinned_layouts.get("Work copy 3"), Some(&apps));
+        assert!(view.draft.pinned.is_empty());
     }
 }
