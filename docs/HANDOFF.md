@@ -211,7 +211,9 @@ On Windows, run `scripts/check.ps1`, then verify these paths:
 - Open Settings on a small display. Search and scroll the installed-app picker,
   paste an RGBA background color, and save with Ctrl+S. With a directory
   junction inside a Start Menu Programs folder, confirm the picker opens and
-  shows apps from regular subfolders. Externally edit the
+  shows apps from regular subfolders. Browse from Pinned Apps and from the
+  installed-app picker. Check that cancel leaves the draft alone and selecting
+  a shortcut adds its executable when Windows can resolve it. Externally edit the
   TOML file while Settings has a draft and check the overwrite prompt.
 
 App overflow controls passed the Linux GPUI harness (73 tests) and Clippy.

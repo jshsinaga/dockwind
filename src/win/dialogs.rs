@@ -187,7 +187,18 @@ pub fn pick_file_async() -> futures::channel::oneshot::Receiver<Result<Option<Pa
         .name("dockwind-pick-file".to_string())
         .spawn(move || {
             let _com = ComApartmentGuard::new();
-            let result = pick_app_dialog();
+            let result = pick_app_dialog().map(|path| {
+                path.map(|path| {
+                    if path
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("lnk"))
+                    {
+                        resolve_shortcut(&path).unwrap_or(path)
+                    } else {
+                        path
+                    }
+                })
+            });
             let _ = sender.send(result);
         });
     if let Err(error) = spawn_result {

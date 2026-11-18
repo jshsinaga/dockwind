@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use gpui::{Context, FontWeight, IntoElement, SharedString, div, img, prelude::*, px, rgba};
 
@@ -7,6 +7,48 @@ use crate::config::PinnedApp;
 use crate::win;
 
 impl SettingsView {
+    pub(super) fn browse_for_app(&mut self, cx: &mut Context<Self>) {
+        if self.browsing_for_app {
+            return;
+        }
+        self.browsing_for_app = true;
+        self.showing_app_picker = false;
+        self.active_input = None;
+        let receiver = win::dialogs::pick_file_async();
+
+        cx.spawn(async move |this, cx| {
+            let result = receiver.await;
+            let _ = this.update(cx, |this, cx| {
+                this.browsing_for_app = false;
+                match result {
+                    Ok(Ok(Some(path))) => this.add_pinned_app(pinned_app_from_path(&path)),
+                    Ok(Ok(None)) => {}
+                    Ok(Err(error)) => {
+                        this.status_message = Some((
+                            format!("Could not open the app picker: {error:#}").into(),
+                            true,
+                        ));
+                    }
+                    Err(_) => {
+                        this.status_message =
+                            Some(("The file picker closed unexpectedly.".into(), true));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    pub(super) fn add_pinned_app(&mut self, app: PinnedApp) {
+        self.draft.pinned.push(app);
+        self.selected_pinned_index = Some(self.draft.pinned.len() - 1);
+        self.showing_app_picker = false;
+        self.active_input = None;
+        self.status_message = None;
+    }
+
     pub(super) fn render_pinned_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let total_count = self.draft.pinned.len();
 
@@ -292,38 +334,8 @@ impl SettingsView {
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(rgba(0xCDD6F4FF))
                                     .cursor_pointer()
-                                    .on_click(cx.listener(|_this: &mut Self, _, _, cx| {
-                                        let receiver = win::dialogs::pick_file_async();
-                                        cx.spawn(async move |this, cx| {
-                                            if let Ok(Ok(Some(path))) = receiver.await {
-                                                let final_path = win::dialogs::resolve_shortcut(&path)
-                                                    .unwrap_or(path);
-                                                let stem = final_path
-                                                    .file_stem()
-                                                    .and_then(|s| s.to_str())
-                                                    .unwrap_or("App");
-                                                let mut chars = stem.chars();
-                                                let name = match chars.next() {
-                                                    None => "App".to_string(),
-                                                    Some(first) => {
-                                                        first.to_uppercase().collect::<String>()
-                                                            + chars.as_str()
-                                                    }
-                                                };
-                                                let _ = this.update(cx, |this, cx| {
-                                                    this.draft.pinned.push(PinnedApp {
-                                                        name,
-                                                        path: final_path.to_string_lossy().to_string(),
-                                                        args: Vec::new(),
-                                                    });
-                                                    this.selected_pinned_index =
-                                                        Some(this.draft.pinned.len() - 1);
-                                                    this.status_message = None;
-                                                    cx.notify();
-                                                });
-                                            }
-                                        })
-                                        .detach();
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.browse_for_app(cx);
                                     }))
                                     .child("Browse (.exe)..."),
                             ),
@@ -363,5 +375,36 @@ impl SettingsView {
             )
             .child(self.render_pinned_layouts(cx))
             .into_any_element()
+    }
+}
+
+fn pinned_app_from_path(path: &Path) -> PinnedApp {
+    let stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("App");
+    let mut chars = stem.chars();
+    let name = match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => "App".to_owned(),
+    };
+    PinnedApp {
+        name,
+        path: path.to_string_lossy().into_owned(),
+        args: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn browsing_uses_the_executable_stem_and_keeps_the_full_path() {
+        let path = Path::new("Tools/my.editor.exe");
+        let app = pinned_app_from_path(path);
+        assert_eq!(app.name, "My.editor");
+        assert_eq!(app.path, "Tools/my.editor.exe");
+        assert!(app.args.is_empty());
     }
 }

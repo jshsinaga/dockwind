@@ -496,15 +496,11 @@ impl SettingsView {
         else {
             return;
         };
-        self.draft.pinned.push(PinnedApp {
+        self.add_pinned_app(PinnedApp {
             name: app.name.clone(),
             path: app.path.to_string_lossy().into_owned(),
             args: Vec::new(),
         });
-        self.selected_pinned_index = Some(self.draft.pinned.len() - 1);
-        self.showing_app_picker = false;
-        self.active_input = None;
-        self.status_message = None;
     }
 
     pub(super) fn render_app_picker_dialog(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -816,44 +812,8 @@ impl SettingsView {
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(rgba(0xCDD6F4FF))
                                     .cursor_pointer()
-                                    .on_click(cx.listener(|this: &mut Self, _, _, cx| {
-                                        this.showing_app_picker = false;
-                                        this.active_input = None;
-                                        let receiver = win::dialogs::pick_file_async();
-                                        cx.spawn(async move |this, cx| {
-                                            if let Ok(Ok(Some(path))) = receiver.await {
-                                                let final_path =
-                                                    win::dialogs::resolve_shortcut(&path)
-                                                        .unwrap_or(path);
-                                                let stem = final_path
-                                                    .file_stem()
-                                                    .and_then(|s| s.to_str())
-                                                    .unwrap_or("App");
-                                                let mut chars = stem.chars();
-                                                let name = match chars.next() {
-                                                    None => "App".to_string(),
-                                                    Some(first) => {
-                                                        first.to_uppercase().collect::<String>()
-                                                            + chars.as_str()
-                                                    }
-                                                };
-                                                let _ = this.update(cx, |this, cx| {
-                                                    this.draft.pinned.push(PinnedApp {
-                                                        name,
-                                                        path: final_path
-                                                            .to_string_lossy()
-                                                            .to_string(),
-                                                        args: Vec::new(),
-                                                    });
-                                                    this.selected_pinned_index =
-                                                        Some(this.draft.pinned.len() - 1);
-                                                    this.status_message = None;
-                                                    cx.notify();
-                                                });
-                                            }
-                                        })
-                                        .detach();
-                                        cx.notify();
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.browse_for_app(cx);
                                     }))
                                     .child("Browse for (.exe) file instead..."),
                             )
