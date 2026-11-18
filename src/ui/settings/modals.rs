@@ -479,7 +479,8 @@ impl SettingsView {
         } else {
             &self.app_picker_search
         };
-        let search_lower = search_text.trim().to_lowercase();
+        let search_lower = search_text.to_lowercase().replace('/', "\\");
+        let search_terms = search_lower.split_whitespace().collect::<Vec<_>>();
         let filter_letter = self.app_picker_filter;
 
         let all_apps = self.installed_apps.as_deref().unwrap_or(&[]);
@@ -494,10 +495,7 @@ impl SettingsView {
                         return false;
                     }
                 }
-                if !search_lower.is_empty() && !app.name.to_lowercase().contains(&search_lower) {
-                    return false;
-                }
-                true
+                matches_app_query(app, &search_terms)
             })
             .map(|(index, _)| index)
             .collect();
@@ -717,9 +715,7 @@ impl SettingsView {
                                         rgba(0xCDD6F4FF)
                                     })
                                     .child(if search_text.is_empty() {
-                                        SharedString::from(
-                                            "Search installed applications (type to filter)...",
-                                        )
+                                        SharedString::from("Search by app name or executable path")
                                     } else {
                                         SharedString::from(search_text.to_string())
                                     }),
@@ -860,5 +856,34 @@ impl SettingsView {
                     ),
             )
             .into_any_element()
+    }
+}
+
+fn matches_app_query(app: &win::dialogs::InstalledApp, terms: &[&str]) -> bool {
+    if terms.is_empty() {
+        return true;
+    }
+    let name = app.name.to_lowercase();
+    let path = app.path.to_string_lossy().to_lowercase().replace('/', "\\");
+    terms
+        .iter()
+        .all(|term| name.contains(term) || path.contains(term))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn picker_search_can_combine_display_name_and_executable_path() {
+        let app = win::dialogs::InstalledApp {
+            name: "Visual Studio Code".into(),
+            path: r"C:\Program Files\Microsoft VS Code\Code.exe".into(),
+        };
+
+        assert!(matches_app_query(&app, &["studio", "code.exe"]));
+        assert!(matches_app_query(&app, &[r"files\microsoft"]));
+        assert!(!matches_app_query(&app, &["code.exe", "notepad"]));
+        assert!(matches_app_query(&app, &[]));
     }
 }
