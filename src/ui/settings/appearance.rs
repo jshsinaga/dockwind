@@ -664,16 +664,40 @@ impl SettingsView {
                                     .text_color(rgba(0xCDD6F4FF))
                                     .cursor_pointer()
                                     .on_click(cx.listener(|this: &mut Self, _, _, cx| {
+                                        if this.native_picker_open {
+                                            return;
+                                        }
+                                        this.native_picker_open = true;
                                         let initial = this.draft.appearance.background.clone();
                                         let receiver = win::dialogs::pick_color_async(initial);
                                         cx.spawn(async move |this, cx| {
-                                            if let Ok(Ok(Some(color))) = receiver.await {
-                                                let _ = this.update(cx, |this, cx| {
-                                                    this.draft.appearance.background = color;
-                                                    this.status_message = None;
-                                                    cx.notify();
-                                                });
-                                            }
+                                            let result = receiver.await;
+                                            let _ = this.update(cx, |this, cx| {
+                                                this.native_picker_open = false;
+                                                match result {
+                                                    Ok(Ok(Some(color))) => {
+                                                        this.draft.appearance.background = color;
+                                                        this.status_message = None;
+                                                        if this.active_input == Some(ActiveInput::BackgroundHex) {
+                                                            this.active_input = None;
+                                                        }
+                                                    }
+                                                    Ok(Ok(None)) => {}
+                                                    Ok(Err(error)) => {
+                                                        this.status_message = Some((
+                                                            format!("Could not open the color picker: {error:#}").into(),
+                                                            true,
+                                                        ));
+                                                    }
+                                                    Err(_) => {
+                                                        this.status_message = Some((
+                                                            "The color picker closed unexpectedly.".into(),
+                                                            true,
+                                                        ));
+                                                    }
+                                                }
+                                                cx.notify();
+                                            });
                                         })
                                         .detach();
                                     }))

@@ -11,7 +11,7 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::UI::Controls::Dialogs::{
     CC_FULLOPEN, CC_RGBINIT, CHOOSECOLORW, ChooseColorW, CommDlgExtendedError, GetOpenFileNameW,
-    OFN_EXPLORER, OFN_FILEMUSTEXIST, OFN_PATHMUSTEXIST, OPENFILENAMEW,
+    OFN_EXPLORER, OFN_FILEMUSTEXIST, OFN_NOCHANGEDIR, OFN_PATHMUSTEXIST, OPENFILENAMEW,
 };
 use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -218,7 +218,7 @@ pub fn pick_app_dialog() -> Result<Option<PathBuf>> {
         lpstrFilter: PCWSTR(filter.as_ptr()),
         lpstrFile: windows::core::PWSTR(buffer.as_mut_ptr()),
         nMaxFile: buffer.len() as u32,
-        Flags: OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST,
+        Flags: OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR | OFN_PATHMUSTEXIST,
         ..Default::default()
     };
 
@@ -259,6 +259,11 @@ pub fn pick_color_dialog(initial_hex: &str) -> Result<Option<String>> {
     // SAFETY: every pointer in `dialog` refers to a live buffer for the duration of
     // the call. The dialog blocks until the user closes it.
     if !unsafe { ChooseColorW(&mut dialog) }.as_bool() {
+        // SAFETY: CommDlgExtendedError has no preconditions. Zero means cancellation.
+        let error = unsafe { CommDlgExtendedError() };
+        if error.0 != 0 {
+            bail!("color picker failed with code {}", error.0);
+        }
         return Ok(None);
     }
 

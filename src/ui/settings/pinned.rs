@@ -8,10 +8,10 @@ use crate::win;
 
 impl SettingsView {
     pub(super) fn browse_for_app(&mut self, cx: &mut Context<Self>) {
-        if self.browsing_for_app {
+        if self.native_picker_open {
             return;
         }
-        self.browsing_for_app = true;
+        self.native_picker_open = true;
         self.showing_app_picker = false;
         self.active_input = None;
         let receiver = win::dialogs::pick_file_async();
@@ -19,7 +19,7 @@ impl SettingsView {
         cx.spawn(async move |this, cx| {
             let result = receiver.await;
             let _ = this.update(cx, |this, cx| {
-                this.browsing_for_app = false;
+                this.native_picker_open = false;
                 match result {
                     Ok(Ok(Some(path))) => this.add_pinned_app(pinned_app_from_path(&path)),
                     Ok(Ok(None)) => {}
