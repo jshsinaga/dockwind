@@ -215,7 +215,8 @@ On Windows, run `scripts/check.ps1`, then verify these paths:
   installed-app picker. Check that cancel leaves the draft alone and selecting
   a shortcut adds its executable when Windows can resolve it. Open Choose Color
   while the hex field is active, select a color, and check that Apply & Save
-  uses the chosen color and preserves alpha. Externally edit the
+  uses the chosen color and preserves alpha. Browse into another directory
+  and verify existing relative-path pins still resolve afterward. Externally edit the
   TOML file while Settings has a draft and check the overwrite prompt.
 
 App overflow controls passed the Linux GPUI harness (73 tests) and Clippy.

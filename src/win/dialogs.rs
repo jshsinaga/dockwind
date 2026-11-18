@@ -1,23 +1,25 @@
 use std::collections::HashSet;
-use std::os::windows::fs::MetadataExt;
+use std::os::windows::{ffi::OsStringExt, fs::MetadataExt};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
-use windows::Win32::Foundation::{COLORREF, HWND};
+use windows::Win32::Foundation::{COLORREF, ERROR_CANCELLED, HWND};
 use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT};
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
-    CoUninitialize, IPersistFile, STGM_READ,
+    CoTaskMemFree, CoUninitialize, IPersistFile, STGM_READ,
 };
 use windows::Win32::UI::Controls::Dialogs::{
-    CC_FULLOPEN, CC_RGBINIT, CHOOSECOLORW, ChooseColorW, CommDlgExtendedError, GetOpenFileNameW,
-    OFN_EXPLORER, OFN_FILEMUSTEXIST, OFN_NOCHANGEDIR, OFN_PATHMUSTEXIST, OPENFILENAMEW,
+    CC_FULLOPEN, CC_RGBINIT, CHOOSECOLORW, ChooseColorW, CommDlgExtendedError,
 };
-use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
+use windows::Win32::UI::Shell::{
+    Common::COMDLG_FILTERSPEC, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FOS_NOCHANGEDIR,
+    FOS_PATHMUSTEXIST, FileOpenDialog, IFileOpenDialog, IShellLinkW, SIGDN_FILESYSPATH, ShellLink,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowW, SW_RESTORE, SetForegroundWindow, ShowWindow,
 };
-use windows::core::{HSTRING, Interface, PCWSTR, w};
+use windows::core::{HRESULT, HSTRING, Interface, PCWSTR, w};
 
 use crate::config::parse_rgba_hex;
 
@@ -207,41 +209,44 @@ pub fn pick_file_async() -> futures::channel::oneshot::Receiver<Result<Option<Pa
     receiver
 }
 
-pub fn pick_app_dialog() -> Result<Option<PathBuf>> {
-    let mut buffer = [0u16; 2048];
-    let filter: Vec<u16> = "Applications\0*.exe;*.lnk;*.bat;*.cmd\0All files\0*.*\0\0"
-        .encode_utf16()
-        .collect();
-    let mut dialog = OPENFILENAMEW {
-        lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
-        hwndOwner: HWND::default(),
-        lpstrFilter: PCWSTR(filter.as_ptr()),
-        lpstrFile: windows::core::PWSTR(buffer.as_mut_ptr()),
-        nMaxFile: buffer.len() as u32,
-        Flags: OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR | OFN_PATHMUSTEXIST,
-        ..Default::default()
+fn pick_app_dialog() -> Result<Option<PathBuf>> {
+    let filters = [
+        COMDLG_FILTERSPEC {
+            pszName: w!("Applications"),
+            pszSpec: w!("*.exe;*.lnk;*.bat;*.cmd"),
+        },
+        COMDLG_FILTERSPEC {
+            pszName: w!("All files"),
+            pszSpec: w!("*.*"),
+        },
+    ];
+    // SAFETY: the file-picker worker initializes COM before this call. The filters
+    // use static strings, and no owner window is required for the dialog.
+    let display_name = unsafe {
+        let dialog: IFileOpenDialog =
+            CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)?;
+        let options = dialog.GetOptions()?;
+        dialog.SetOptions(
+            options | FOS_NOCHANGEDIR | FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST | FOS_FORCEFILESYSTEM,
+        )?;
+        dialog.SetFileTypes(&filters)?;
+        match dialog.Show(None) {
+            Ok(()) => dialog.GetResult()?.GetDisplayName(SIGDN_FILESYSPATH)?,
+            Err(error) if error.code() == HRESULT::from_win32(ERROR_CANCELLED.0) => {
+                return Ok(None);
+            }
+            Err(error) => return Err(error.into()),
+        }
     };
 
-    // SAFETY: every pointer in `dialog` refers to a live buffer for the duration of
-    // the call. The dialog blocks until the user closes it.
-    let accepted = unsafe { GetOpenFileNameW(&mut dialog) }.as_bool();
-    if !accepted {
-        // SAFETY: CommDlgExtendedError has no preconditions. Zero means the user
-        // cancelled rather than an error.
-        let error = unsafe { CommDlgExtendedError() };
-        if error.0 != 0 {
-            bail!("file picker failed with code {}", error.0);
-        }
-        return Ok(None);
-    }
-
-    let length = buffer
-        .iter()
-        .position(|unit| *unit == 0)
-        .unwrap_or(buffer.len());
-    Ok(Some(PathBuf::from(String::from_utf16_lossy(
-        &buffer[..length],
-    ))))
+    // SAFETY: GetDisplayName returned an owned null-terminated string allocated
+    // by COM. Copy its UTF-16 units into an OsString before freeing it.
+    let path = unsafe {
+        let path = std::ffi::OsString::from_wide(display_name.as_wide());
+        CoTaskMemFree(Some(display_name.0.cast()));
+        PathBuf::from(path)
+    };
+    Ok(Some(path))
 }
 
 pub fn pick_color_dialog(initial_hex: &str) -> Result<Option<String>> {
