@@ -276,17 +276,7 @@ impl SettingsView {
                                     .text_color(rgba(0x11111BFF))
                                     .cursor_pointer()
                                     .on_click(cx.listener(|this: &mut Self, _, _, cx| {
-                                        if this.installed_apps.is_none() {
-                                            this.installed_apps =
-                                                Some(win::dialogs::scan_installed_apps());
-                                        }
-                                        this.showing_app_picker = true;
-                                        this.app_picker_search.clear();
-                                        this.app_picker_filter = None;
-                                        this.active_input = Some(ActiveInput::AppPickerSearch);
-                                        this.input_buffer.clear();
-                                        this.status_message = None;
-                                        cx.notify();
+                                        this.open_app_picker(cx);
                                     }))
                                     .child("+ Add Application..."),
                             )

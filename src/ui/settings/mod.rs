@@ -13,8 +13,9 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context as _, Result};
 use gpui::{
     App, Bounds, Context, FocusHandle, FontWeight, IntoElement, KeyDownEvent, Render, RenderImage,
-    ScrollHandle, SharedString, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds,
-    WindowKind, WindowOptions, div, point, prelude::*, px, rgba, size,
+    ScrollHandle, ScrollStrategy, SharedString, TitlebarOptions, UniformListScrollHandle, Window,
+    WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, div, point, prelude::*,
+    px, rgba, size,
 };
 use tracing::error;
 
@@ -80,6 +81,8 @@ pub struct SettingsView {
     pub(super) scroll_handle: ScrollHandle,
     pub(super) installed_apps: Option<Vec<win::dialogs::InstalledApp>>,
     pub(super) showing_app_picker: bool,
+    app_picker_loading: bool,
+    app_picker_scroll: UniformListScrollHandle,
     pub(super) app_picker_search: String,
     pub(super) app_picker_filter: Option<char>,
     pub(super) showing_taskbar_confirm: bool,
@@ -105,6 +108,8 @@ impl SettingsView {
             scroll_handle: ScrollHandle::default(),
             installed_apps: None,
             showing_app_picker: false,
+            app_picker_loading: false,
+            app_picker_scroll: UniformListScrollHandle::default(),
             app_picker_search: String::new(),
             app_picker_filter: None,
             showing_taskbar_confirm: false,
@@ -118,6 +123,38 @@ impl SettingsView {
 
     pub fn has_unsaved_changes(&self) -> bool {
         self.draft != self.saved || self.autostart_draft != self.autostart_saved
+    }
+
+    fn open_app_picker(&mut self, cx: &mut Context<Self>) {
+        self.showing_app_picker = true;
+        self.app_picker_search.clear();
+        self.app_picker_filter = None;
+        self.active_input = Some(ActiveInput::AppPickerSearch);
+        self.input_buffer.clear();
+        self.status_message = None;
+        self.reset_app_picker_scroll();
+
+        if self.installed_apps.is_none() && !self.app_picker_loading {
+            self.app_picker_loading = true;
+            let scan = cx
+                .background_executor()
+                .spawn(async { win::dialogs::scan_installed_apps() });
+            cx.spawn(async move |this, cx| {
+                let apps = scan.await;
+                let _ = this.update(cx, |this, cx| {
+                    this.installed_apps = Some(apps);
+                    this.app_picker_loading = false;
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+        cx.notify();
+    }
+
+    fn reset_app_picker_scroll(&self) {
+        self.app_picker_scroll
+            .scroll_to_item_strict(0, ScrollStrategy::Top);
     }
 
     fn handle_key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
@@ -228,7 +265,10 @@ impl SettingsView {
                 }
             }
             ActiveInput::AppPickerSearch => {
-                self.app_picker_search = self.input_buffer.clone();
+                if self.app_picker_search != self.input_buffer {
+                    self.app_picker_search.clone_from(&self.input_buffer);
+                    self.reset_app_picker_scroll();
+                }
             }
         }
     }
@@ -536,8 +576,14 @@ pub fn open_settings_window(cx: &mut App, config_path: PathBuf) -> Result<()> {
 
     let autostart_enabled = win::autostart::is_enabled().unwrap_or(false);
 
-    cx.open_window(options, |_window, cx| {
-        cx.new(|_cx| SettingsView::new(config_path, loaded.config, autostart_enabled))
+    cx.open_window(options, |window, cx| {
+        cx.new(|cx| {
+            let mut view = SettingsView::new(config_path, loaded.config, autostart_enabled);
+            let focus = cx.focus_handle();
+            window.focus(&focus);
+            view.focus_handle = Some(focus);
+            view
+        })
     })
     .context("failed to open GPUI settings window")?;
 
