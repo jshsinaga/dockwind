@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -11,6 +11,28 @@ pub struct Config {
     pub pinned: Vec<PinnedApp>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub pinned_layouts: BTreeMap<String, Vec<PinnedApp>>,
+}
+
+impl Config {
+    pub fn next_pinned_layout(&self) -> Option<&str> {
+        let mut distinct = HashSet::new();
+        let mut first = None;
+        let mut current_seen = false;
+        for (name, apps) in &self.pinned_layouts {
+            if !distinct.insert(apps.as_slice()) {
+                continue;
+            }
+            if current_seen {
+                return Some(name);
+            }
+            if *apps == self.pinned {
+                current_seen = true;
+            } else if first.is_none() {
+                first = Some(name.as_str());
+            }
+        }
+        first
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -269,7 +291,7 @@ impl Default for Clock {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct PinnedApp {
     pub name: String,
     pub path: String,
@@ -286,6 +308,36 @@ pub struct LoadedConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn next_layout_cycles_through_distinct_app_lists() {
+        let pinned = |name: &str| {
+            vec![PinnedApp {
+                name: name.into(),
+                path: format!("{name}.exe"),
+                args: Vec::new(),
+            }]
+        };
+        let mut config = Config::default();
+        assert_eq!(config.next_pinned_layout(), None);
+
+        config.pinned_layouts.insert("A".into(), pinned("Editor"));
+        config.pinned_layouts.insert("B".into(), pinned("Mail"));
+        config.pinned_layouts.insert("C".into(), pinned("Editor"));
+        config.pinned_layouts.insert("D".into(), pinned("Notes"));
+        assert_eq!(config.next_pinned_layout(), Some("A"));
+        config.pinned = pinned("Editor");
+        assert_eq!(config.next_pinned_layout(), Some("B"));
+        config.pinned = pinned("Mail");
+        assert_eq!(config.next_pinned_layout(), Some("D"));
+        config.pinned = pinned("Notes");
+        assert_eq!(config.next_pinned_layout(), Some("A"));
+
+        config
+            .pinned_layouts
+            .retain(|_, apps| *apps == config.pinned);
+        assert_eq!(config.next_pinned_layout(), None);
+    }
 
     #[test]
     fn default_config_round_trips_through_toml() {

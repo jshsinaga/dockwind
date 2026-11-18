@@ -536,6 +536,7 @@ impl DockView {
             .iter()
             .map(|(name, apps)| (name.clone(), *apps == self.applied_config.pinned))
             .collect::<Vec<_>>();
+        let next_layout = self.applied_config.next_pinned_layout().map(str::to_owned);
         cx.spawn(async move |this, cx| {
             Timer::after(Duration::from_millis(0)).await;
             if this
@@ -548,7 +549,7 @@ impl DockView {
                 return;
             }
 
-            let result = win::menu::show(hwnd, &layouts);
+            let result = win::menu::show(hwnd, &layouts, next_layout.as_deref());
             let _ = this.update(cx, |this, cx| {
                 this.menu_open = false;
                 this.handle_menu_result(result, cx);

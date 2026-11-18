@@ -20,6 +20,7 @@ const CMD_RELOAD: usize = 1;
 const CMD_AUTOSTART: usize = 2;
 const CMD_RESTORE_QUIT: usize = 3;
 const CMD_SETTINGS: usize = 4;
+const CMD_NEXT_LAYOUT: usize = 5;
 const FIRST_LAYOUT_COMMAND: usize = 100;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,7 +32,11 @@ pub enum MenuAction {
     RestoreAndQuit,
 }
 
-pub fn show(hwnd: isize, layouts: &[(String, bool)]) -> Result<Option<MenuAction>> {
+pub fn show(
+    hwnd: isize,
+    layouts: &[(String, bool)],
+    next_layout: Option<&str>,
+) -> Result<Option<MenuAction>> {
     let autostart_enabled = autostart::is_enabled().unwrap_or_else(|error| {
         warn!(%error, "failed to query autostart state");
         false
@@ -70,7 +75,7 @@ pub fn show(hwnd: isize, layouts: &[(String, bool)]) -> Result<Option<MenuAction
         }
 
         if !layouts.is_empty() {
-            append_layouts(menu, layouts)?;
+            append_layouts(menu, layouts, next_layout.is_some())?;
         }
 
         let mut cursor = POINT::default();
@@ -109,6 +114,7 @@ pub fn show(hwnd: isize, layouts: &[(String, bool)]) -> Result<Option<MenuAction
         }
 
         Ok(match command.0 as usize {
+            CMD_NEXT_LAYOUT => next_layout.map(|name| MenuAction::UsePinnedLayout(name.to_owned())),
             CMD_SETTINGS => Some(MenuAction::OpenSettings),
             CMD_RELOAD => Some(MenuAction::ReloadConfig),
             CMD_AUTOSTART => Some(MenuAction::ToggleAutostart),
@@ -127,12 +133,23 @@ pub fn show(hwnd: isize, layouts: &[(String, bool)]) -> Result<Option<MenuAction
     result
 }
 
-fn append_layouts(menu: HMENU, layouts: &[(String, bool)]) -> Result<()> {
+fn append_layouts(menu: HMENU, layouts: &[(String, bool)], can_cycle: bool) -> Result<()> {
     // SAFETY: the APIs take live menu handles and copy each HSTRING label.
     // On success the parent owns the submenu. On failure it is destroyed below.
     unsafe {
         let submenu = CreatePopupMenu().context("CreatePopupMenu(layouts) failed")?;
         let result = (|| -> Result<()> {
+            if can_cycle {
+                AppendMenuW(
+                    submenu,
+                    MF_STRING,
+                    CMD_NEXT_LAYOUT,
+                    &HSTRING::from("Next layout"),
+                )
+                .context("AppendMenuW(Next layout) failed")?;
+                AppendMenuW(submenu, MF_SEPARATOR, 0, PCWSTR::null())
+                    .context("AppendMenuW(layout separator) failed")?;
+            }
             for (index, (name, current)) in layouts.iter().enumerate() {
                 let mut flags = MF_STRING;
                 if *current {

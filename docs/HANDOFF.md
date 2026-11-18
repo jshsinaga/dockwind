@@ -233,7 +233,7 @@ Named pinned app layouts need a Windows Settings smoke check. Create a Work
 layout, change the pinned draft, and load Work. Apply, restart Dockwind, and
 reopen Settings to confirm the pin order and saved layout remain available.
 Rename it, then load it and confirm the saved app order and arguments.
-Switch layouts from the dock menu and verify the checked layout, then try
+Switch layouts from the dock menu, exercise Next layout, verify the checked layout, then try
 saving an older Settings draft and confirm it detects the disk change.
 Choose Discard draft & reload and check that Settings shows the latest pins.
 While scrolled to the end of an overflowing dock, switch layouts and confirm
