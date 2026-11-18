@@ -162,73 +162,88 @@ impl SettingsView {
     }
 
     fn handle_key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
-        if self.showing_app_picker && event.keystroke.key == "escape" {
-            self.showing_app_picker = false;
-            self.active_input = None;
-            cx.notify();
-            return;
+        let key = &event.keystroke.key;
+        let modifiers = event.keystroke.modifiers;
+        if key == "escape" {
+            if self.showing_taskbar_confirm {
+                self.showing_taskbar_confirm = false;
+                cx.notify();
+                return;
+            }
+            if self.showing_app_picker {
+                self.showing_app_picker = false;
+                self.active_input = None;
+                cx.notify();
+                return;
+            }
+            if self.delete_confirm_index.take().is_some() {
+                cx.notify();
+                return;
+            }
         }
 
-        if self.delete_confirm_index.is_some() && event.keystroke.key == "escape" {
-            self.delete_confirm_index = None;
-            cx.notify();
+        if modifiers.control && !modifiers.alt && key == "s" && !event.is_held {
+            if !self.showing_taskbar_confirm
+                && !self.showing_app_picker
+                && self.delete_confirm_index.is_none()
+                && (self.has_unsaved_changes() || self.active_input.is_some())
+            {
+                self.apply_and_save(false, cx);
+            }
             return;
         }
 
         let Some(field) = self.active_input else {
             return;
         };
-
-        let key = &event.keystroke.key;
         if key == "escape" || key == "enter" {
-            self.commit_input(field);
+            self.live_update_input(field);
             self.active_input = None;
             cx.notify();
             return;
         }
 
-        if key == "backspace" {
-            self.input_buffer.pop();
-            self.live_update_input(field);
-            cx.notify();
-            return;
-        }
-
-        let char_to_add = if key == "space" {
-            Some(' ')
-        } else if key.chars().count() == 1
-            && !event.keystroke.modifiers.control
-            && !event.keystroke.modifiers.alt
-        {
-            key.chars().next()
-        } else {
-            None
-        };
-
-        if let Some(ch) = char_to_add {
-            match field {
-                ActiveInput::BackgroundHex
-                | ActiveInput::BorderColorHex
-                | ActiveInput::ClockFontColor => {
-                    let is_valid_hex_char =
-                        (ch == '#' && self.input_buffer.is_empty()) || ch.is_ascii_hexdigit();
-                    if is_valid_hex_char && self.input_buffer.len() < 9 {
-                        self.input_buffer.push(ch.to_ascii_uppercase());
-                        self.live_update_input(field);
-                        cx.notify();
-                    }
+        let hex_field = matches!(
+            field,
+            ActiveInput::BackgroundHex | ActiveInput::BorderColorHex | ActiveInput::ClockFontColor
+        );
+        if modifiers.control && !modifiers.alt && key == "v" {
+            let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+                return;
+            };
+            if hex_field {
+                let hex = text.trim();
+                if crate::config::parse_rgba_hex(hex).is_none() {
+                    return;
                 }
-                ActiveInput::ClockTimeFormat
-                | ActiveInput::ClockDateFormat
-                | ActiveInput::AppPickerSearch => {
-                    if self.input_buffer.len() < 64 {
-                        self.input_buffer.push(ch);
-                        self.live_update_input(field);
-                        cx.notify();
+                self.input_buffer = hex.to_ascii_uppercase();
+            } else {
+                self.input_buffer = text
+                    .chars()
+                    .filter(|ch| !ch.is_control())
+                    .take(64)
+                    .collect();
+            }
+        } else if key == "backspace" {
+            self.input_buffer.pop();
+        } else {
+            let Some(text) = &event.keystroke.key_char else {
+                return;
+            };
+            for ch in text.chars().filter(|ch| !ch.is_control()) {
+                if hex_field {
+                    if self.input_buffer.len() < 9
+                        && (ch.is_ascii_hexdigit() || (ch == '#' && self.input_buffer.is_empty()))
+                    {
+                        self.input_buffer.push(ch.to_ascii_uppercase());
                     }
+                } else if self.input_buffer.chars().count() < 64 {
+                    self.input_buffer.push(ch);
                 }
             }
         }
+        self.live_update_input(field);
+        cx.notify();
     }
 
     fn live_update_input(&mut self, field: ActiveInput) {
@@ -236,7 +251,9 @@ impl SettingsView {
             ActiveInput::BackgroundHex => {
                 let trimmed = self.input_buffer.trim();
                 let clean = trimmed.strip_prefix('#').unwrap_or(trimmed);
-                if clean.len() == 6 && clean.bytes().all(|b| b.is_ascii_hexdigit()) {
+                if (clean.len() == 6 || clean.len() == 8)
+                    && clean.bytes().all(|b| b.is_ascii_hexdigit())
+                {
                     self.draft.appearance.background = format!("#{clean}");
                 }
             }
@@ -277,26 +294,9 @@ impl SettingsView {
         }
     }
 
-    fn commit_input(&mut self, field: ActiveInput) {
-        self.live_update_input(field);
-        match field {
-            ActiveInput::BackgroundHex => {
-                let trimmed = self.input_buffer.trim();
-                let clean = trimmed.strip_prefix('#').unwrap_or(trimmed);
-                if clean.len() == 6 && clean.bytes().all(|b| b.is_ascii_hexdigit()) {
-                    self.draft.appearance.background = format!("#{clean}");
-                }
-            }
-            ActiveInput::ClockFontColor if self.input_buffer.trim().is_empty() => {
-                self.draft.clock.font_color = None;
-            }
-            _ => {}
-        }
-    }
-
     fn apply_and_save(&mut self, overwrite: bool, cx: &mut Context<Self>) {
         if let Some(field) = self.active_input.take() {
-            self.commit_input(field);
+            self.live_update_input(field);
         }
         let expected = (!overwrite).then_some(self.saved_source.as_str());
         self.overwrite_pending = false;
@@ -365,10 +365,14 @@ impl SettingsView {
             .flex()
             .items_center()
             .justify_between()
+            .flex_wrap()
+            .gap_3()
             .child(
                 div()
                     .flex()
                     .flex_col()
+                    .min_w(px(0.0))
+                    .max_w_full()
                     .gap_1()
                     .child(
                         div()
@@ -381,6 +385,7 @@ impl SettingsView {
                         div()
                             .text_xs()
                             .text_color(rgba(0x6C7086FF))
+                            .truncate()
                             .child(self.config_path.display().to_string()),
                     ),
             )
@@ -419,6 +424,9 @@ impl SettingsView {
                                 }
                             })
                             .on_click(cx.listener(move |this: &mut Self, _, _, cx| {
+                                if let Some(field) = this.active_input.take() {
+                                    this.live_update_input(field);
+                                }
                                 this.active_tab = tab;
                                 this.showing_app_picker = false;
                                 this.delete_confirm_index = None;
@@ -546,6 +554,7 @@ impl Render for SettingsView {
                     .track_scroll(&self.scroll_handle)
                     .overflow_y_scroll()
                     .flex_1()
+                    .min_h(px(0.0))
                     .p_6()
                     .child(match self.active_tab {
                         SettingsTab::Appearance => {
@@ -579,8 +588,8 @@ pub fn open_settings_window(cx: &mut App, config_path: PathBuf) -> Result<()> {
     let monitor = win::monitors::MonitorInfo::primary()
         .context("failed to query primary monitor for settings window")?;
 
-    let window_width = px(780.0);
-    let window_height = px(720.0);
+    let window_width = px(780.0).min(monitor.work_area.size.width);
+    let window_height = px(720.0).min(monitor.work_area.size.height);
     let origin_x = monitor.work_area.origin.x + (monitor.work_area.size.width - window_width) / 2.0;
     let origin_y =
         monitor.work_area.origin.y + (monitor.work_area.size.height - window_height) / 2.0;
@@ -588,6 +597,10 @@ pub fn open_settings_window(cx: &mut App, config_path: PathBuf) -> Result<()> {
 
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
+        window_min_size: Some(size(
+            window_width.min(px(480.0)),
+            window_height.min(px(420.0)),
+        )),
         titlebar: Some(TitlebarOptions {
             title: Some(SharedString::from("Dockwind Settings")),
             appears_transparent: false,
@@ -758,6 +771,19 @@ mod tests {
         view.input_buffer = "#FFFFFF".to_string();
         assert_eq!(view.active_input, Some(ActiveInput::BackgroundHex));
         assert_eq!(view.input_buffer, "#FFFFFF");
+    }
+
+    #[test]
+    fn background_hex_input_preserves_alpha() {
+        let mut view = SettingsView::new(
+            PathBuf::from("config.toml"),
+            Config::default(),
+            String::new(),
+            false,
+        );
+        view.input_buffer = "#14263A80".to_string();
+        view.live_update_input(ActiveInput::BackgroundHex);
+        assert_eq!(view.draft.appearance.background, "#14263A80");
     }
 
     #[test]

@@ -18,17 +18,9 @@ impl SettingsView {
         let current_alignment = self.draft.appearance.item_alignment;
         let current_anchor = self.draft.appearance.alignment_anchor;
 
-        let background_hex = {
-            let full = &self.draft.appearance.background;
-            let clean = full.strip_prefix('#').unwrap_or(full);
-            if clean.len() >= 6 {
-                format!("#{}", &clean[..6])
-            } else {
-                format!("#{clean}")
-            }
-        };
-        let parsed_color = parse_rgba_hex(&self.draft.appearance.background)
-            .map(|[r, g, b, _]| rgba(u32::from_be_bytes([r, g, b, 0xFF])))
+        let background_hex = &self.draft.appearance.background;
+        let parsed_color = parse_rgba_hex(background_hex)
+            .map(|bytes| rgba(u32::from_be_bytes(bytes)))
             .unwrap_or_else(|| rgba(0x1E1E2ECC));
 
         let border_hex = self.draft.appearance.border_color.clone();
@@ -636,7 +628,7 @@ impl SettingsView {
                     ),
                     render_setting_row(
                         "Background Color",
-                        "Input 6-digit hex code or choose using the color dialog.",
+                        "Enter RGB or RGBA hex, or choose a color.",
                         div()
                             .flex()
                             .items_center()
@@ -653,7 +645,7 @@ impl SettingsView {
                             .child(render_text_input(
                                 "input-bg-hex",
                                 ActiveInput::BackgroundHex,
-                                &background_hex,
+                                background_hex,
                                 "#1E1E2E",
                                 self.active_input,
                                 &self.input_buffer,
