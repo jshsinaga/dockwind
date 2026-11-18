@@ -257,6 +257,7 @@ pub fn render_text_input(
                 ActiveInput::ClockFontColor => {
                     this.draft.clock.font_color.clone().unwrap_or_default()
                 }
+                ActiveInput::LayoutName => this.layout_name.clone(),
                 ActiveInput::AppPickerSearch => this.app_picker_search.clone(),
             };
             this.status_message = None;

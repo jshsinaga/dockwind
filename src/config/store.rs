@@ -308,8 +308,26 @@ fn update_document(document: &mut DocumentMut, config: &Config) {
         VerticalAlign::Bottom => "bottom",
     });
 
+    document["pinned"] = Item::ArrayOfTables(pinned_tables(&config.pinned));
+
+    if config.pinned_layouts.is_empty() {
+        document.remove("pinned_layouts");
+    } else {
+        let layouts = table_mut(document, "pinned_layouts");
+        layouts.retain(|name, _| config.pinned_layouts.contains_key(name));
+        for (name, apps) in &config.pinned_layouts {
+            layouts[name] = if apps.is_empty() {
+                value(toml_edit::Array::new())
+            } else {
+                Item::ArrayOfTables(pinned_tables(apps))
+            };
+        }
+    }
+}
+
+fn pinned_tables(apps: &[super::model::PinnedApp]) -> ArrayOfTables {
     let mut pinned = ArrayOfTables::new();
-    for app in &config.pinned {
+    for app in apps {
         let mut table = Table::new();
         table["name"] = value(app.name.as_str());
         table["path"] = value(app.path.as_str());
@@ -320,7 +338,7 @@ fn update_document(document: &mut DocumentMut, config: &Config) {
         table["args"] = value(args);
         pinned.push(table);
     }
-    document["pinned"] = Item::ArrayOfTables(pinned);
+    pinned
 }
 
 fn write_default(path: &Path, config: &Config) -> Result<(), ConfigError> {
@@ -502,6 +520,40 @@ value = 7
         assert_eq!(
             fs::read_to_string(&path).expect("read unchanged"),
             "not valid = ["
+        );
+    }
+
+    #[test]
+    fn named_layouts_round_trip_with_empty_layouts_and_launch_arguments() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("config.toml");
+        let mut config = Config::default();
+        config
+            .pinned_layouts
+            .insert("Empty".to_string(), Vec::new());
+        config.pinned_layouts.insert(
+            "Work & notes".to_string(),
+            vec![crate::config::PinnedApp {
+                name: "Editor".to_string(),
+                path: "editor.exe".to_string(),
+                args: vec!["--work".to_string()],
+            }],
+        );
+        config
+            .save_atomic_preserving(&path, None)
+            .expect("save layouts");
+        assert_eq!(
+            Config::load_existing(&path).expect("read layouts").config,
+            config
+        );
+
+        config.pinned_layouts.remove("Work & notes");
+        config
+            .save_atomic_preserving(&path, None)
+            .expect("save removal");
+        assert_eq!(
+            Config::load_existing(&path).expect("read layouts").config,
+            config
         );
     }
 

@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -7,6 +9,8 @@ pub struct Config {
     pub behavior: Behavior,
     pub clock: Clock,
     pub pinned: Vec<PinnedApp>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub pinned_layouts: BTreeMap<String, Vec<PinnedApp>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

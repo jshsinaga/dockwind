@@ -247,6 +247,18 @@ error when clicked.
 The settings window can add, remove, and reorder pinned apps. It uses the file
 name as the display name and writes an empty argument list.
 
+### 3.5 Named pinned app layouts
+
+In Settings, open Pinned Apps to save the current draft app list as a named
+layout. Load copies that layout into the draft. Update replaces a saved layout
+with the current draft app list. Apply & Save commits both the layouts and the
+current pinned apps and updates the running dock.
+
+Each named layout has the same entries and order as `[[pinned]]`. Layouts can
+be empty. They are stored in `pinned_layouts`, for example
+`[[pinned_layouts."Work"]]` for an app in the Work layout. Existing configs
+can keep using `[[pinned]]` by itself.
+
 ## 4. Validation Rules
 
 1. `width` must be in `200..=4096`. Otherwise it becomes 560 with a warning.

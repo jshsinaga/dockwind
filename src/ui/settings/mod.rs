@@ -2,6 +2,7 @@ mod appearance;
 mod behavior;
 mod clock;
 pub mod controls;
+mod layouts;
 mod modals;
 mod pinned;
 
@@ -38,6 +39,7 @@ pub enum ActiveInput {
     ClockDateFormat,
     ClockFontColor,
     AppPickerSearch,
+    LayoutName,
 }
 
 #[derive(Clone, Copy)]
@@ -90,6 +92,7 @@ pub struct SettingsView {
     pub(super) showing_taskbar_confirm: bool,
     pub(super) active_input: Option<ActiveInput>,
     pub(super) input_buffer: String,
+    pub(super) layout_name: String,
     pub(super) focus_handle: Option<FocusHandle>,
     pub(super) font_dropdown_open: bool,
     pub(super) icon_cache: RefCell<HashMap<PathBuf, Option<Arc<RenderImage>>>>,
@@ -119,6 +122,7 @@ impl SettingsView {
             showing_taskbar_confirm: false,
             active_input: None,
             input_buffer: String::new(),
+            layout_name: String::new(),
             focus_handle: None,
             font_dropdown_open: false,
             icon_cache: RefCell::new(HashMap::new()),
@@ -198,6 +202,9 @@ impl SettingsView {
         };
         if key == "escape" || key == "enter" {
             self.live_update_input(field);
+            if key == "enter" && field == ActiveInput::LayoutName {
+                self.capture_pinned_layout();
+            }
             self.active_input = None;
             cx.notify();
             return;
@@ -285,6 +292,7 @@ impl SettingsView {
                     self.draft.clock.font_color = None;
                 }
             }
+            ActiveInput::LayoutName => self.layout_name.clone_from(&self.input_buffer),
             ActiveInput::AppPickerSearch => {
                 if self.app_picker_search != self.input_buffer {
                     self.app_picker_search.clone_from(&self.input_buffer);

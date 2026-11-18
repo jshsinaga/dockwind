@@ -361,6 +361,7 @@ impl SettingsView {
                     .text_color(rgba(0x6C7086FF))
                     .child("Tip: Drag the :: handle to reorder apps, or use ^ / v buttons. Click X to remove an application."),
             )
+            .child(self.render_pinned_layouts(cx))
             .into_any_element()
     }
 }

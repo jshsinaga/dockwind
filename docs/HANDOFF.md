@@ -212,6 +212,10 @@ On Windows, narrow the dock with the clock enabled, click both chevrons to the
 ends, then widen it until the controls disappear. Repeat with the clock hidden
 and verify wheel input still scrolls the strip.
 
+Named pinned app layouts need a Windows Settings smoke check. Create a Work
+layout, change the pinned draft, and load Work. Apply, restart Dockwind, and
+reopen Settings to confirm the pin order and saved layout remain available.
+
 ### Historical evidence, baseline `482bd7a`
 
 | Date | Area | Evidence |
