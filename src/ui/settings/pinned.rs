@@ -76,6 +76,28 @@ impl SettingsView {
         }
     }
 
+    fn move_pin_argument(&mut self, pin: usize, from: usize, to: usize) -> bool {
+        let Some(app) = self.draft.pinned.get_mut(pin) else {
+            return false;
+        };
+        if from == to || from >= app.args.len() || to >= app.args.len() {
+            return false;
+        }
+        app.args.swap(from, to);
+        if let Some(ActiveInput::PinnedAppArgument(active_pin, active_argument)) =
+            &mut self.active_input
+            && *active_pin == pin
+        {
+            if *active_argument == from {
+                *active_argument = to;
+            } else if *active_argument == to {
+                *active_argument = from;
+            }
+        }
+        self.status_message = None;
+        true
+    }
+
     fn render_pin_arguments(
         &self,
         index: usize,
@@ -108,6 +130,39 @@ impl SettingsView {
                         self,
                         cx,
                     )))
+                    .children(
+                        [
+                            ("move-argument-up", "↑", argument_index.checked_sub(1)),
+                            (
+                                "move-argument-down",
+                                "↓",
+                                (argument_index + 1 < app.args.len()).then_some(argument_index + 1),
+                            ),
+                        ]
+                        .into_iter()
+                        .map(|(id, label, target)| {
+                            let button = div()
+                                .id(id)
+                                .px_2()
+                                .py_1()
+                                .rounded_md()
+                                .text_xs()
+                                .child(label);
+                            if let Some(target) = target {
+                                button
+                                    .text_color(rgba(0xCDD6F4FF))
+                                    .hover(|style| style.bg(rgba(0x313244FF)))
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if this.move_pin_argument(index, argument_index, target) {
+                                            cx.notify();
+                                        }
+                                    }))
+                            } else {
+                                button.text_color(rgba(0x6C7086FF))
+                            }
+                        }),
+                    )
                     .child(
                         div()
                             .id("remove-argument")
@@ -540,6 +595,30 @@ fn pinned_app_from_path(path: &Path) -> PinnedApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reordering_arguments_preserves_order_and_follows_the_active_field() {
+        let mut view = SettingsView::new(
+            "config.toml".into(),
+            crate::config::Config::default(),
+            String::new(),
+            false,
+        );
+        let mut pin = pinned_app_from_path(Path::new("Editor.exe"));
+        pin.args = vec!["--file".into(), "Work notes.txt".into()];
+        view.draft.pinned.push(pin);
+        view.active_input = Some(ActiveInput::PinnedAppArgument(0, 1));
+        view.input_buffer = "Work notes.txt".into();
+
+        assert!(view.move_pin_argument(0, 1, 0));
+        assert_eq!(view.draft.pinned[0].args, ["Work notes.txt", "--file"]);
+        assert_eq!(
+            view.active_input,
+            Some(ActiveInput::PinnedAppArgument(0, 0))
+        );
+        assert_eq!(view.input_buffer, "Work notes.txt");
+        assert!(!view.move_pin_argument(0, 0, 2));
+    }
 
     #[test]
     fn pin_arguments_keep_spaces_and_update_the_selected_entry() {
