@@ -42,6 +42,7 @@ pub struct DockView {
     appbar: Option<AppBarHandle>,
     menu_open: bool,
     progress: f32,
+    window_region: Option<[i32; 4]>,
     last_monitor_check: Instant,
     start_time: Instant,
 }
@@ -75,6 +76,7 @@ impl DockView {
             appbar: None,
             menu_open: false,
             progress,
+            window_region: None,
             last_monitor_check: start_time,
             start_time,
         };
@@ -94,14 +96,13 @@ impl DockView {
         })
         .detach();
 
-        let start = Instant::now();
         cx.spawn(async move |this, cx| {
             loop {
                 let delay = this
                     .read_with(cx, |this, _| this.poll_interval())
                     .unwrap_or(Duration::from_millis(100));
                 Timer::after(delay).await;
-                let now = start.elapsed();
+                let now = start_time.elapsed();
                 if this.update(cx, |this, cx| this.tick(now, cx)).is_err() {
                     break;
                 }
@@ -184,9 +185,8 @@ impl DockView {
         self.clock
             .update(cx, |clock, cx| clock.set_config(&config.clock, cx));
         self.auto_hide_settings = auto_hide_settings(&config);
-        if !config.behavior.auto_hide {
-            self.progress = 1.0;
-            self.set_click_through(false);
+        if !config.behavior.auto_hide && self.applied_config.behavior.auto_hide {
+            self.auto_hide = AutoHide::new(false);
         }
         if geometry_changed {
             self.apply_geometry(&config);
@@ -194,7 +194,7 @@ impl DockView {
         }
         self.applied_config = config;
 
-        if blur_changed {
+        if blur_changed && self.progress > 0.001 {
             self.apply_backdrop();
         }
 
@@ -250,18 +250,13 @@ impl DockView {
             return false;
         }
 
-        let p_width = (f32::from(bounds.size.width) * monitor.scale_factor).round() as i32;
-        let p_height = (f32::from(bounds.size.height) * monitor.scale_factor).round() as i32;
-        let p_radius = (f32::from(self.theme.radius) * monitor.scale_factor).round() as i32;
-        let _ = win::dwm::set_window_shape(self.geometry.hwnd, 0, 0, p_width, p_height, p_radius);
-
-        win::dwm::force_render(self.geometry.hwnd);
-
         self.geometry.bounds = bounds;
         self.geometry.trigger = trigger;
         self.geometry.scale_factor = monitor.scale_factor;
         self.geometry.edge = config.appearance.orientation;
         self.geometry.monitor = *monitor;
+        self.window_region = None;
+        win::dwm::force_render(self.geometry.hwnd);
         true
     }
 
@@ -393,12 +388,7 @@ impl DockView {
             force_hidden,
             pinned_open: self.menu_open,
         };
-        let target_changed = self.auto_hide.update_target(input, self.auto_hide_settings);
-        let progress = self.auto_hide.advance(now, self.auto_hide_settings);
-
-        if target_changed || (progress - self.progress).abs() > f32::EPSILON {
-            self.progress = progress;
-            self.set_click_through(progress <= 0.001);
+        if self.auto_hide.update_target(input, self.auto_hide_settings) {
             cx.notify();
         }
     }
@@ -524,32 +514,33 @@ impl Render for DockView {
             .apply(self.progress);
         let offset = self.geometry.bounds.size.height * (1.0 - visual_progress) * direction;
 
-        if is_hidden {
-            let _ = win::dwm::set_window_shape(self.geometry.hwnd, 0, 0, 0, 0, 0);
-            let _ = win::dwm::apply_backdrop_to_hwnd(self.geometry.hwnd, BlurMode::None);
+        let scale = self.geometry.scale_factor;
+        let region = if is_hidden {
+            [0; 4]
         } else {
-            let y_offset = (f32::from(offset) * self.geometry.scale_factor).round() as i32;
-            let p_width = (f32::from(self.geometry.bounds.size.width) * self.geometry.scale_factor)
-                .round() as i32;
-            let p_height = (f32::from(self.geometry.bounds.size.height)
-                * self.geometry.scale_factor)
-                .round() as i32;
-            let p_radius =
-                (f32::from(self.theme.radius) * self.geometry.scale_factor).round() as i32;
-            let _ = win::dwm::set_window_shape(
-                self.geometry.hwnd,
-                0,
-                y_offset,
-                p_width,
-                p_height,
-                p_radius,
-            );
-            if was_hidden {
-                let _ = win::dwm::apply_backdrop_to_hwnd(
-                    self.geometry.hwnd,
-                    self.applied_config.appearance.blur,
-                );
+            [
+                (f32::from(offset) * scale).round() as i32,
+                (f32::from(self.geometry.bounds.size.width) * scale).round() as i32,
+                (f32::from(self.geometry.bounds.size.height) * scale).round() as i32,
+                (f32::from(self.theme.radius) * scale).round() as i32,
+            ]
+        };
+
+        let first_frame = self.window_region.is_none();
+        if self.window_region != Some(region) {
+            let [y, width, height, radius] = region;
+            match win::dwm::set_window_shape(self.geometry.hwnd, 0, y, width, height, radius) {
+                Ok(()) => self.window_region = Some(region),
+                Err(error) => warn!(%error, "failed to update the dock window region"),
             }
+        }
+        if is_hidden && (first_frame || !was_hidden) {
+            if let Err(error) = win::dwm::apply_backdrop_to_hwnd(self.geometry.hwnd, BlurMode::None)
+            {
+                warn!(%error, "failed to clear the hidden dock backdrop");
+            }
+        } else if !is_hidden && was_hidden {
+            self.apply_backdrop();
         }
 
         let icons = {
@@ -571,6 +562,7 @@ impl Render for DockView {
             .id("dock-bar")
             .relative()
             .top(offset)
+            .opacity(visual_progress.clamp(0.0, 1.0))
             .size_full()
             .rounded(self.theme.radius)
             .bg(self.theme.background)

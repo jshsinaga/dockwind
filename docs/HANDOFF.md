@@ -188,6 +188,13 @@ Read this before changing taskbar or worker code.
 
 ## Evidence
 
+2026-11-18, Linux cloud workspace: six auto-hide unit tests and the formatting
+check passed. Windows visual verification is pending. In a Windows desktop
+session, trigger and dismiss auto-hide after an idle period at both dock edges.
+Check that the dock slides and fades from its current position, that app tiles
+stay in place on hover, and that hover, press, and foreground states are visible
+with both light and dark backgrounds.
+
 ### Historical evidence, baseline `482bd7a`
 
 | Date | Area | Evidence |

@@ -41,11 +41,14 @@ impl AutoHide {
     }
 
     pub fn is_animating(&self) -> bool {
-        (self.progress - self.target).abs() > 0.0001
+        self.progress != self.target
     }
 
     pub fn update_target(&mut self, input: AutoHideInput, settings: AutoHideSettings) -> bool {
         let old_target = self.target;
+        if !self.is_animating() {
+            self.last_update = input.now;
+        }
         if !input.enabled {
             self.target = 1.0;
             self.pending_since = None;
@@ -163,7 +166,8 @@ mod tests {
         let mut auto_hide = AutoHide::new(true);
         assert_eq!(auto_hide.update(input(0, false, true), settings()), 0.0);
         assert_eq!(auto_hide.update(input(50, false, true), settings()), 0.0);
-        assert!(auto_hide.update(input(90, false, true), settings()) > 0.0);
+        assert_eq!(auto_hide.update(input(90, false, true), settings()), 0.0);
+        assert!(auto_hide.advance(Duration::from_millis(106), settings()) > 0.0);
         assert_eq!(auto_hide.update(input(400, false, true), settings()), 1.0);
     }
 
@@ -171,10 +175,22 @@ mod tests {
     fn hides_after_pointer_leaves_and_delay() {
         let mut auto_hide = AutoHide::new(true);
         auto_hide.update(input(0, false, true), settings());
+        auto_hide.update(input(90, false, true), settings());
         assert_eq!(auto_hide.update(input(400, false, true), settings()), 1.0);
         assert_eq!(auto_hide.update(input(500, false, false), settings()), 1.0);
-        assert!(auto_hide.update(input(950, false, false), settings()) < 1.0);
+        assert_eq!(auto_hide.update(input(950, false, false), settings()), 1.0);
+        assert!(auto_hide.advance(Duration::from_millis(966), settings()) < 1.0);
         assert_eq!(auto_hide.update(input(1200, false, false), settings()), 0.0);
+    }
+
+    #[test]
+    fn first_frame_after_idle_only_uses_time_since_the_reveal_started() {
+        let mut auto_hide = AutoHide::new(true);
+        auto_hide.update_target(input(10_000, false, true), settings());
+        assert!(auto_hide.update_target(input(10_080, false, true), settings()));
+
+        let progress = auto_hide.advance(Duration::from_millis(10_098), settings());
+        assert!((progress - 0.1).abs() < 0.0001);
     }
 
     #[test]
