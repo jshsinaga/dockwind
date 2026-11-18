@@ -72,7 +72,7 @@ impl SettingsView {
                                             Choice::Save => {
                                                 this.apply_and_save(false, cx);
                                                 if !this.has_unsaved_changes()
-                                                    && !this.overwrite_pending
+                                                    && this.conflict_source.is_none()
                                                 {
                                                     window.remove_window();
                                                 }

@@ -384,7 +384,8 @@ Do not write in place. A crash during an in-place write can leave a corrupt file
 
 The settings window records the file contents when it opens. Before Apply it reads
 the file again. If the contents changed, choose Discard draft & reload to load
-the latest valid file, or Overwrite config to save the draft. If the file
+the latest valid file, or Overwrite config to save the draft. If the disk file
+changes again before confirmation, Settings prompts again. If the file
 was deleted, it asks before recreating it. A failed save leaves the existing file
 intact and reports the error.
 

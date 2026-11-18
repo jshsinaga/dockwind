@@ -36,7 +36,10 @@ pub enum ConfigError {
     #[error("pinned layout {name:?} is no longer available")]
     UnknownPinnedLayout { name: String },
     #[error("config changed on disk: {path}")]
-    ChangedOnDisk { path: PathBuf },
+    ChangedOnDisk {
+        path: PathBuf,
+        current_source: ConfigSnapshot,
+    },
     #[error("failed to watch config: {0}")]
     Watch(#[from] notify::Error),
     #[error("failed to start config watcher thread: {0}")]
@@ -49,6 +52,24 @@ pub enum ConfigError {
     },
     #[error("config watcher thread panicked")]
     WatcherPanicked,
+}
+
+pub struct ConfigSnapshot(Option<String>);
+
+impl ConfigSnapshot {
+    pub fn contents(&self) -> Option<&str> {
+        self.0.as_deref()
+    }
+}
+
+impl std::fmt::Debug for ConfigSnapshot {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(if self.0.is_some() {
+            "ConfigSnapshot(Present)"
+        } else {
+            "ConfigSnapshot(Missing)"
+        })
+    }
 }
 
 pub fn default_path() -> Result<PathBuf, ConfigError> {
@@ -103,18 +124,19 @@ impl Config {
     /// Writes a validated config while preserving comments, key ordering, and
     /// unknown keys in an existing valid TOML document. An invalid existing file
     /// is not overwritten.
-    /// Compares the current file with the settings snapshot when supplied.
+    /// An expected source of `Some(None)` means the file must still be absent.
     pub fn save_atomic_preserving(
         &self,
         path: &Path,
-        expected_source: Option<&str>,
+        expected_source: Option<Option<&str>>,
     ) -> Result<(LoadedConfig, String), ConfigError> {
         let existing = read_config_if_present(path)?;
         if let Some(expected_source) = expected_source
-            && existing.as_deref() != Some(expected_source)
+            && existing.as_deref() != expected_source
         {
             return Err(ConfigError::ChangedOnDisk {
                 path: path.to_path_buf(),
+                current_source: ConfigSnapshot(existing),
             });
         }
 
@@ -169,9 +191,11 @@ impl Config {
 
 fn replace_config(path: &Path, contents: &str, expected: Option<&str>) -> Result<(), ConfigError> {
     let temporary = stage_config(path, contents)?;
-    if read_config_if_present(path)?.as_deref() != expected {
+    let current = read_config_if_present(path)?;
+    if current.as_deref() != expected {
         return Err(ConfigError::ChangedOnDisk {
             path: path.to_path_buf(),
+            current_source: ConfigSnapshot(current),
         });
     }
     let result = if expected.is_some() {
@@ -179,16 +203,16 @@ fn replace_config(path: &Path, contents: &str, expected: Option<&str>) -> Result
     } else {
         temporary.persist_noclobber(path)
     };
-    result.map_err(|error| {
-        if error.error.kind() == std::io::ErrorKind::AlreadyExists {
-            ConfigError::ChangedOnDisk {
+    match result {
+        Ok(_) => Ok(()),
+        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(ConfigError::ChangedOnDisk {
                 path: path.to_path_buf(),
-            }
-        } else {
-            config_write_error(path, error.error)
+                current_source: ConfigSnapshot(read_config_if_present(path)?),
+            })
         }
-    })?;
-    Ok(())
+        Err(error) => Err(config_write_error(path, error.error)),
+    }
 }
 
 fn read_config(path: &Path) -> Result<String, ConfigError> {
@@ -649,7 +673,9 @@ path="editor.exe"
         fs::write(&path, external).expect("edit externally");
 
         assert!(matches!(
-            loaded.config.save_atomic_preserving(&path, Some(&snapshot)),
+            loaded
+                .config
+                .save_atomic_preserving(&path, Some(Some(&snapshot))),
             Err(ConfigError::ChangedOnDisk { .. })
         ));
         assert_eq!(fs::read_to_string(&path).expect("read config"), external);
@@ -667,6 +693,34 @@ path="editor.exe"
     }
 
     #[test]
+    fn confirming_overwrite_does_not_discard_a_second_external_edit() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("config.toml");
+        let initial = "[appearance]\nwidth = 560\n";
+        let newer = "[appearance]\nwidth = 700\n";
+        let latest = "[appearance]\nwidth = 800\n";
+        fs::write(&path, newer).expect("write external edit");
+
+        let draft = Config::default();
+        let Err(ConfigError::ChangedOnDisk { current_source, .. }) =
+            draft.save_atomic_preserving(&path, Some(Some(initial)))
+        else {
+            panic!("expected first conflict");
+        };
+        assert_eq!(current_source.contents(), Some(newer));
+
+        fs::write(&path, latest).expect("write second edit");
+        assert!(matches!(
+            draft.save_atomic_preserving(&path, Some(current_source.contents())),
+            Err(ConfigError::ChangedOnDisk { .. })
+        ));
+        assert_eq!(
+            fs::read_to_string(&path).expect("read preserved file"),
+            latest
+        );
+    }
+
+    #[test]
     fn stale_settings_snapshot_protects_external_deletion() {
         let directory = tempfile::tempdir().expect("tempdir");
         let path = directory.path().join("config.toml");
@@ -674,7 +728,9 @@ path="editor.exe"
         fs::remove_file(&path).expect("delete externally");
 
         assert!(matches!(
-            loaded.config.save_atomic_preserving(&path, Some(&snapshot)),
+            loaded
+                .config
+                .save_atomic_preserving(&path, Some(Some(&snapshot))),
             Err(ConfigError::ChangedOnDisk { .. })
         ));
         assert!(!path.exists());

@@ -20,7 +20,7 @@ use gpui::{
 };
 use tracing::error;
 
-use crate::config::{Config, ConfigError};
+use crate::config::{Config, ConfigError, ConfigSnapshot};
 use crate::win;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,7 +75,7 @@ pub struct SettingsView {
     pub(super) draft: Config,
     pub(super) saved: Config,
     saved_source: String,
-    overwrite_pending: bool,
+    conflict_source: Option<ConfigSnapshot>,
     showing_close_confirm: bool,
     pub(super) autostart_draft: bool,
     pub(super) autostart_saved: bool,
@@ -109,7 +109,7 @@ impl SettingsView {
             draft: config.clone(),
             saved: config,
             saved_source,
-            overwrite_pending: false,
+            conflict_source: None,
             showing_close_confirm: false,
             autostart_draft: autostart,
             autostart_saved: autostart,
@@ -371,7 +371,7 @@ impl SettingsView {
         self.saved = loaded.config;
         self.draft.clone_from(&self.saved);
         self.autostart_draft = self.autostart_saved;
-        self.overwrite_pending = false;
+        self.conflict_source = None;
         self.selected_pinned_index = None;
         self.delete_confirm_index = None;
         self.clear_layout_name();
@@ -389,13 +389,18 @@ impl SettingsView {
             return;
         }
 
-        let expected = (!overwrite).then_some(self.saved_source.as_str());
-        self.overwrite_pending = false;
+        let expected = if overwrite {
+            self.conflict_source.as_ref().map(ConfigSnapshot::contents)
+        } else {
+            None
+        }
+        .unwrap_or(Some(self.saved_source.as_str()));
         match self
             .draft
-            .save_atomic_preserving(&self.config_path, expected)
+            .save_atomic_preserving(&self.config_path, Some(expected))
         {
             Ok((loaded, saved_source)) => {
+                self.conflict_source = None;
                 self.saved_source = saved_source;
                 self.saved = loaded.config;
                 self.draft = self.saved.clone();
@@ -425,8 +430,8 @@ impl SettingsView {
 
                 self.status_message = Some((SharedString::from("Settings saved"), false));
             }
-            Err(ConfigError::ChangedOnDisk { .. }) => {
-                self.overwrite_pending = true;
+            Err(ConfigError::ChangedOnDisk { current_source, .. }) => {
+                self.conflict_source = Some(current_source);
                 self.status_message = None;
             }
             Err(error) => {
@@ -539,7 +544,7 @@ impl SettingsView {
                     rgba(0xA6E3A1FF)
                 },
             )
-        } else if self.overwrite_pending {
+        } else if self.conflict_source.is_some() {
             (
                 SharedString::from("Config changed on disk. Choose which version to keep."),
                 rgba(0xF9E2AFFF),
@@ -560,12 +565,14 @@ impl SettingsView {
             .items_center()
             .justify_between()
             .gap_4()
-            .when(self.overwrite_pending, |footer| footer.flex_wrap())
+            .when(self.conflict_source.is_some(), |footer| footer.flex_wrap())
             .child(
                 div()
                     .flex_1()
                     .min_w(px(0.0))
-                    .when(self.overwrite_pending, |status| status.w_full().flex_none())
+                    .when(self.conflict_source.is_some(), |status| {
+                        status.w_full().flex_none()
+                    })
                     .text_xs()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(status_color)
@@ -577,7 +584,7 @@ impl SettingsView {
                     .items_center()
                     .flex_wrap()
                     .gap_3()
-                    .when(self.overwrite_pending, |actions| {
+                    .when(self.conflict_source.is_some(), |actions| {
                         actions.child(
                             div()
                                 .id("btn-reload-settings")
@@ -633,9 +640,9 @@ impl SettingsView {
                             .text_color(rgba(0x11111BFF))
                             .cursor_pointer()
                             .on_click(cx.listener(|this: &mut Self, _, _, cx| {
-                                this.apply_and_save(this.overwrite_pending, cx);
+                                this.apply_and_save(this.conflict_source.is_some(), cx);
                             }))
-                            .child(if self.overwrite_pending {
+                            .child(if self.conflict_source.is_some() {
                                 "Overwrite config"
                             } else {
                                 "Apply & Save"
@@ -813,11 +820,17 @@ mod tests {
         let path = directory.path().join("config.toml");
         let mut view = SettingsView::new(path.clone(), Config::default(), String::new(), false);
         view.draft.appearance.width = 700;
-        view.overwrite_pending = true;
+        let Err(ConfigError::ChangedOnDisk { current_source, .. }) = view
+            .saved
+            .save_atomic_preserving(&path, Some(Some("old source")))
+        else {
+            panic!("expected config conflict");
+        };
+        view.conflict_source = Some(current_source);
         std::fs::write(&path, "invalid = [").expect("write bad config");
         assert!(view.reload_draft_from_disk().is_err());
         assert_eq!(view.draft.appearance.width, 700);
-        assert!(view.overwrite_pending);
+        assert!(view.conflict_source.is_some());
 
         let source = "[appearance]\nwidth = 640\n";
         std::fs::write(&path, source).expect("write valid config");
@@ -825,7 +838,7 @@ mod tests {
         assert_eq!(view.draft.appearance.width, 640);
         assert_eq!(view.saved_source, source);
         assert!(!view.has_unsaved_changes());
-        assert!(!view.overwrite_pending);
+        assert!(view.conflict_source.is_none());
     }
 
     #[test]

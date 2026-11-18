@@ -237,6 +237,8 @@ Rename it, then load it and confirm the saved app order and arguments.
 Switch layouts from the dock menu, exercise Next layout, verify the checked layout, then try
 saving an older Settings draft and confirm it detects the disk change.
 Choose Discard draft & reload and check that Settings shows the latest pins.
+Repeat the conflict, then edit the disk file again before choosing Overwrite
+config. Verify that Settings asks again and leaves the newer file intact.
 While scrolled to the end of an overflowing dock, switch layouts and confirm
 the new list starts at its first app.
 With edits pending, check Close and the title-bar close button. Exercise
