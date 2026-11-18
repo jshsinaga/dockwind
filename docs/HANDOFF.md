@@ -244,6 +244,8 @@ arguments are preserved when loading either layout.
 Switch layouts from the dock menu, exercise Next layout, verify the checked layout, then try
 saving an older Settings draft and confirm it detects the disk change.
 Choose Discard draft & reload and check that Settings shows the latest pins.
+Change only Autostart while an external config edit is present and verify
+that applying changes leaves the file untouched.
 Repeat the conflict, then edit the disk file again before choosing Overwrite
 config. Verify that Settings asks again and leaves the newer file intact.
 While scrolled to the end of an overflowing dock, switch layouts and confirm

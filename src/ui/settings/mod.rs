@@ -429,14 +429,9 @@ impl SettingsView {
         Ok(())
     }
 
-    fn apply_and_save(&mut self, overwrite: bool, cx: &mut Context<Self>) {
-        if let Some(field) = self.active_input.take() {
-            self.live_update_input(field);
-        }
-        if let Some(message) = clock::clock_format_error(&self.draft.clock) {
-            self.status_message = Some((message.into(), true));
-            cx.notify();
-            return;
+    fn save_config_draft(&mut self, overwrite: bool) -> Result<bool, ConfigError> {
+        if !overwrite && self.draft == self.saved {
+            return Ok(false);
         }
 
         let expected = if overwrite {
@@ -445,52 +440,66 @@ impl SettingsView {
             None
         }
         .unwrap_or(Some(self.saved_source.as_str()));
-        match self
+        let (loaded, saved_source) = self
             .draft
-            .save_atomic_preserving(&self.config_path, Some(expected))
+            .save_atomic_preserving(&self.config_path, Some(expected))?;
+        self.conflict_source = None;
+        self.saved_source = saved_source;
+        self.saved = loaded.config;
+        self.draft.clone_from(&self.saved);
+        Ok(true)
+    }
+
+    fn apply_and_save(&mut self, overwrite: bool, cx: &mut Context<Self>) {
+        if let Some(field) = self.active_input.take() {
+            self.live_update_input(field);
+        }
+        if (overwrite || self.draft != self.saved)
+            && let Some(message) = clock::clock_format_error(&self.draft.clock)
         {
-            Ok((loaded, saved_source)) => {
-                self.conflict_source = None;
-                self.saved_source = saved_source;
-                self.saved = loaded.config;
-                self.draft = self.saved.clone();
+            self.status_message = Some((message.into(), true));
+            cx.notify();
+            return;
+        }
 
-                if self.autostart_draft != self.autostart_saved {
-                    let autostart_result = if self.autostart_draft {
-                        win::autostart::enable()
-                    } else {
-                        win::autostart::disable()
-                    };
-                    match autostart_result {
-                        Ok(()) => {
-                            self.autostart_saved = self.autostart_draft;
-                        }
-                        Err(error) => {
-                            self.status_message = Some((
-                                SharedString::from(format!(
-                                    "Settings saved, but autostart update failed: {error:#}"
-                                )),
-                                true,
-                            ));
-                            cx.notify();
-                            return;
-                        }
-                    }
-                }
-
-                self.status_message = Some((SharedString::from("Settings saved"), false));
-            }
+        let config_saved = match self.save_config_draft(overwrite) {
+            Ok(saved) => saved,
             Err(ConfigError::ChangedOnDisk { current_source, .. }) => {
                 self.conflict_source = Some(current_source);
                 self.status_message = None;
+                cx.notify();
+                return;
             }
             Err(error) => {
-                self.status_message = Some((
-                    SharedString::from(format!("Failed to save settings: {error}")),
-                    true,
-                ));
+                self.status_message =
+                    Some((format!("Failed to save settings: {error}").into(), true));
+                cx.notify();
+                return;
             }
+        };
+
+        let autostart_changed = self.autostart_draft != self.autostart_saved;
+        if autostart_changed {
+            let result = if self.autostart_draft {
+                win::autostart::enable()
+            } else {
+                win::autostart::disable()
+            };
+            if let Err(error) = result {
+                let message = if config_saved {
+                    format!("Config saved. Autostart update failed: {error:#}")
+                } else {
+                    format!("Autostart update failed: {error:#}")
+                };
+                self.status_message = Some((message.into(), true));
+                cx.notify();
+                return;
+            }
+            self.autostart_saved = self.autostart_draft;
         }
+
+        self.status_message = (config_saved || autostart_changed)
+            .then(|| (SharedString::from("Settings saved"), false));
         cx.notify();
     }
 
@@ -840,6 +849,23 @@ mod tests {
     use super::controls::HOTKEY_PRESETS;
     use super::*;
     use crate::config::PinnedApp;
+
+    #[test]
+    fn saving_only_autostart_leaves_external_config_edits_intact() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let path = directory.path().join("config.toml");
+        let source = "[appearance]\nwidth = 800\n";
+        std::fs::write(&path, source).expect("write external config edit");
+        let mut view = SettingsView::new(path.clone(), Config::default(), String::new(), false);
+        view.autostart_draft = true;
+
+        assert!(
+            !view
+                .save_config_draft(false)
+                .expect("skip unchanged config draft")
+        );
+        assert_eq!(std::fs::read_to_string(&path).expect("read config"), source);
+    }
 
     #[test]
     fn typing_replaces_selected_text_only_with_allowed_characters() {

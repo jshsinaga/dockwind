@@ -373,7 +373,8 @@ GPUI dock window. The reason is recorded in `docs/decisions.md`.
 - Closing Settings with unsaved edits offers Keep editing, Discard, and
   Save & Close. A failed save keeps Settings open.
 - Validation failures show a message box and do not write the file.
-- Autostart is applied immediately. It is not a config field.
+- Apply saves the autostart preference in Windows. If only autostart changes,
+  the config file stays untouched.
 
 ### 6.3 Atomic Replacement
 
