@@ -4,7 +4,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
-use notify::Watcher;
+use notify::event::{AccessKind, AccessMode};
+use notify::{EventKind, Watcher};
 use tracing::{debug, error, info, warn};
 
 use super::model::Config;
@@ -107,7 +108,7 @@ fn run(
         };
 
         match event {
-            Ok(event) if event_targets_config(&event, &path) => {}
+            Ok(event) if event_may_change_config(&event, &path) => {}
             Ok(_) => continue,
             Err(event_error) => {
                 warn!(%event_error, "config watcher event failed");
@@ -144,12 +145,16 @@ fn run(
     }
 }
 
-fn event_targets_config(event: &notify::Event, path: &Path) -> bool {
-    event.paths.iter().any(|event_path| event_path == path)
+fn event_may_change_config(event: &notify::Event, path: &Path) -> bool {
+    let may_change_contents = match event.kind {
+        EventKind::Access(kind) => kind == AccessKind::Close(AccessMode::Write),
+        _ => true,
+    };
+    may_change_contents && event.paths.iter().any(|event_path| event_path == path)
 }
 
 fn next_deadline(deadline: Instant, now: Instant, event: &notify::Event, path: &Path) -> Instant {
-    if event_targets_config(event, path) {
+    if event_may_change_config(event, path) {
         now + DEBOUNCE
     } else {
         deadline
@@ -258,6 +263,24 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    #[test]
+    fn watcher_ignores_reads_and_accepts_close_after_write() {
+        let path = Path::new("config.toml");
+        let now = Instant::now();
+        let deadline = now + DEBOUNCE;
+        let read = notify::Event::new(EventKind::Access(AccessKind::Close(AccessMode::Read)))
+            .add_path(path.to_path_buf());
+        let write = notify::Event::new(EventKind::Access(AccessKind::Close(AccessMode::Write)))
+            .add_path(path.to_path_buf());
+
+        assert!(!event_may_change_config(&read, path));
+        assert_eq!(
+            next_deadline(deadline, now + Duration::from_millis(10), &read, path),
+            deadline
+        );
+        assert!(event_may_change_config(&write, path));
     }
 
     #[test]
