@@ -20,10 +20,10 @@ use windows::core::{HSTRING, Interface, PCWSTR, w};
 use crate::config::parse_rgba_hex;
 
 #[derive(Debug)]
-struct ComApartmentGuard(bool);
+pub(super) struct ComApartmentGuard(bool);
 
 impl ComApartmentGuard {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         // SAFETY: CoInitializeEx initializes the COM apartment on the calling thread.
         let ok = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok() };
         Self(ok)

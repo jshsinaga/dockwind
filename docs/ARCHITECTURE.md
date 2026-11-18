@@ -251,7 +251,8 @@ taskbar watch timer (2 s) --> taskbar watcher --> refresh hide
 3. The refresh task coalesces window events for 50 ms and enumerates top-level
    windows on the background executor. A 250 ms idle timer catches missed
    events. The controller merges each completed snapshot with the current
-   config on the UI thread. Icons are cached by executable path in the view.
+   config on the UI thread. The view caches icons by executable path and loads
+   missing icons on the background executor.
 4. The dock polls the cursor and fullscreen state. The pure auto-hide state
    machine returns progress. The view applies offset, opacity, and click-through.
 5. The native menu runs in a deferred task. `menu_open` pins the dock while the

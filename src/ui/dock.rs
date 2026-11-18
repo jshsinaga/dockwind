@@ -1,8 +1,11 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    Bounds, ClickEvent, Context, Entity, MouseButton, MouseDownEvent, Pixels, Point, Render, Size,
-    Timer, Window, div, prelude::*, px, size,
+    Bounds, ClickEvent, Context, Entity, MouseButton, MouseDownEvent, Pixels, Point, Render,
+    RenderImage, Size, Timer, Window, div, prelude::*, px, size,
 };
 use tracing::{debug, error, info, warn};
 use windows::Win32::Foundation::RECT;
@@ -13,10 +16,10 @@ use super::theme::Theme;
 use crate::app::AppController;
 use crate::config::{AlignmentAnchor, Appearance, BlurMode, Clock, Config, DockEdge, WidthMode};
 use crate::dock::{AutoHide, AutoHideInput, AutoHideSettings, DockItem};
+use crate::win;
 use crate::win::appbar::{AppBarEdge, AppBarHandle};
 use crate::win::menu::MenuAction;
 use crate::win::monitors::MonitorInfo;
-use crate::win::{self, icons::IconCache};
 
 #[derive(Debug, Clone, Copy)]
 pub struct DockGeometry {
@@ -34,7 +37,8 @@ pub struct DockView {
     theme: Theme,
     clock: Entity<ClockView>,
     items: Vec<DockItem>,
-    icons: IconCache,
+    icons: HashMap<PathBuf, Option<Arc<RenderImage>>>,
+    loading_icons: bool,
     icon_size: Pixels,
     geometry: DockGeometry,
     auto_hide: AutoHide,
@@ -68,7 +72,8 @@ impl DockView {
             theme,
             clock,
             items,
-            icons: IconCache::default(),
+            icons: HashMap::new(),
+            loading_icons: false,
             icon_size: px(config.appearance.icon_size as f32),
             geometry,
             auto_hide,
@@ -89,6 +94,7 @@ impl DockView {
             }
         };
         this.sync_appbar(&config);
+        this.load_missing_icons(cx);
 
         let controller = this.controller.clone();
         cx.observe(&controller, |this, controller, cx| {
@@ -130,6 +136,7 @@ impl DockView {
         };
         let count_changed = self.items.len() != items.len();
         self.items = items;
+        self.load_missing_icons(cx);
         if self.applied_config.appearance.width_mode == crate::config::WidthMode::Auto
             && count_changed
         {
@@ -143,6 +150,42 @@ impl DockView {
         }
 
         self.apply_config(config, cx);
+    }
+
+    fn load_missing_icons(&mut self, cx: &mut Context<Self>) {
+        if self.loading_icons {
+            return;
+        }
+        let mut requests = HashMap::new();
+        for item in &self.items {
+            if !self.icons.contains_key(&item.key) {
+                requests.insert(item.key.clone(), item.target_window());
+            }
+        }
+        if requests.is_empty() {
+            return;
+        }
+
+        self.loading_icons = true;
+        let load = cx.background_executor().spawn(async move {
+            requests
+                .into_iter()
+                .map(|(path, hwnd)| {
+                    let icon = win::icons::load_icon(&path, hwnd);
+                    (path, icon)
+                })
+                .collect::<Vec<_>>()
+        });
+        cx.spawn(async move |this, cx| {
+            let loaded = load.await;
+            let _ = this.update(cx, |this, cx| {
+                this.icons.extend(loaded);
+                this.loading_icons = false;
+                this.load_missing_icons(cx);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn apply_config(&mut self, config: Config, cx: &mut Context<Self>) {
@@ -538,14 +581,6 @@ impl Render for DockView {
             self.apply_backdrop();
         }
 
-        let icons = {
-            let cache = &mut self.icons;
-            self.items
-                .iter()
-                .map(|item| cache.get(&item.key, item.target_window()))
-                .collect::<Vec<_>>()
-        };
-
         let (pt, pb, pl, pr) = (
             self.theme.padding_top,
             self.theme.padding_bottom,
@@ -612,23 +647,18 @@ impl Render for DockView {
             crate::config::VerticalAlign::Bottom => apps_div.items_end(),
         };
 
-        let items_elements =
-            self.items
-                .iter()
-                .zip(icons)
-                .enumerate()
-                .map(|(index, (item, icon))| {
-                    let on_click = cx.listener(move |this, event: &ClickEvent, window, cx| {
-                        this.on_item_click(index, event, window, cx);
-                    });
-                    let on_middle =
-                        cx.listener(move |this, _event: &MouseDownEvent, _window, cx| {
-                            this.controller.update(cx, |controller, _| {
-                                controller.launch_second_instance(index);
-                            });
-                        });
-                    render_app_item(item, icon, &self.theme, self.icon_size, on_click, on_middle)
+        let items_elements = self.items.iter().enumerate().map(|(index, item)| {
+            let icon = self.icons.get(&item.key).and_then(Clone::clone);
+            let on_click = cx.listener(move |this, event: &ClickEvent, window, cx| {
+                this.on_item_click(index, event, window, cx);
+            });
+            let on_middle = cx.listener(move |this, _event: &MouseDownEvent, _window, cx| {
+                this.controller.update(cx, |controller, _| {
+                    controller.launch_second_instance(index);
                 });
+            });
+            render_app_item(item, icon, &self.theme, self.icon_size, on_click, on_middle)
+        });
 
         let apps = div()
             .id("dock-apps")

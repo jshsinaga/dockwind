@@ -1,6 +1,5 @@
-use std::collections::HashMap;
 use std::ffi::c_void;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use gpui::RenderImage;
@@ -24,29 +23,15 @@ use windows::{
     core::{HSTRING, PCWSTR},
 };
 
-#[derive(Default)]
-pub struct IconCache {
-    cache: HashMap<PathBuf, Option<Arc<RenderImage>>>,
-}
-
-impl IconCache {
-    pub fn get(&mut self, path: &Path, hwnd: Option<isize>) -> Option<Arc<RenderImage>> {
-        if let Some(cached) = self.cache.get(path) {
-            return cached.clone();
-        }
-
-        let icon = hwnd
-            .and_then(|hwnd| icon_from_window(HWND(hwnd as *mut c_void)))
-            .or_else(|| icon_from_path(path));
-        self.cache.insert(path.to_path_buf(), icon.clone());
-        icon
-    }
+pub fn load_icon(path: &Path, hwnd: Option<isize>) -> Option<Arc<RenderImage>> {
+    hwnd.and_then(|hwnd| icon_from_window(HWND(hwnd as *mut c_void)))
+        .or_else(|| icon_from_path(path))
 }
 
 fn icon_from_window(hwnd: HWND) -> Option<Arc<RenderImage>> {
     let mut result = 0usize;
     // SAFETY: `result` receives an HICON-sized value; the message is sent with a
-    // timeout so a hung target cannot block the dock. Zero means timeout or refusal,
+    // timeout to bound the wait on a hung target. Zero means timeout or refusal,
     // in which case the documented fallback chain continues.
     let sent = unsafe {
         SendMessageTimeoutW(
@@ -79,6 +64,7 @@ fn icon_from_window(hwnd: HWND) -> Option<Arc<RenderImage>> {
 }
 
 pub fn icon_from_path(path: &Path) -> Option<Arc<RenderImage>> {
+    let _com = super::dialogs::ComApartmentGuard::new();
     let resolved_target;
     let target_path = if path
         .extension()
