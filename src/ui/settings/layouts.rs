@@ -91,6 +91,7 @@ impl SettingsView {
     fn load_pinned_layout(&mut self, name: &str) {
         if let Some(apps) = self.draft.pinned_layouts.get(name) {
             self.draft.pinned.clone_from(apps);
+            self.scroll_handle.set_offset(gpui::Point::default());
             self.selected_pinned_index = None;
             self.delete_confirm_index = None;
             self.status_message = None;
@@ -222,7 +223,10 @@ mod tests {
         view.save_layout_name();
         assert_eq!(view.draft.pinned_layouts.len(), 1);
 
+        view.scroll_handle
+            .set_offset(gpui::point(px(0.0), px(-100.0)));
         view.load_pinned_layout("Work");
+        assert_eq!(view.scroll_handle.offset(), gpui::Point::default());
         assert_eq!(view.draft.pinned, original);
         assert!(view.saved.pinned.is_empty());
     }

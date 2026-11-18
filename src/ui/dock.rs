@@ -281,6 +281,9 @@ impl DockView {
             self.apply_geometry(&config);
             self.sync_appbar(&config);
         }
+        if config.pinned != self.applied_config.pinned {
+            self.app_scroll.set_offset(Point::default());
+        }
         self.applied_config = config;
 
         if blur_changed && self.progress > 0.001 {

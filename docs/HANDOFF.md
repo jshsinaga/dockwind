@@ -221,6 +221,8 @@ reopen Settings to confirm the pin order and saved layout remain available.
 Rename it, then load it and confirm the saved app order and arguments.
 Switch layouts from the dock menu and verify the checked layout, then try
 saving an older Settings draft and confirm it detects the disk change.
+While scrolled to the end of an overflowing dock, switch layouts and confirm
+the new list starts at its first app.
 With edits pending, check Close and the title-bar close button. Exercise
 Keep editing, Discard, and Save & Close, including an external config conflict.
 With the app picker, taskbar confirmation, and pinned-app delete confirmation
