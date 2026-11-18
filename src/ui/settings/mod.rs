@@ -94,6 +94,7 @@ pub struct SettingsView {
     pub(super) active_input: Option<ActiveInput>,
     pub(super) input_buffer: String,
     pub(super) layout_name: String,
+    renaming_layout: Option<String>,
     pub(super) focus_handle: Option<FocusHandle>,
     pub(super) font_dropdown_open: bool,
     pub(super) icon_cache: RefCell<HashMap<PathBuf, Option<Arc<RenderImage>>>>,
@@ -125,6 +126,7 @@ impl SettingsView {
             active_input: None,
             input_buffer: String::new(),
             layout_name: String::new(),
+            renaming_layout: None,
             focus_handle: None,
             font_dropdown_open: false,
             icon_cache: RefCell::new(HashMap::new()),
@@ -220,8 +222,15 @@ impl SettingsView {
         };
         if key == "escape" || key == "enter" {
             self.live_update_input(field);
-            if key == "enter" && field == ActiveInput::LayoutName {
-                self.capture_pinned_layout();
+            if field == ActiveInput::LayoutName {
+                if key == "enter" {
+                    self.save_layout_name();
+                    cx.notify();
+                    return;
+                }
+                if self.renaming_layout.is_some() {
+                    self.clear_layout_name();
+                }
             }
             self.active_input = None;
             cx.notify();

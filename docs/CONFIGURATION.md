@@ -251,7 +251,8 @@ name as the display name and writes an empty argument list.
 
 In Settings, open Pinned Apps to save the current draft app list as a named
 layout. Load copies that layout into the draft. Update replaces a saved layout
-with the current draft app list. Apply & Save commits both the layouts and the
+with the current draft app list. Rename changes its name and keeps its saved
+apps. Apply & Save commits both the layouts and the
 current pinned apps and updates the running dock. Right-click the dock and
 choose a saved layout under Pinned app layouts to switch immediately. The menu
 marks layouts whose pins match the current list.
