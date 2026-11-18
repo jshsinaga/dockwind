@@ -206,10 +206,12 @@ impl SettingsView {
             }
         }
 
+        if self.showing_taskbar_confirm || self.delete_confirm_index.is_some() {
+            return;
+        }
+
         if modifiers.control && !modifiers.alt && key == "s" && !event.is_held {
-            if !self.showing_taskbar_confirm
-                && !self.showing_app_picker
-                && self.delete_confirm_index.is_none()
+            if !self.showing_app_picker
                 && (self.has_unsaved_changes() || self.active_input.is_some())
             {
                 self.apply_and_save(false, cx);

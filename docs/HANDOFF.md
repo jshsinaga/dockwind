@@ -220,6 +220,8 @@ Switch layouts from the dock menu and verify the checked layout, then try
 saving an older Settings draft and confirm it detects the disk change.
 With edits pending, check Close and the title-bar close button. Exercise
 Keep editing, Discard, and Save & Close, including an external config conflict.
+With the app picker, taskbar confirmation, and pinned-app delete confirmation
+open, verify that clicks and scrolling do not reach Settings behind them.
 
 ### Historical evidence, baseline `482bd7a`
 
