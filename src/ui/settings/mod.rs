@@ -257,12 +257,25 @@ impl SettingsView {
             field,
             ActiveInput::BackgroundHex | ActiveInput::BorderColorHex | ActiveInput::ClockFontColor
         );
-        if modifiers.control && !modifiers.alt && key == "a" {
+        let editing_shortcut = modifiers.control && !modifiers.alt;
+        if editing_shortcut && key == "a" {
             self.input_selected = !self.input_buffer.is_empty();
             cx.notify();
             return;
         }
-        if modifiers.control && !modifiers.alt && key == "v" {
+        if editing_shortcut && matches!(key.as_str(), "c" | "x") {
+            if self.input_selected {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(self.input_buffer.clone()));
+                if key == "x" {
+                    self.input_buffer.clear();
+                    self.input_selected = false;
+                    self.live_update_input(field);
+                    cx.notify();
+                }
+            }
+            return;
+        }
+        if editing_shortcut && key == "v" {
             let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
                 return;
             };
