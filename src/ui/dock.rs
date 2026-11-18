@@ -65,6 +65,7 @@ pub struct DockView {
     geometry: DockGeometry,
     auto_hide: AutoHide,
     auto_hide_settings: AutoHideSettings,
+    animations_enabled: bool,
     appbar: Option<AppBarHandle>,
     menu_open: bool,
     progress: f32,
@@ -94,6 +95,10 @@ impl DockView {
         let auto_hide = AutoHide::new(config.behavior.auto_hide);
         let progress = auto_hide.progress();
         let start_time = Instant::now();
+        let animations_enabled = win::motion::animations_enabled().unwrap_or_else(|error| {
+            warn!(%error, "using configured dock animation");
+            true
+        });
         let mut this = Self {
             controller,
             applied_config: config.clone(),
@@ -106,7 +111,8 @@ impl DockView {
             icon_size: px(config.appearance.icon_size as f32),
             geometry,
             auto_hide,
-            auto_hide_settings: auto_hide_settings(&config),
+            auto_hide_settings: auto_hide_settings(&config, animations_enabled),
+            animations_enabled,
             appbar: None,
             menu_open: false,
             progress,
@@ -273,7 +279,7 @@ impl DockView {
         self.icon_size = px(config.appearance.icon_size as f32);
         self.clock
             .update(cx, |clock, cx| clock.set_config(&config.clock, cx));
-        self.auto_hide_settings = auto_hide_settings(&config);
+        self.auto_hide_settings = auto_hide_settings(&config, self.animations_enabled);
         if !config.behavior.auto_hide && self.applied_config.behavior.auto_hide {
             self.auto_hide = AutoHide::new(false);
         }
@@ -409,6 +415,15 @@ impl DockView {
     fn tick(&mut self, now: Duration, cx: &mut Context<Self>) {
         if self.last_monitor_check.elapsed() >= Duration::from_secs(1) {
             self.last_monitor_check = Instant::now();
+            match win::motion::animations_enabled() {
+                Ok(enabled) if enabled != self.animations_enabled => {
+                    self.animations_enabled = enabled;
+                    self.auto_hide_settings = auto_hide_settings(&self.applied_config, enabled);
+                    cx.notify();
+                }
+                Ok(_) => {}
+                Err(error) => debug!(%error, "could not refresh Windows animation preference"),
+            }
             match MonitorInfo::primary() {
                 Ok(monitor)
                     if monitor.bounds != self.geometry.monitor.bounds
@@ -884,17 +899,32 @@ fn contains(bounds: Bounds<Pixels>, point: Point<Pixels>) -> bool {
         && point.y <= bounds.origin.y + bounds.size.height
 }
 
-fn auto_hide_settings(config: &Config) -> AutoHideSettings {
+fn auto_hide_settings(config: &Config, animations_enabled: bool) -> AutoHideSettings {
     AutoHideSettings {
         show_delay: Duration::from_millis(config.behavior.show_delay_ms),
         hide_delay: Duration::from_millis(config.behavior.hide_delay_ms),
-        animation: Duration::from_millis(config.behavior.animation_ms),
+        animation: if animations_enabled {
+            Duration::from_millis(config.behavior.animation_ms)
+        } else {
+            Duration::ZERO
+        },
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reduced_motion_keeps_delays_and_disables_the_slide() {
+        let config = Config::default();
+        let standard = auto_hide_settings(&config, true);
+        let reduced = auto_hide_settings(&config, false);
+        assert!(standard.animation > Duration::ZERO);
+        assert_eq!(reduced.animation, Duration::ZERO);
+        assert_eq!(reduced.show_delay, standard.show_delay);
+        assert_eq!(reduced.hide_delay, standard.hide_delay);
+    }
 
     #[test]
     fn a_failed_icon_lookup_can_retry_for_a_new_window() {

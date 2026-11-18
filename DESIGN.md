@@ -125,7 +125,8 @@ color. The dock has one surface and one hierarchy.
 
 - The trigger is a 2 px strip at the bottom of the monitor work area.
 - Default show delay is 80 ms. Default hide delay is 400 ms. Default animation is
-  180 ms.
+  180 ms. Turning off animation effects in Windows skips the dock transition
+  while retaining its show and hide delays.
 - Progress from 0 to 1 drives vertical offset and opacity.
 - At progress 0, the window is click-through.
 - An open context menu pins the dock visible.
