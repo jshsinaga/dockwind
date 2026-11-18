@@ -19,7 +19,7 @@ use gpui::{
 };
 use tracing::error;
 
-use crate::config::Config;
+use crate::config::{Config, ConfigError};
 use crate::win;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +72,8 @@ pub struct SettingsView {
     pub(super) config_path: PathBuf,
     pub(super) draft: Config,
     pub(super) saved: Config,
+    saved_source: String,
+    overwrite_pending: bool,
     pub(super) autostart_draft: bool,
     pub(super) autostart_saved: bool,
     pub(super) active_tab: SettingsTab,
@@ -94,11 +96,13 @@ pub struct SettingsView {
 }
 
 impl SettingsView {
-    pub fn new(config_path: PathBuf, config: Config, autostart: bool) -> Self {
+    fn new(config_path: PathBuf, config: Config, saved_source: String, autostart: bool) -> Self {
         Self {
             config_path,
             draft: config.clone(),
             saved: config,
+            saved_source,
+            overwrite_pending: false,
             autostart_draft: autostart,
             autostart_saved: autostart,
             active_tab: SettingsTab::Appearance,
@@ -290,9 +294,18 @@ impl SettingsView {
         }
     }
 
-    fn apply_and_save(&mut self, cx: &mut Context<Self>) {
-        match self.draft.save_atomic_preserving(&self.config_path) {
-            Ok(loaded) => {
+    fn apply_and_save(&mut self, overwrite: bool, cx: &mut Context<Self>) {
+        if let Some(field) = self.active_input.take() {
+            self.commit_input(field);
+        }
+        let expected = (!overwrite).then_some(self.saved_source.as_str());
+        self.overwrite_pending = false;
+        match self
+            .draft
+            .save_atomic_preserving(&self.config_path, expected)
+        {
+            Ok((loaded, saved_source)) => {
+                self.saved_source = saved_source;
                 self.saved = loaded.config;
                 self.draft = self.saved.clone();
 
@@ -319,10 +332,11 @@ impl SettingsView {
                     }
                 }
 
-                self.status_message = Some((
-                    SharedString::from("Settings saved and applied successfully!"),
-                    false,
-                ));
+                self.status_message = Some((SharedString::from("Settings saved"), false));
+            }
+            Err(ConfigError::ChangedOnDisk { .. }) => {
+                self.overwrite_pending = true;
+                self.status_message = None;
             }
             Err(error) => {
                 self.status_message = Some((
@@ -417,7 +431,14 @@ impl SettingsView {
     }
 
     fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let (status_text, status_color) = if let Some((msg, is_error)) = &self.status_message {
+        let (status_text, status_color) = if self.overwrite_pending {
+            (
+                SharedString::from(
+                    "Config changed on disk. Reopen Settings to load it, or overwrite with this draft.",
+                ),
+                rgba(0xF9E2AFFF),
+            )
+        } else if let Some((msg, is_error)) = &self.status_message {
             (
                 msg.clone(),
                 if *is_error {
@@ -441,8 +462,11 @@ impl SettingsView {
             .flex()
             .items_center()
             .justify_between()
+            .gap_4()
             .child(
                 div()
+                    .flex_1()
+                    .min_w(px(0.0))
                     .text_xs()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(status_color)
@@ -452,6 +476,7 @@ impl SettingsView {
                 div()
                     .flex()
                     .items_center()
+                    .flex_shrink_0()
                     .gap_3()
                     .child(
                         div()
@@ -483,9 +508,13 @@ impl SettingsView {
                             .text_color(rgba(0x11111BFF))
                             .cursor_pointer()
                             .on_click(cx.listener(|this: &mut Self, _, _, cx| {
-                                this.apply_and_save(cx);
+                                this.apply_and_save(this.overwrite_pending, cx);
                             }))
-                            .child("Apply & Save"),
+                            .child(if self.overwrite_pending {
+                                "Overwrite config"
+                            } else {
+                                "Apply & Save"
+                            }),
                     ),
             )
     }
@@ -544,7 +573,7 @@ pub fn open_settings_window(cx: &mut App, config_path: PathBuf) -> Result<()> {
         return Ok(());
     }
 
-    let loaded = Config::load_or_create(&config_path)
+    let (loaded, saved_source) = Config::load_or_create_with_source(&config_path)
         .context("failed to load configuration for settings window")?;
 
     let monitor = win::monitors::MonitorInfo::primary()
@@ -578,7 +607,8 @@ pub fn open_settings_window(cx: &mut App, config_path: PathBuf) -> Result<()> {
 
     cx.open_window(options, |window, cx| {
         cx.new(|cx| {
-            let mut view = SettingsView::new(config_path, loaded.config, autostart_enabled);
+            let mut view =
+                SettingsView::new(config_path, loaded.config, saved_source, autostart_enabled);
             let focus = cx.focus_handle();
             window.focus(&focus);
             view.focus_handle = Some(focus);
@@ -631,7 +661,7 @@ mod tests {
     fn settings_view_detects_changes() {
         let path = PathBuf::from("config.toml");
         let config = Config::default();
-        let mut view = SettingsView::new(path, config, false);
+        let mut view = SettingsView::new(path, config, String::new(), false);
         assert!(!view.has_unsaved_changes());
 
         view.draft.appearance.width += 20;
@@ -648,7 +678,7 @@ mod tests {
     fn settings_view_tab_switching() {
         let path = PathBuf::from("config.toml");
         let config = Config::default();
-        let mut view = SettingsView::new(path, config, false);
+        let mut view = SettingsView::new(path, config, String::new(), false);
         assert_eq!(view.active_tab, SettingsTab::Appearance);
 
         view.active_tab = SettingsTab::Clock;
@@ -659,7 +689,7 @@ mod tests {
     fn settings_view_delete_confirm_state() {
         let path = PathBuf::from("config.toml");
         let config = Config::default();
-        let mut view = SettingsView::new(path, config, false);
+        let mut view = SettingsView::new(path, config, String::new(), false);
         assert!(view.delete_confirm_index.is_none());
 
         view.delete_confirm_index = Some(2);
@@ -687,7 +717,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        let mut view = SettingsView::new(path, config, false);
+        let mut view = SettingsView::new(path, config, String::new(), false);
         assert_eq!(view.draft.pinned.len(), 2);
 
         view.draft.pinned.swap(0, 1);
@@ -703,7 +733,7 @@ mod tests {
     fn settings_view_taskbar_confirm_state() {
         let path = PathBuf::from("config.toml");
         let config = Config::default();
-        let mut view = SettingsView::new(path, config, false);
+        let mut view = SettingsView::new(path, config, String::new(), false);
         assert!(!view.showing_taskbar_confirm);
         assert!(!view.draft.behavior.hide_native_taskbar);
 
@@ -720,7 +750,7 @@ mod tests {
     fn settings_view_active_input_state() {
         let path = PathBuf::from("config.toml");
         let config = Config::default();
-        let mut view = SettingsView::new(path, config, false);
+        let mut view = SettingsView::new(path, config, String::new(), false);
         assert!(view.active_input.is_none());
         assert!(view.input_buffer.is_empty());
 
@@ -734,7 +764,7 @@ mod tests {
     fn settings_view_app_picker_state() {
         let path = PathBuf::from("config.toml");
         let config = Config::default();
-        let mut view = SettingsView::new(path, config, false);
+        let mut view = SettingsView::new(path, config, String::new(), false);
         assert!(!view.showing_app_picker);
         assert!(view.app_picker_search.is_empty());
         assert_eq!(view.app_picker_filter, None);

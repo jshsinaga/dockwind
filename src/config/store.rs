@@ -33,6 +33,8 @@ pub enum ConfigError {
     Serialize(#[from] toml::ser::Error),
     #[error("failed to parse config {path}: {message}")]
     Parse { path: PathBuf, message: String },
+    #[error("config changed on disk: {path}")]
+    ChangedOnDisk { path: PathBuf },
     #[error("failed to watch config: {0}")]
     Watch(#[from] notify::Error),
     #[error("failed to start config watcher thread: {0}")]
@@ -54,33 +56,34 @@ pub fn default_path() -> Result<PathBuf, ConfigError> {
 
 impl Config {
     pub fn load_or_create(path: &Path) -> Result<LoadedConfig, ConfigError> {
+        Self::load_or_create_with_source(path).map(|(loaded, _)| loaded)
+    }
+
+    pub fn load_or_create_with_source(path: &Path) -> Result<(LoadedConfig, String), ConfigError> {
         if !path.exists() {
-            let config = Config::default();
-            write_default(path, &config)?;
-            return Ok(LoadedConfig {
-                config,
-                warnings: Vec::new(),
-            });
+            write_default(path, &Config::default())?;
         }
 
-        match Self::load_existing(path) {
-            Ok(loaded) => Ok(loaded),
-            Err(ConfigError::Parse { message, .. }) => Ok(LoadedConfig {
+        let source = read_config(path)?;
+        let loaded = match Self::parse_config(path, &source) {
+            Ok(loaded) => loaded,
+            Err(ConfigError::Parse { message, .. }) => LoadedConfig {
                 config: Config::default(),
                 warnings: vec![format!(
                     "config parse failed; using defaults until the file is fixed: {message}"
                 )],
-            }),
-            Err(other) => Err(other),
-        }
+            },
+            Err(other) => return Err(other),
+        };
+        Ok((loaded, source))
     }
 
     pub fn load_existing(path: &Path) -> Result<LoadedConfig, ConfigError> {
-        let contents = fs::read_to_string(path).map_err(|source| ConfigError::Read {
-            path: path.to_path_buf(),
-            source,
-        })?;
-        let config: Config = toml::from_str(&contents).map_err(|error| ConfigError::Parse {
+        Self::parse_config(path, &read_config(path)?)
+    }
+
+    fn parse_config(path: &Path, contents: &str) -> Result<LoadedConfig, ConfigError> {
+        let config: Config = toml::from_str(contents).map_err(|error| ConfigError::Parse {
             path: path.to_path_buf(),
             message: error.to_string(),
         })?;
@@ -90,13 +93,31 @@ impl Config {
     /// Writes a validated config while preserving comments, key ordering, and
     /// unknown keys in an existing valid TOML document. An invalid existing file
     /// is not overwritten.
-    pub fn save_atomic_preserving(&self, path: &Path) -> Result<LoadedConfig, ConfigError> {
-        let loaded = self.clone().sanitize();
-        let contents = if path.exists() {
-            let existing = fs::read_to_string(path).map_err(|source| ConfigError::Read {
+    /// Compares the current file with the settings snapshot when supplied.
+    pub fn save_atomic_preserving(
+        &self,
+        path: &Path,
+        expected_source: Option<&str>,
+    ) -> Result<(LoadedConfig, String), ConfigError> {
+        let existing = match read_config(path) {
+            Ok(source) => Some(source),
+            Err(ConfigError::Read { source, .. })
+                if source.kind() == std::io::ErrorKind::NotFound =>
+            {
+                None
+            }
+            Err(error) => return Err(error),
+        };
+        if let Some(expected_source) = expected_source
+            && existing.as_deref() != Some(expected_source)
+        {
+            return Err(ConfigError::ChangedOnDisk {
                 path: path.to_path_buf(),
-                source,
-            })?;
+            });
+        }
+
+        let loaded = self.clone().sanitize();
+        let contents = if let Some(existing) = existing {
             let mut document: DocumentMut =
                 existing
                     .parse::<DocumentMut>()
@@ -114,8 +135,15 @@ impl Config {
             )
         };
         write_atomic(path, &contents)?;
-        Ok(loaded)
+        Ok((loaded, contents))
     }
+}
+
+fn read_config(path: &Path) -> Result<String, ConfigError> {
+    fs::read_to_string(path).map_err(|source| ConfigError::Read {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 fn write_atomic(path: &Path, contents: &str) -> Result<(), ConfigError> {
@@ -359,7 +387,9 @@ mod tests {
         config.appearance.width = 720;
         config.appearance.orientation = crate::config::DockEdge::Top;
 
-        let saved = config.save_atomic_preserving(&path).expect("save config");
+        let (saved, _) = config
+            .save_atomic_preserving(&path, None)
+            .expect("save config");
         assert_eq!(saved.config, config);
         assert!(!directory.path().join("config.toml.tmp").exists());
 
@@ -389,7 +419,7 @@ value = 7
         let mut config = Config::default();
         config.appearance.width = 700;
         config
-            .save_atomic_preserving(&path)
+            .save_atomic_preserving(&path, None)
             .expect("save preserved");
 
         let text = fs::read_to_string(&path).expect("read saved");
@@ -418,7 +448,7 @@ value = 7
             args: Vec::new(),
         });
         config
-            .save_atomic_preserving(&path)
+            .save_atomic_preserving(&path, None)
             .expect("save preserved");
 
         let text = fs::read_to_string(&path).expect("read saved");
@@ -436,13 +466,53 @@ value = 7
         fs::write(&path, "not valid = [").expect("write invalid");
 
         assert!(matches!(
-            Config::default().save_atomic_preserving(&path),
+            Config::default().save_atomic_preserving(&path, None),
             Err(ConfigError::Parse { .. })
         ));
         assert_eq!(
             fs::read_to_string(&path).expect("read unchanged"),
             "not valid = ["
         );
+    }
+
+    #[test]
+    fn stale_settings_snapshot_protects_external_edits_until_overwrite() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("config.toml");
+        let (loaded, snapshot) = Config::load_or_create_with_source(&path).expect("open settings");
+        let external = "# external edit\n[appearance]\nwidth = 720\n";
+        fs::write(&path, external).expect("edit externally");
+
+        assert!(matches!(
+            loaded.config.save_atomic_preserving(&path, Some(&snapshot)),
+            Err(ConfigError::ChangedOnDisk { .. })
+        ));
+        assert_eq!(fs::read_to_string(&path).expect("read config"), external);
+
+        let (_, saved_source) = loaded
+            .config
+            .save_atomic_preserving(&path, None)
+            .expect("confirm overwrite");
+        assert!(saved_source.contains("# external edit"));
+        assert!(saved_source.contains("width = 560"));
+        assert_eq!(
+            fs::read_to_string(&path).expect("read config"),
+            saved_source
+        );
+    }
+
+    #[test]
+    fn stale_settings_snapshot_protects_external_deletion() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("config.toml");
+        let (loaded, snapshot) = Config::load_or_create_with_source(&path).expect("open settings");
+        fs::remove_file(&path).expect("delete externally");
+
+        assert!(matches!(
+            loaded.config.save_atomic_preserving(&path, Some(&snapshot)),
+            Err(ConfigError::ChangedOnDisk { .. })
+        ));
+        assert!(!path.exists());
     }
 
     #[test]
@@ -453,7 +523,9 @@ value = 7
         config.appearance.width = 10;
         config.appearance.opacity = 5;
 
-        let saved = config.save_atomic_preserving(&path).expect("save config");
+        let (saved, _) = config
+            .save_atomic_preserving(&path, None)
+            .expect("save config");
         assert_eq!(saved.config.appearance.width, 560);
         assert_eq!(saved.config.appearance.opacity, 100);
         assert_eq!(saved.warnings.len(), 2);
@@ -498,7 +570,7 @@ value = 7
         config.clock.vertical_align = VerticalAlign::Bottom;
 
         config
-            .save_atomic_preserving(&path)
+            .save_atomic_preserving(&path, None)
             .expect("save preserved");
 
         let loaded = Config::load_existing(&path).expect("reload saved");
