@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use chrono::format::{Fixed, Item, Numeric, StrftimeItems};
 use chrono::{Local, Timelike};
 use gpui::{
     Context, FontWeight, Render, SharedString, Task, Timer, Window, div, prelude::*, px, rgba,
@@ -29,7 +30,7 @@ impl ClockView {
     }
 
     pub fn set_config(&mut self, config: &Clock, cx: &mut Context<Self>) {
-        let restart = needs_seconds(&self.config.time_format) != needs_seconds(&config.time_format);
+        let restart = needs_seconds(&self.config) != needs_seconds(config);
         self.config = config.clone();
         self.refresh(Local::now());
         if restart {
@@ -67,7 +68,7 @@ impl ClockView {
 
     fn next_delay(&self) -> Duration {
         let now = Local::now();
-        if needs_seconds(&self.config.time_format) {
+        if needs_seconds(&self.config) {
             let elapsed_ms = now.timestamp_subsec_millis() as u64;
             Duration::from_millis((1000 - elapsed_ms).max(1))
         } else {
@@ -77,10 +78,17 @@ impl ClockView {
     }
 }
 
-fn needs_seconds(format: &str) -> bool {
-    ["%S", "%T", "%r"]
-        .iter()
-        .any(|token| format.contains(token))
+fn needs_seconds(clock: &Clock) -> bool {
+    [clock.time_format.as_str(), clock.date_format.as_str()]
+        .into_iter()
+        .flat_map(StrftimeItems::new)
+        .any(|item| {
+            matches!(
+                item,
+                Item::Numeric(Numeric::Second | Numeric::Timestamp, _)
+                    | Item::Fixed(Fixed::RFC2822 | Fixed::RFC3339)
+            )
+        })
 }
 
 impl Render for ClockView {
@@ -161,9 +169,20 @@ mod tests {
 
     #[test]
     fn detects_second_precision_formats() {
-        assert!(!needs_seconds("%H:%M"));
-        assert!(needs_seconds("%H:%M:%S"));
-        assert!(needs_seconds("%T"));
-        assert!(needs_seconds("%r"));
+        let mut config = Clock::default();
+        for format in ["%H:%M", "%%S"] {
+            config.time_format = format.into();
+            assert!(!needs_seconds(&config));
+        }
+        for format in ["%H:%M:%S", "%T", "%r", "%c", "%s", "%+"] {
+            config.time_format = format.into();
+            assert!(
+                needs_seconds(&config),
+                "{format} requires per-second updates"
+            );
+        }
+        config.time_format = "%H:%M".into();
+        config.date_format = "%Y-%m-%d %S".into();
+        assert!(needs_seconds(&config));
     }
 }

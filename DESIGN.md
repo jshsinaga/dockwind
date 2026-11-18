@@ -117,8 +117,8 @@ color. The dock has one surface and one hierarchy.
 - Two right-aligned lines.
 - `clock.time_format` controls the time. The default is `%H:%M`.
 - `clock.date_format` controls the date. The default is `%a, %d %b %Y`.
-- The timer aligns to the next minute, or the next second when the time format
-  contains `%S`, `%T`, or `%r`.
+- The timer aligns to the next minute, or the next second when either line
+  displays seconds.
 - `clock.locale` is accepted but unused. The clock uses the process locale.
 
 ## Auto-Hide
