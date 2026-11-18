@@ -215,6 +215,8 @@ and verify wheel input still scrolls the strip.
 Named pinned app layouts need a Windows Settings smoke check. Create a Work
 layout, change the pinned draft, and load Work. Apply, restart Dockwind, and
 reopen Settings to confirm the pin order and saved layout remain available.
+Switch layouts from the dock menu and verify the checked layout, then try
+saving an older Settings draft and confirm it detects the disk change.
 
 ### Historical evidence, baseline `482bd7a`
 

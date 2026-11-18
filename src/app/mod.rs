@@ -184,6 +184,13 @@ impl AppController {
         }
     }
 
+    pub fn use_pinned_layout(&mut self, name: &str, cx: &mut Context<Self>) {
+        match Config::use_pinned_layout(&self.config_path, name) {
+            Ok(loaded) => self.apply_config(loaded.config, cx),
+            Err(error) => warn!(%error, layout = name, "failed to switch pinned app layout"),
+        }
+    }
+
     fn apply_config(&mut self, config: Config, cx: &mut Context<Self>) {
         if self.config == config {
             return;

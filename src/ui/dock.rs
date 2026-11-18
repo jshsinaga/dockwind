@@ -471,6 +471,12 @@ impl DockView {
 
     fn on_context_menu(&mut self, cx: &mut Context<Self>) {
         let hwnd = self.geometry.hwnd;
+        let layouts = self
+            .applied_config
+            .pinned_layouts
+            .iter()
+            .map(|(name, apps)| (name.clone(), *apps == self.applied_config.pinned))
+            .collect::<Vec<_>>();
         cx.spawn(async move |this, cx| {
             Timer::after(Duration::from_millis(0)).await;
             if this
@@ -483,7 +489,7 @@ impl DockView {
                 return;
             }
 
-            let result = win::menu::show(hwnd);
+            let result = win::menu::show(hwnd, &layouts);
             let _ = this.update(cx, |this, cx| {
                 this.menu_open = false;
                 this.handle_menu_result(result, cx);
@@ -507,6 +513,10 @@ impl DockView {
         };
 
         match action {
+            MenuAction::UsePinnedLayout(name) => {
+                self.controller
+                    .update(cx, |controller, cx| controller.use_pinned_layout(&name, cx));
+            }
             MenuAction::OpenSettings => {
                 let path = self.controller.read(cx).config_path().to_path_buf();
                 if let Err(error) = super::open_settings_window(cx, path) {

@@ -252,7 +252,9 @@ name as the display name and writes an empty argument list.
 In Settings, open Pinned Apps to save the current draft app list as a named
 layout. Load copies that layout into the draft. Update replaces a saved layout
 with the current draft app list. Apply & Save commits both the layouts and the
-current pinned apps and updates the running dock.
+current pinned apps and updates the running dock. Right-click the dock and
+choose a saved layout under Pinned app layouts to switch immediately. The menu
+marks layouts whose pins match the current list.
 
 Each named layout has the same entries and order as `[[pinned]]`. Layouts can
 be empty. They are stored in `pinned_layouts`, for example
@@ -348,7 +350,8 @@ GPUI dock window. The reason is recorded in `docs/decisions.md`.
 ### 6.1 One Writer
 
 - The settings window is single-instance within a process.
-- The dock does not write the config file.
+- Switching layouts from the dock menu atomically updates the pinned list in
+  the latest config file. Settings detects this as an external change.
 - The watcher reads a settings save like any other external edit.
 - `dockwind --settings` opens a separate process when the dock is running. The
   running dock reloads the file through the watcher.

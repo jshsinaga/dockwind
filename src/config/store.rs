@@ -33,6 +33,8 @@ pub enum ConfigError {
     Serialize(#[from] toml::ser::Error),
     #[error("failed to parse config {path}: {message}")]
     Parse { path: PathBuf, message: String },
+    #[error("pinned layout {name:?} is no longer available")]
+    UnknownPinnedLayout { name: String },
     #[error("config changed on disk: {path}")]
     ChangedOnDisk { path: PathBuf },
     #[error("failed to watch config: {0}")]
@@ -128,17 +130,59 @@ impl Config {
                  # Written by the Dockwind settings window. Edit and save to reload.\n\n{body}"
             )
         };
-        let temporary = stage_config(path, &contents)?;
-        if read_config_if_present(path)? != existing {
-            return Err(ConfigError::ChangedOnDisk {
-                path: path.to_path_buf(),
-            });
-        }
-        temporary
-            .persist(path)
-            .map_err(|error| config_write_error(path, error.error))?;
+        replace_config(path, &contents, existing.as_deref())?;
         Ok((loaded, contents))
     }
+
+    /// Switches only the pinned list, using the layout in the latest on-disk config.
+    pub fn use_pinned_layout(path: &Path, name: &str) -> Result<LoadedConfig, ConfigError> {
+        let source = read_config(path)?;
+        let mut loaded = Self::parse_config(path, &source)?;
+        let apps = loaded.config.pinned_layouts.get(name).ok_or_else(|| {
+            ConfigError::UnknownPinnedLayout {
+                name: name.to_owned(),
+            }
+        })?;
+        if loaded.config.pinned == *apps {
+            return Ok(loaded);
+        }
+
+        let mut document: DocumentMut =
+            source
+                .parse::<DocumentMut>()
+                .map_err(|error| ConfigError::Parse {
+                    path: path.to_path_buf(),
+                    message: error.to_string(),
+                })?;
+        document["pinned"] = pinned_item(apps);
+        replace_config(path, &document.to_string(), Some(&source))?;
+        loaded.config.pinned.clone_from(apps);
+        Ok(loaded)
+    }
+}
+
+fn replace_config(path: &Path, contents: &str, expected: Option<&str>) -> Result<(), ConfigError> {
+    let temporary = stage_config(path, contents)?;
+    if read_config_if_present(path)?.as_deref() != expected {
+        return Err(ConfigError::ChangedOnDisk {
+            path: path.to_path_buf(),
+        });
+    }
+    let result = if expected.is_some() {
+        temporary.persist(path)
+    } else {
+        temporary.persist_noclobber(path)
+    };
+    result.map_err(|error| {
+        if error.error.kind() == std::io::ErrorKind::AlreadyExists {
+            ConfigError::ChangedOnDisk {
+                path: path.to_path_buf(),
+            }
+        } else {
+            config_write_error(path, error.error)
+        }
+    })?;
+    Ok(())
 }
 
 fn read_config(path: &Path) -> Result<String, ConfigError> {
@@ -308,7 +352,7 @@ fn update_document(document: &mut DocumentMut, config: &Config) {
         VerticalAlign::Bottom => "bottom",
     });
 
-    document["pinned"] = Item::ArrayOfTables(pinned_tables(&config.pinned));
+    document["pinned"] = pinned_item(&config.pinned);
 
     if config.pinned_layouts.is_empty() {
         document.remove("pinned_layouts");
@@ -316,16 +360,15 @@ fn update_document(document: &mut DocumentMut, config: &Config) {
         let layouts = table_mut(document, "pinned_layouts");
         layouts.retain(|name, _| config.pinned_layouts.contains_key(name));
         for (name, apps) in &config.pinned_layouts {
-            layouts[name] = if apps.is_empty() {
-                value(toml_edit::Array::new())
-            } else {
-                Item::ArrayOfTables(pinned_tables(apps))
-            };
+            layouts[name] = pinned_item(apps);
         }
     }
 }
 
-fn pinned_tables(apps: &[super::model::PinnedApp]) -> ArrayOfTables {
+fn pinned_item(apps: &[super::model::PinnedApp]) -> Item {
+    if apps.is_empty() {
+        return value(toml_edit::Array::new());
+    }
     let mut pinned = ArrayOfTables::new();
     for app in apps {
         let mut table = Table::new();
@@ -338,7 +381,7 @@ fn pinned_tables(apps: &[super::model::PinnedApp]) -> ArrayOfTables {
         table["args"] = value(args);
         pinned.push(table);
     }
-    pinned
+    Item::ArrayOfTables(pinned)
 }
 
 fn write_default(path: &Path, config: &Config) -> Result<(), ConfigError> {
@@ -554,6 +597,40 @@ value = 7
         assert_eq!(
             Config::load_existing(&path).expect("read layouts").config,
             config
+        );
+    }
+
+    #[test]
+    fn switching_layout_reads_latest_config_and_changes_only_pinned_apps() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("config.toml");
+        let source = r#"# Keep this specific spelling
+[appearance]
+width=640
+
+[[pinned_layouts.Work]]
+name="Editor"
+path="editor.exe"
+"#;
+        fs::write(&path, source).expect("write latest config");
+        let loaded = Config::use_pinned_layout(&path, "Work").expect("switch layout");
+        let switched = fs::read_to_string(&path).expect("read switched config");
+        assert!(switched.contains(source));
+        assert_eq!(loaded.config.pinned[0].name, "Editor");
+        assert_eq!(
+            Config::load_existing(&path)
+                .expect("read pinned apps")
+                .config,
+            loaded.config
+        );
+
+        assert!(matches!(
+            Config::use_pinned_layout(&path, "Removed"),
+            Err(ConfigError::UnknownPinnedLayout { .. })
+        ));
+        assert_eq!(
+            fs::read_to_string(&path).expect("read unchanged config"),
+            switched
         );
     }
 
