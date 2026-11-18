@@ -108,7 +108,7 @@ color. The dock has one surface and one hierarchy.
   space remains reserved when a pinned app is idle.
 - Left click activates or restores a running app, or minimizes it when it is
   already foreground. A pinned app that is not running is launched.
-- Middle-click opens a second instance of a pinned app.
+- Middle-click or Shift+click opens a second instance of a pinned app.
 - Apps are grouped by executable path. The group uses the most recent
   non-minimized window as its target.
 

@@ -267,7 +267,7 @@ impl AppController {
         let _ = self.refresh_window_list.try_send(());
     }
 
-    /// Middle-click launches a pinned app again instead of activating its window.
+    /// Launches another instance of a pinned app using its saved arguments.
     pub fn launch_second_instance(&mut self, rendered: &DockItem) {
         let Some(item) = self.current_item(rendered) else {
             return;

@@ -210,7 +210,8 @@ On Windows, run `scripts/check.ps1`, then verify these paths:
   edit its display name, reorder it, and verify the other pin and both argument
   lists remain intact. Add, edit, reorder, and remove launch arguments for one pin.
   Launch it with an argument containing spaces and check that the application
-  receives a single argument.
+  receives a single argument. Shift+click and middle-click a running pin to
+  check that they pass that pin's arguments when launching another instance.
 - Pin more apps than fit on a narrow work area. Scroll to both ends and check that
   the clock remains visible, including with a long custom date format.
 - Open Settings on a small display. Search and scroll the installed-app picker,

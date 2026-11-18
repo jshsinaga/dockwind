@@ -786,9 +786,13 @@ impl Render for DockView {
                 .and_then(|icon| icon.image.clone());
             let clicked = Arc::clone(item);
             let middle_clicked = Arc::clone(item);
-            let on_click = cx.listener(move |this, _: &ClickEvent, _, cx| {
+            let on_click = cx.listener(move |this, event: &ClickEvent, _, cx| {
                 this.controller.update(cx, |controller, _| {
-                    controller.activate_or_launch(&clicked);
+                    if clicked.is_pinned && event.modifiers().shift {
+                        controller.launch_second_instance(&clicked);
+                    } else {
+                        controller.activate_or_launch(&clicked);
+                    }
                 });
             });
             let on_middle = cx.listener(move |this, _: &MouseDownEvent, _, cx| {
