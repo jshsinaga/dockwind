@@ -207,6 +207,11 @@ On Windows, run `scripts/check.ps1`, then verify these paths:
   paste an RGBA background color, and save with Ctrl+S. Externally edit the
   TOML file while Settings has a draft and check the overwrite prompt.
 
+App overflow controls passed the Linux GPUI harness (73 tests) and Clippy.
+On Windows, narrow the dock with the clock enabled, click both chevrons to the
+ends, then widen it until the controls disappear. Repeat with the clock hidden
+and verify wheel input still scrolls the strip.
+
 ### Historical evidence, baseline `482bd7a`
 
 | Date | Area | Evidence |

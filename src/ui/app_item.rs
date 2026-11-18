@@ -47,7 +47,7 @@ pub fn render_app_item(
     let indicator_element = match theme.indicator_style {
         crate::config::IndicatorStyle::Line => div()
             .h(px(3.0))
-            .w(px(18.0))
+            .w(px(18.0).min(icon_size))
             .rounded_full()
             .bg(indicator.unwrap_or_else(|| rgba(0x00000000))),
         crate::config::IndicatorStyle::Dot => div()

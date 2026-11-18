@@ -70,7 +70,8 @@ reservation is not drawn; it only changes the work area.
 - The clock is right-aligned in two lines: time above, date below.
 - Content padding comes from `appearance.padding`, default 8.
 - The app list scrolls horizontally beside the clock. The dock fits within the
-  display work area in both fixed and automatic width modes.
+  display work area in both fixed and automatic width modes. Chevron buttons
+  page through an overflowing list when there is room for the controls.
 - A top-oriented dock mirrors the layout vertically: the hidden state slides up
   and the trigger sits on the top work-area edge.
 

@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     Bounds, ClickEvent, Context, Entity, MouseButton, MouseDownEvent, Pixels, Point, Render,
-    RenderImage, Size, Timer, Window, div, prelude::*, px, size,
+    RenderImage, Rgba, ScrollHandle, Size, Timer, Window, div, prelude::*, px, size,
 };
 use tracing::{debug, error, info, warn};
 use windows::Win32::Foundation::RECT;
@@ -39,6 +39,7 @@ pub struct DockView {
     items: Vec<Arc<DockItem>>,
     icons: HashMap<PathBuf, Option<Arc<RenderImage>>>,
     loading_icons: bool,
+    app_scroll: ScrollHandle,
     icon_size: Pixels,
     geometry: DockGeometry,
     auto_hide: AutoHide,
@@ -80,6 +81,7 @@ impl DockView {
             items,
             icons: HashMap::new(),
             loading_icons: false,
+            app_scroll: ScrollHandle::default(),
             icon_size: px(config.appearance.icon_size as f32),
             geometry,
             auto_hide,
@@ -527,6 +529,52 @@ impl DockView {
     }
 }
 
+impl DockView {
+    fn render_scroll_control(
+        &self,
+        forward: bool,
+        width: Pixels,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let text = self.theme.text;
+        div()
+            .id(if forward {
+                "dock-scroll-right"
+            } else {
+                "dock-scroll-left"
+            })
+            .w(width)
+            .h(px(32.0))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(6.0))
+            .text_color(Rgba { a: 0.75, ..text })
+            .cursor_pointer()
+            .hover(move |style| style.bg(Rgba { a: 0.13, ..text }).text_color(text))
+            .active(move |style| style.bg(Rgba { a: 0.20, ..text }))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let handle = &this.app_scroll;
+                let mut offset = handle.offset();
+                let width = handle.bounds().size.width;
+                let page = (width - this.icon_size - px(8.0)).max(width * 0.5);
+                let delta = if forward { -page } else { page };
+                let next = scroll_offset(offset.x, delta, handle.max_offset().width);
+                if next != offset.x {
+                    offset.x = next;
+                    handle.set_offset(offset);
+                    cx.notify();
+                }
+            }))
+            .child(if forward { "›" } else { "‹" })
+    }
+}
+
+fn scroll_offset(offset: Pixels, delta: Pixels, max_offset: Pixels) -> Pixels {
+    (offset + delta).clamp(-max_offset, px(0.0))
+}
+
 impl Render for DockView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let now = self.start_time.elapsed();
@@ -665,16 +713,37 @@ impl Render for DockView {
             render_app_item(item, icon, &self.theme, self.icon_size, on_click, on_middle)
         });
 
-        let apps = div()
+        let clock_space = if self.applied_config.clock.show {
+            clock_width + clock_gap
+        } else {
+            px(0.0)
+        };
+        let app_width = (inner_width - clock_space).max(px(0.0));
+        let control_width = px(24.0);
+        let show_controls = strip_width > app_width && app_width >= control_width * 3.0;
+        let viewport = div()
             .id("dock-apps")
             .flex()
             .flex_1()
             .min_w(px(0.0))
+            .track_scroll(&self.app_scroll)
             .overflow_x_scroll()
             .child(apps_div.children(items_elements));
 
+        let apps = div()
+            .flex()
+            .flex_1()
+            .min_w(px(0.0))
+            .items_center()
+            .when(show_controls, |row| {
+                row.child(self.render_scroll_control(false, control_width, cx))
+            })
+            .child(viewport)
+            .when(show_controls, |row| {
+                row.child(self.render_scroll_control(true, control_width, cx))
+            });
+
         let dock_bar = if self.applied_config.clock.show {
-            let clock_space = clock_width + clock_gap;
             // Center on the dock when there is room to balance the clock's space.
             let balance_clock = self.theme.alignment_anchor == AlignmentAnchor::Dock
                 && self.theme.item_alignment == crate::config::ItemAlignment::Center
@@ -757,6 +826,13 @@ fn auto_hide_settings(config: &Config) -> AutoHideSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scroll_buttons_stop_at_both_ends_of_the_strip() {
+        assert_eq!(scroll_offset(px(-10.0), px(50.0), px(120.0)), px(0.0));
+        assert_eq!(scroll_offset(px(-10.0), px(-50.0), px(120.0)), px(-60.0));
+        assert_eq!(scroll_offset(px(-95.0), px(-50.0), px(120.0)), px(-120.0));
+    }
 
     #[test]
     fn width_is_capped_to_the_work_area_in_both_modes() {
