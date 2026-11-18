@@ -206,7 +206,9 @@ On Windows, run `scripts/check.ps1`, then verify these paths:
   give way to app icons and that clicks still target the tile under the pointer.
   Check an app whose executable has no icon but whose running window does.
   Pin the same executable twice with different arguments and confirm each
-  tile has independent hover and press feedback.
+  tile has independent hover and press feedback. In Settings, select one pin,
+  edit its display name, reorder it, and verify the other pin and both argument
+  lists remain intact.
 - Pin more apps than fit on a narrow work area. Scroll to both ends and check that
   the clock remains visible, including with a long custom date format.
 - Open Settings on a small display. Search and scroll the installed-app picker,

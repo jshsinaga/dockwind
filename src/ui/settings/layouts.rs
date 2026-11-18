@@ -92,6 +92,7 @@ impl SettingsView {
         if let Some(apps) = self.draft.pinned_layouts.get(name) {
             self.draft.pinned.clone_from(apps);
             self.scroll_handle.set_offset(gpui::Point::default());
+            self.finish_pinned_name_edit();
             self.selected_pinned_index = None;
             self.delete_confirm_index = None;
             self.status_message = None;

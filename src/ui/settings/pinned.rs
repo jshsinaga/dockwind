@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use gpui::{Context, FontWeight, IntoElement, SharedString, div, img, prelude::*, px, rgba};
 
-use super::{DraggedPinnedApp, SettingsView};
+use super::{ActiveInput, DraggedPinnedApp, SettingsView, controls::render_text_input};
 use crate::config::PinnedApp;
 use crate::win;
 
@@ -47,6 +47,13 @@ impl SettingsView {
         self.showing_app_picker = false;
         self.active_input = None;
         self.status_message = None;
+    }
+
+    pub(super) fn finish_pinned_name_edit(&mut self) {
+        if matches!(self.active_input, Some(ActiveInput::PinnedAppName(_))) {
+            self.active_input = None;
+            self.input_selected = false;
+        }
     }
 
     pub(super) fn render_pinned_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -113,7 +120,10 @@ impl SettingsView {
                     .justify_between()
                     .gap_3()
                     .on_click(cx.listener(move |this: &mut Self, _, _, cx| {
-                        this.selected_pinned_index = Some(index);
+                        if this.selected_pinned_index != Some(index) {
+                            this.finish_pinned_name_edit();
+                            this.selected_pinned_index = Some(index);
+                        }
                         cx.notify();
                     }))
                     .on_drop(cx.listener(
@@ -124,6 +134,7 @@ impl SettingsView {
                                 && to < this.draft.pinned.len()
                                 && from != to
                             {
+                                this.finish_pinned_name_edit();
                                 let item = this.draft.pinned.remove(from);
                                 this.draft.pinned.insert(to, item);
                                 this.selected_pinned_index = Some(to);
@@ -173,17 +184,29 @@ impl SettingsView {
                                     .flex_col()
                                     .gap_0p5()
                                     .flex_1()
-                                    .child(
+                                    .min_w(px(0.0))
+                                    .child(if is_selected {
+                                        render_text_input(
+                                            "pinned-app-display-name",
+                                            ActiveInput::PinnedAppName(index),
+                                            &app.name,
+                                            "Display name",
+                                            self,
+                                            cx,
+                                        )
+                                    } else {
                                         div()
                                             .text_sm()
                                             .font_weight(FontWeight::MEDIUM)
                                             .text_color(rgba(0xCDD6F4FF))
-                                            .child(app.name.clone()),
-                                    )
+                                            .child(app.name.clone())
+                                            .into_any_element()
+                                    })
                                     .child(
                                         div()
                                             .text_xs()
                                             .text_color(rgba(0x6C7086FF))
+                                            .truncate()
                                             .child(app.path.clone()),
                                     ),
                             ),
@@ -211,6 +234,8 @@ impl SettingsView {
                                     .when(index == 0, |s| s.text_color(rgba(0x6C708640)))
                                     .on_click(cx.listener(move |this: &mut Self, _, _, cx| {
                                         if index > 0 && index < this.draft.pinned.len() {
+                                            cx.stop_propagation();
+                                            this.finish_pinned_name_edit();
                                             this.draft.pinned.swap(index, index - 1);
                                             this.selected_pinned_index = Some(index - 1);
                                             this.status_message = None;
@@ -239,6 +264,8 @@ impl SettingsView {
                                     })
                                     .on_click(cx.listener(move |this: &mut Self, _, _, cx| {
                                         if index + 1 < this.draft.pinned.len() {
+                                            cx.stop_propagation();
+                                            this.finish_pinned_name_edit();
                                             this.draft.pinned.swap(index, index + 1);
                                             this.selected_pinned_index = Some(index + 1);
                                             this.status_message = None;
@@ -371,7 +398,7 @@ impl SettingsView {
                 div()
                     .text_xs()
                     .text_color(rgba(0x6C7086FF))
-                    .child("Tip: Drag the :: handle to reorder apps, or use ^ / v buttons. Click X to remove an application."),
+                    .child("Select a row to edit its display name. Drag the handle or use the arrows to reorder it."),
             )
             .child(self.render_pinned_layouts(cx))
             .into_any_element()
@@ -398,6 +425,29 @@ fn pinned_app_from_path(path: &Path) -> PinnedApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn editing_a_pin_names_only_that_entry_and_keeps_its_arguments() {
+        let mut view = SettingsView::new(
+            "config.toml".into(),
+            crate::config::Config::default(),
+            String::new(),
+            false,
+        );
+        let original = PinnedApp {
+            name: "Editor".into(),
+            path: "editor.exe".into(),
+            args: vec!["--work".into()],
+        };
+        view.draft.pinned = vec![original.clone(), original.clone()];
+        view.input_buffer = "  Work editor  ".into();
+        view.live_update_input(ActiveInput::PinnedAppName(1));
+
+        assert_eq!(view.draft.pinned[0], original);
+        assert_eq!(view.draft.pinned[1].name, "Work editor");
+        assert_eq!(view.draft.pinned[1].path, original.path);
+        assert_eq!(view.draft.pinned[1].args, original.args);
+    }
 
     #[test]
     fn browsing_uses_the_executable_stem_and_keeps_the_full_path() {

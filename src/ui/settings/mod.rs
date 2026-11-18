@@ -40,6 +40,7 @@ pub enum ActiveInput {
     ClockFontColor,
     AppPickerSearch,
     LayoutName,
+    PinnedAppName(usize),
 }
 
 #[derive(Clone, Copy)]
@@ -353,6 +354,14 @@ impl SettingsView {
                     self.draft.clock.font_color = Some(format!("#{clean}"));
                 } else if trimmed.is_empty() {
                     self.draft.clock.font_color = None;
+                }
+            }
+            ActiveInput::PinnedAppName(index) => {
+                let name = self.input_buffer.trim();
+                if !name.is_empty()
+                    && let Some(app) = self.draft.pinned.get_mut(index)
+                {
+                    app.name = name.to_owned();
                 }
             }
             ActiveInput::LayoutName => self.layout_name.clone_from(&self.input_buffer),

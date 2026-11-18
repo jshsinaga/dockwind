@@ -252,7 +252,7 @@ pub fn render_text_input(
         .justify_between()
         .on_click(cx.listener(move |this: &mut SettingsView, _, _, cx| {
             this.active_input = Some(field);
-            this.input_selected = false;
+            this.input_selected = matches!(field, ActiveInput::PinnedAppName(_));
             this.input_buffer = match field {
                 ActiveInput::BackgroundHex => this.draft.appearance.background.clone(),
                 ActiveInput::BorderColorHex => this.draft.appearance.border_color.clone(),
@@ -261,6 +261,12 @@ pub fn render_text_input(
                 ActiveInput::ClockFontColor => {
                     this.draft.clock.font_color.clone().unwrap_or_default()
                 }
+                ActiveInput::PinnedAppName(index) => this
+                    .draft
+                    .pinned
+                    .get(index)
+                    .map(|app| app.name.clone())
+                    .unwrap_or_default(),
                 ActiveInput::LayoutName => this.layout_name.clone(),
                 ActiveInput::AppPickerSearch => this.app_picker_search.clone(),
             };
