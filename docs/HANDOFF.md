@@ -188,12 +188,24 @@ Read this before changing taskbar or worker code.
 
 ## Evidence
 
-2026-11-18, Linux cloud workspace: six auto-hide unit tests and the formatting
-check passed. Windows visual verification is pending. In a Windows desktop
-session, trigger and dismiss auto-hide after an idle period at both dock edges.
-Check that the dock slides and fades from its current position, that app tiles
-stay in place on hover, and that hover, press, and foreground states are visible
-with both light and dark backgrounds.
+### 2026-11-18 dock and Settings improvements
+
+The Linux cloud workspace passed formatting, diff checks, and 70 tests in a
+temporary harness using GPUI and stubs for Windows APIs. Clippy passed for the
+harness. The Windows-target check stopped in `ring` because MSVC's `lib.exe` was
+unavailable. The Windows quality gate and GUI checks are pending.
+
+On Windows, run `scripts/check.ps1`, then verify these paths:
+
+- Reveal and dismiss the dock after idle time at both screen edges. Check slide,
+  fade, and stable tile positions with light and dark appearances.
+- Open and close apps rapidly while the dock is visible. Check that placeholders
+  give way to app icons and that clicks still target the tile under the pointer.
+- Pin more apps than fit on a narrow work area. Scroll to both ends and check that
+  the clock remains visible, including with a long custom date format.
+- Open Settings on a small display. Search and scroll the installed-app picker,
+  paste an RGBA background color, and save with Ctrl+S. Externally edit the
+  TOML file while Settings has a draft and check the overwrite prompt.
 
 ### Historical evidence, baseline `482bd7a`
 
