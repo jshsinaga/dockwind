@@ -113,6 +113,8 @@ duplicate item.
 | `border_width` | integer | 1 | 0 to 20 | Live |
 | `shadow` | bool | false | None | Live |
 | `item_spacing` | integer | 8 | 0 to 64 | Live |
+| `hover_zoom` | bool | false | Enlarges the icon inside its existing tile | Live |
+| `hover_background` | bool | true | Highlights the tile on hover | Live |
 | `indicator_style` | enum | `line` | `line` or `dot` | Live |
 | `item_alignment` | enum | `center` | `center`, `left`, or `right` | Live |
 | `alignment_anchor` | enum | `dock` | `dock` or `clock` | Live |
@@ -147,10 +149,13 @@ space when the items fit within the centered region.
 `vertical_align` controls vertical placement of items (`center`, `top`, `bottom`) within
 the dock frame.
 
-`blur = "acrylic"` and `blur = "mica"` use `SetWindowCompositionAttribute` on Windows 10
-and DWM system backdrops (`DwmExtendFrameIntoClientArea` + `DWMWA_SYSTEMBACKDROP_TYPE`)
-on Windows 11 build 22621 or newer. On unsupported platforms, Dockwind logs that the
-backdrop is unavailable and keeps the transparent surface.
+Windows 11 build 22621 or newer uses the system's Mica and Acrylic materials.
+On older supported Windows builds, `mica` uses blur behind the dock and `acrylic`
+uses the legacy acrylic effect. Windows can substitute its solid material when
+system transparency is disabled. The dock tint retains the selected color and
+uses up to 65% opacity while a native backdrop is active. Selecting `none` clears
+the native backdrop and applies the configured opacity directly. If Windows
+rejects a backdrop, Dockwind logs the error and restores the transparent surface.
 
 `corner_radius` is replaced with `min(default, max_radius)` when it exceeds the
 cap. The cap is half of `icon_size + 2 * padding`.
@@ -455,9 +460,10 @@ Do not swallow a write or parse error. Log it or show it to the user.
 | Entry | Action |
 |---|---|
 | Dock right-click | Settings..., Reload config, autostart toggle, Restore taskbar & Quit |
+| Dock Tray button | System status, volume and mute controls, Windows settings shortcuts, and temporary access to the native notification area when Dockwind hides the taskbar |
 | Tray right-click | Settings..., Reload config, Start with Windows, Restore taskbar, Quit |
 | Tray double-click | Open settings |
-| `dockwind --settings` | Open the settings window and wait for it to close |
+| `dockwind --settings` | Open or focus the settings window |
 
 The tray icon is created by a dedicated worker thread. It is removed on normal
 shutdown and re-added if Explorer broadcasts `TaskbarCreated`. While the native

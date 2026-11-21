@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow};
 use gpui::{Pixels, Rgba, px, rgba};
 
 use crate::config::{
-    AlignmentAnchor, Appearance, BlurMode, IndicatorStyle, ItemAlignment, VerticalAlign, WidthMode,
+    AlignmentAnchor, Appearance, IndicatorStyle, ItemAlignment, VerticalAlign, WidthMode,
     parse_rgba_hex,
 };
 
@@ -21,6 +21,8 @@ pub struct Theme {
     pub border_width: Pixels,
     pub shadow: bool,
     pub item_spacing: Pixels,
+    pub hover_zoom: bool,
+    pub hover_background: bool,
     pub indicator_style: IndicatorStyle,
     pub item_alignment: ItemAlignment,
     pub alignment_anchor: AlignmentAnchor,
@@ -29,6 +31,14 @@ pub struct Theme {
 }
 
 impl Theme {
+    pub fn dock_background(&self, backdrop_enabled: bool) -> Rgba {
+        let mut tint = self.background;
+        if backdrop_enabled {
+            tint.a *= 0.65;
+        }
+        tint
+    }
+
     pub fn from_config(appearance: &Appearance) -> Result<Self> {
         let color = parse_rgba_hex(&appearance.background).ok_or_else(|| {
             anyhow!(
@@ -41,12 +51,9 @@ impl Theme {
             parse_rgba_hex(&appearance.border_color).unwrap_or([0xFF, 0xFF, 0xFF, 0x33]);
         let border_color = rgba(u32::from_be_bytes(border_bytes));
 
-        let mut alpha = ((color[3] as f32 * appearance.opacity as f32) / 100.0)
+        let alpha = ((color[3] as f32 * appearance.opacity as f32) / 100.0)
             .round()
             .clamp(0.0, 255.0) as u8;
-        if appearance.blur != BlurMode::None && alpha > 200 {
-            alpha = (alpha as f32 * 0.75).round() as u8;
-        }
         let background = rgba(u32::from_be_bytes([color[0], color[1], color[2], alpha]));
         let text = if white_has_better_contrast([color[0], color[1], color[2]]) {
             rgba(0xFFFFFFFF)
@@ -68,6 +75,8 @@ impl Theme {
             border_width: px(appearance.border_width as f32),
             shadow: appearance.shadow,
             item_spacing: px(appearance.item_spacing as f32),
+            hover_zoom: appearance.hover_zoom,
+            hover_background: appearance.hover_background,
             indicator_style: appearance.indicator_style,
             item_alignment: appearance.item_alignment,
             alignment_anchor: appearance.alignment_anchor,
@@ -144,6 +153,15 @@ mod tests {
         assert_eq!(theme.padding_top, px(10.0));
         assert_eq!(theme.padding_bottom, px(10.0));
         assert_eq!(theme.running_indicator.a, 0.45);
+    }
+
+    #[test]
+    fn backdrop_tint_stays_translucent_and_the_plain_surface_keeps_its_alpha() {
+        let mut appearance = Config::default().appearance;
+        appearance.background = "#FFFFFF".into();
+        let theme = Theme::from_config(&appearance).expect("theme");
+        assert_eq!(theme.dock_background(false).a, 1.0);
+        assert_eq!(theme.dock_background(true).a, 0.65);
     }
 
     #[test]

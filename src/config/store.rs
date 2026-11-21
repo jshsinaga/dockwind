@@ -309,6 +309,8 @@ fn update_document(document: &mut DocumentMut, config: &Config) {
     appearance["border_width"] = value(config.appearance.border_width as i64);
     appearance["shadow"] = value(config.appearance.shadow);
     appearance["item_spacing"] = value(config.appearance.item_spacing as i64);
+    appearance["hover_zoom"] = value(config.appearance.hover_zoom);
+    appearance["hover_background"] = value(config.appearance.hover_background);
     appearance["indicator_style"] = value(match config.appearance.indicator_style {
         IndicatorStyle::Line => "line",
         IndicatorStyle::Dot => "dot",
@@ -769,6 +771,8 @@ path="editor.exe"
         config.appearance.shadow = true;
         config.appearance.item_spacing = 12;
         config.appearance.indicator_style = IndicatorStyle::Dot;
+        config.appearance.hover_zoom = true;
+        config.appearance.hover_background = false;
         config.appearance.item_alignment = ItemAlignment::Right;
         config.appearance.alignment_anchor = AlignmentAnchor::Dock;
         config.appearance.width_mode = WidthMode::Auto;
@@ -803,6 +807,8 @@ path="editor.exe"
         assert_eq!(loaded.config.appearance.border_width, 3);
         assert!(loaded.config.appearance.shadow);
         assert_eq!(loaded.config.appearance.item_spacing, 12);
+        assert!(loaded.config.appearance.hover_zoom);
+        assert!(!loaded.config.appearance.hover_background);
         assert_eq!(
             loaded.config.appearance.indicator_style,
             IndicatorStyle::Dot

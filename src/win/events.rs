@@ -8,10 +8,10 @@ use tracing::{error, warn};
 use windows::Win32::UI::{
     Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent},
     WindowsAndMessaging::{
-        DispatchMessageW, EVENT_OBJECT_CREATE, EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE,
-        EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_SHOW, EVENT_SYSTEM_FOREGROUND,
-        EVENT_SYSTEM_MINIMIZEEND, EVENT_SYSTEM_MINIMIZESTART, OBJID_WINDOW, TranslateMessage,
-        WINEVENT_OUTOFCONTEXT,
+        DispatchMessageW, EVENT_OBJECT_CLOAKED, EVENT_OBJECT_CREATE, EVENT_OBJECT_DESTROY,
+        EVENT_OBJECT_HIDE, EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_SHOW, EVENT_OBJECT_UNCLOAKED,
+        EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND, EVENT_SYSTEM_MINIMIZESTART,
+        OBJID_WINDOW, TranslateMessage, WINEVENT_OUTOFCONTEXT,
     },
 };
 
@@ -129,7 +129,7 @@ fn run(stop: isize, ready_sender: mpsc::Sender<Result<(), String>>) -> Result<()
     let object_hook = unsafe {
         SetWinEventHook(
             EVENT_OBJECT_CREATE,
-            EVENT_OBJECT_NAMECHANGE,
+            EVENT_OBJECT_UNCLOAKED,
             None,
             Some(callback),
             0,
@@ -226,6 +226,8 @@ unsafe extern "system" fn callback(
             | EVENT_OBJECT_HIDE
             | EVENT_OBJECT_DESTROY
             | EVENT_OBJECT_NAMECHANGE
+            | EVENT_OBJECT_CLOAKED
+            | EVENT_OBJECT_UNCLOAKED
             | EVENT_SYSTEM_FOREGROUND
             | EVENT_SYSTEM_MINIMIZESTART
             | EVENT_SYSTEM_MINIMIZEEND

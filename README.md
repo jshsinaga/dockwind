@@ -105,6 +105,14 @@ taskbar is hidden. The settings window rejects the combination without hiding.
 
 ## Tray
 
+Click **Tray** on the dock to see network, audio, battery, and input-language
+status. You can adjust the default output volume, mute sound or the microphone,
+and open the related Windows settings. If Dockwind hides the Windows taskbar,
+choose **Show Windows taskbar and tray** to use the
+native notification area and its hidden-icons menu. Use **Hide Windows taskbar
+and tray** to return to dock-only mode. This temporary toggle preserves your
+saved settings and Windows' own auto-hide preference.
+
 A Dockwind tray icon appears while the dock is running. Right-click it for:
 
 - Settings...
@@ -160,6 +168,7 @@ the taskbar and work area. It is not enabled while the native taskbar is visible
 - `behavior.show_running_apps = false` hides running-only apps.
 - The settings window can add, remove, and reorder pinned apps.
 - Left-click activates, restores, minimizes, or launches an app.
+- Left-click an app with several windows to choose a window by title.
 
 ## Restoring the Taskbar
 
@@ -273,8 +282,8 @@ manifest and icon. The embedded resources are checked by the build.
 - Placement updates live for config changes and is polled once per second for
   work-area, display, and DPI changes. A real multi-DPI or resolution change has
   not been manually exercised.
-- The Mica and Acrylic backdrop branches need Windows 11 22H2 or newer and have
-  not been verified. The current machine is Windows 10 22H2.
+- Windows 11 22H2 and newer uses the Windows Mica and Acrylic materials. Older
+  Windows builds use their legacy blur and acrylic effects.
 - The running UI was exercised at 100% DPI only. The physical to logical
   conversion and dock rectangle are unit-tested at 100%, 125%, 150%, and 200%.
 - A fullscreen app check is still pending. Panic restore, console-control

@@ -5,29 +5,38 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, bail, ensure};
 use tracing::debug;
 use windows::Win32::{
-    Foundation::{CloseHandle, HWND, LPARAM, SetLastError, WIN32_ERROR},
+    Foundation::{CloseHandle, HWND, LPARAM, PROPERTYKEY, SetLastError, WIN32_ERROR},
     Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute},
+    System::Com::StructuredStorage::{PropVariantClear, PropVariantToString},
     System::Threading::{
         AttachThreadInput, GetCurrentProcessId, GetCurrentThreadId, OpenProcess,
         PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
     },
+    UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow},
     UI::WindowsAndMessaging::{
         EnumChildWindows, EnumWindows, GW_OWNER, GWL_EXSTYLE, GetClassNameW, GetForegroundWindow,
-        GetWindow, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW,
+        GetLastActivePopup, GetWindow, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW,
         GetWindowThreadProcessId, IsIconic, IsWindowVisible, SW_MINIMIZE, SW_RESTORE,
-        SetForegroundWindow, ShowWindow, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+        SetForegroundWindow, ShowWindow, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
     },
 };
-use windows::core::BOOL;
 use windows::core::PWSTR;
+use windows::core::{BOOL, GUID};
 
 use crate::dock::WindowInfo;
+use crate::win::dialogs::ComApartmentGuard;
+
+const APP_USER_MODEL_ID: PROPERTYKEY = PROPERTYKEY {
+    fmtid: GUID::from_u128(0x9f4c2855_9f79_4b39_a8d0_e1d42de1d5f3),
+    pid: 5,
+};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WindowFlags {
     pub is_visible: bool,
     pub is_cloaked: bool,
-    pub has_owner: bool,
+    pub has_visible_owner: bool,
+    pub is_noactivate: bool,
     pub is_toolwindow: bool,
     pub is_appwindow: bool,
     pub has_title: bool,
@@ -35,6 +44,11 @@ pub struct WindowFlags {
 }
 
 pub fn list_app_windows() -> Result<Vec<WindowInfo>> {
+    // SAFETY: GetCurrentProcessId has no preconditions and never fails.
+    list_windows_except_process(unsafe { GetCurrentProcessId() })
+}
+
+fn list_windows_except_process(excluded_pid: u32) -> Result<Vec<WindowInfo>> {
     let mut handles = Vec::new();
     // SAFETY: the callback only appends to the vector behind `lparam`, which stays
     // alive for the duration of EnumWindows. A false result means an error because
@@ -49,16 +63,15 @@ pub fn list_app_windows() -> Result<Vec<WindowInfo>> {
     }
     .context("EnumWindows failed")?;
 
-    // SAFETY: both calls have no preconditions. GetCurrentProcessId never fails.
-    let current_pid = unsafe { GetCurrentProcessId() };
     // SAFETY: GetForegroundWindow is read-only and may return null.
     let foreground = unsafe { GetForegroundWindow() };
     let mut result = Vec::new();
     let mut process_paths = HashMap::new();
+    let _com = ComApartmentGuard::new();
 
     for hwnd in handles {
         let pid = window_process_id(hwnd);
-        if pid == current_pid {
+        if pid == 0 || pid == excluded_pid {
             continue;
         }
         let title = window_title(hwnd);
@@ -67,41 +80,78 @@ pub fn list_app_windows() -> Result<Vec<WindowInfo>> {
             continue;
         }
 
-        let Some(exe_path) = process_paths
+        let exe_path = process_paths
             .entry(pid)
             .or_insert_with(|| match process_path(pid) {
                 Ok(path) => Some(path),
                 Err(error) => {
-                    debug!(%error, pid, "skipping windows without an executable path");
+                    debug!(%error, pid, "tracking window without an executable path");
                     None
                 }
-            })
-        else {
-            continue;
-        };
-
-        let (exe_path, display_name) = if is_application_frame_host(exe_path) {
-            match frame_host_app(hwnd, pid, &title) {
-                Some((path, name)) => (path, Some(name)),
-                None => (exe_path.clone(), Some(title.clone())),
+            });
+        let app_id = window_app_id(hwnd);
+        let (exe_path, display_name, shared_host) = match exe_path.as_deref() {
+            Some(path) if is_application_frame_host(path) => {
+                match frame_host_app(hwnd, pid, &title) {
+                    Some((path, name)) => (Some(path), Some(name), false),
+                    None => (None, Some(title.clone()), true),
+                }
             }
-        } else {
-            (exe_path.clone(), None)
+            path => (path.map(Path::to_path_buf), None, false),
         };
 
         result.push(WindowInfo {
             hwnd: hwnd.0 as isize,
             title,
             exe_path,
+            process_id: pid,
+            app_id,
+            shared_host,
             display_name,
             // SAFETY: `hwnd` came from EnumWindows in this call and may have closed
             // since; IsIconic reports false for an invalid handle, which is harmless.
             is_minimized: unsafe { IsIconic(hwnd) }.as_bool(),
-            is_foreground: hwnd.0 == foreground.0,
+            is_foreground: false,
         });
     }
 
+    // A modal dialog may be foreground even though its owner is the taskbar entry.
+    let mut candidate = foreground;
+    while !candidate.0.is_null() {
+        if let Some(window) = result
+            .iter_mut()
+            .find(|window| window.hwnd == candidate.0 as isize)
+        {
+            window.is_foreground = true;
+            break;
+        }
+        candidate = window_owner(candidate).unwrap_or_default();
+    }
+
     Ok(result)
+}
+
+fn window_app_id(hwnd: HWND) -> Option<String> {
+    // SAFETY: hwnd was enumerated by Windows and COM is initialized on this
+    // thread. The store and property are owned for these calls only.
+    let mut property = unsafe {
+        SHGetPropertyStoreForWindow::<IPropertyStore>(hwnd)
+            .and_then(|store| store.GetValue(&APP_USER_MODEL_ID))
+    }
+    .ok()?;
+    // An AppUserModelID is at most 128 characters, plus its terminator.
+    let mut text = [0; 129];
+    // SAFETY: property is initialized and text is a writable UTF-16 buffer.
+    let converted = unsafe { PropVariantToString(&property, &mut text) };
+    // SAFETY: GetValue initialized the variant; no references into it remain.
+    if let Err(error) = unsafe { PropVariantClear(&mut property) } {
+        debug!(%error, "failed to clear a window property");
+    }
+    converted.ok()?;
+    let length = text.iter().position(|&unit| unit == 0)?;
+    String::from_utf16(&text[..length])
+        .ok()
+        .filter(|id| !id.trim().is_empty())
 }
 
 fn is_application_frame_host(path: &Path) -> bool {
@@ -227,12 +277,23 @@ fn window_class_name(hwnd: HWND) -> String {
 pub fn is_taskbar_worthy(flags: &WindowFlags) -> bool {
     flags.is_visible
         && !flags.is_cloaked
-        && flags.has_title
         && !flags.is_own_process
-        && (flags.is_appwindow || (!flags.has_owner && !flags.is_toolwindow))
+        && (flags.is_appwindow
+            || (flags.has_title
+                && !flags.has_visible_owner
+                && !flags.is_toolwindow
+                && !flags.is_noactivate))
 }
 
 pub fn activate_or_minimize(hwnd: isize) -> Result<()> {
+    focus_window(hwnd, true)
+}
+
+pub fn activate(hwnd: isize) -> Result<()> {
+    focus_window(hwnd, false)
+}
+
+fn focus_window(hwnd: isize, minimize_if_active: bool) -> Result<()> {
     let hwnd = HWND(hwnd as *mut c_void);
     if hwnd.0.is_null() {
         bail!("cannot activate an empty window handle");
@@ -243,7 +304,12 @@ pub fn activate_or_minimize(hwnd: isize) -> Result<()> {
     // is verified with IsIconic. The foreground retry attaches input only for live
     // thread ids and detaches them again.
     unsafe {
-        if GetForegroundWindow().0 == hwnd.0 {
+        let foreground = GetForegroundWindow();
+        let popup = GetLastActivePopup(hwnd);
+        let foreground_popup = foreground.0 == popup.0
+            && !popup.0.is_null()
+            && GetWindowLongPtrW(popup, GWL_EXSTYLE) as u32 & WS_EX_APPWINDOW.0 == 0;
+        if minimize_if_active && (foreground.0 == hwnd.0 || foreground_popup) {
             let _ = ShowWindow(hwnd, SW_MINIMIZE);
             ensure!(
                 IsIconic(hwnd).as_bool(),
@@ -260,7 +326,15 @@ pub fn activate_or_minimize(hwnd: isize) -> Result<()> {
             );
         }
 
-        if SetForegroundWindow(hwnd).as_bool() {
+        let focus_target = if !popup.0.is_null()
+            && IsWindowVisible(popup).as_bool()
+            && GetWindowLongPtrW(popup, GWL_EXSTYLE) as u32 & WS_EX_APPWINDOW.0 == 0
+        {
+            popup
+        } else {
+            hwnd
+        };
+        if SetForegroundWindow(focus_target).as_bool() {
             return Ok(());
         }
 
@@ -270,7 +344,7 @@ pub fn activate_or_minimize(hwnd: isize) -> Result<()> {
             && foreground_thread != current_thread
             && AttachThreadInput(current_thread, foreground_thread, true).as_bool();
 
-        let restored = SetForegroundWindow(hwnd).as_bool();
+        let restored = SetForegroundWindow(focus_target).as_bool();
         if attached && !AttachThreadInput(current_thread, foreground_thread, false).as_bool() {
             debug!("failed to detach the foreground input queue");
         }
@@ -284,26 +358,32 @@ pub fn activate_or_minimize(hwnd: isize) -> Result<()> {
 }
 
 fn window_flags(hwnd: HWND, has_title: bool) -> WindowFlags {
-    // SAFETY: all calls take a handle from EnumWindows. Style and owner queries are
-    // read-only; GetWindow(GW_OWNER) returns an error when the window has no owner.
-    let (ex_style, owner) = unsafe {
-        let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
-        let owner = GetWindow(hwnd, GW_OWNER)
-            .ok()
-            .is_some_and(|owner| !owner.0.is_null());
-        (ex_style, owner)
-    };
+    // SAFETY: hwnd and its owner come from read-only window queries.
+    let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 };
+    let has_visible_owner = window_owner(hwnd).is_some_and(|owner| {
+        // SAFETY: read-only visibility query for the owner of an enumerated window.
+        unsafe { IsWindowVisible(owner) }.as_bool()
+    });
 
     WindowFlags {
         // SAFETY: read-only visibility query for an enumerated window.
         is_visible: unsafe { IsWindowVisible(hwnd) }.as_bool(),
         is_cloaked: is_cloaked(hwnd),
-        has_owner: owner,
+        has_visible_owner,
+        is_noactivate: ex_style & WS_EX_NOACTIVATE.0 != 0,
         is_toolwindow: ex_style & WS_EX_TOOLWINDOW.0 != 0,
         is_appwindow: ex_style & WS_EX_APPWINDOW.0 != 0,
         has_title,
         is_own_process: false,
     }
+}
+
+fn window_owner(hwnd: HWND) -> Option<HWND> {
+    // SAFETY: this read-only query accepts an HWND from Windows and reports
+    // failure when the window has closed or it has no owner.
+    unsafe { GetWindow(hwnd, GW_OWNER) }
+        .ok()
+        .filter(|owner| !owner.0.is_null())
 }
 
 fn is_cloaked(hwnd: HWND) -> bool {
@@ -458,14 +538,14 @@ mod tests {
         assert!(!is_taskbar_worthy(&tool));
 
         let owned = WindowFlags {
-            has_owner: true,
+            has_visible_owner: true,
             ..worthy_flags()
         };
         assert!(!is_taskbar_worthy(&owned));
 
         let appwindow = WindowFlags {
             is_toolwindow: true,
-            has_owner: true,
+            has_visible_owner: true,
             is_appwindow: true,
             ..worthy_flags()
         };
@@ -473,8 +553,120 @@ mod tests {
     }
 
     #[test]
+    fn explicit_taskbar_windows_are_tracked_even_without_a_caption() {
+        assert!(is_taskbar_worthy(&WindowFlags {
+            has_title: false,
+            is_appwindow: true,
+            is_noactivate: true,
+            ..worthy_flags()
+        }));
+        assert!(!is_taskbar_worthy(&WindowFlags {
+            is_noactivate: true,
+            ..worthy_flags()
+        }));
+    }
+
+    #[test]
     fn core_window_search_handles_empty_title() {
         assert!(find_core_window_app("").is_none());
         assert!(find_core_window_app("   ").is_none());
+    }
+
+    #[test]
+    fn native_windows_with_distinct_app_ids_are_enumerated_as_separate_apps() {
+        use std::mem::ManuallyDrop;
+        use windows::Win32::System::{Com::StructuredStorage::*, Variant::VT_LPWSTR};
+        use windows::Win32::UI::Shell::SHStrDupW;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DestroyWindow, SW_SHOWNOACTIVATE, WS_POPUP,
+        };
+        use windows::core::{PCWSTR, w};
+
+        struct TestWindow(HWND);
+
+        impl Drop for TestWindow {
+            fn drop(&mut self) {
+                // SAFETY: the test owns the live window and COM is still active
+                // on the creator thread. An empty variant removes the property.
+                unsafe {
+                    if let Ok(store) = SHGetPropertyStoreForWindow::<IPropertyStore>(self.0) {
+                        let _ = store.SetValue(&APP_USER_MODEL_ID, &PROPVARIANT::default());
+                    }
+                    let _ = DestroyWindow(self.0);
+                }
+            }
+        }
+
+        fn create(title: PCWSTR, app_id: PCWSTR) -> Result<TestWindow> {
+            // SAFETY: STATIC is a system class. The strings are static and the
+            // window is owned by this test on the current thread.
+            let hwnd = unsafe {
+                CreateWindowExW(
+                    WS_EX_APPWINDOW | WS_EX_NOACTIVATE,
+                    w!("STATIC"),
+                    title,
+                    WS_POPUP,
+                    0,
+                    0,
+                    24,
+                    24,
+                    None,
+                    None,
+                    None,
+                    None,
+                )?
+            };
+            let window = TestWindow(hwnd);
+            // SAFETY: app_id is a null-terminated string and SHStrDupW allocates
+            // a copy with the COM allocator expected by PROPVARIANT.
+            let allocated_id = unsafe { SHStrDupW(app_id)? };
+            let mut value = PROPVARIANT {
+                Anonymous: PROPVARIANT_0 {
+                    Anonymous: ManuallyDrop::new(PROPVARIANT_0_0 {
+                        vt: VT_LPWSTR,
+                        Anonymous: PROPVARIANT_0_0_0 {
+                            pwszVal: allocated_id,
+                        },
+                        ..Default::default()
+                    }),
+                },
+            };
+            // SAFETY: COM is initialized by the test. SetValue borrows the
+            // initialized variant and the live HWND belongs to this test.
+            let result = unsafe {
+                SHGetPropertyStoreForWindow::<IPropertyStore>(hwnd)
+                    .and_then(|store| store.SetValue(&APP_USER_MODEL_ID, &value))
+            };
+            // SAFETY: the variant is initialized and owns the allocated string.
+            unsafe { PropVariantClear(&mut value)? };
+            result?;
+            // SAFETY: the window is live and belongs to this thread.
+            let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
+            Ok(window)
+        }
+
+        let _com = ComApartmentGuard::new();
+        let first = create(w!(""), w!("Dockwind.Test.First")).expect("first taskbar window");
+        let second =
+            create(w!("Dockwind test"), w!("Dockwind.Test.Second")).expect("second taskbar window");
+        let handles = [first.0.0 as isize, second.0.0 as isize];
+        let windows = list_windows_except_process(0)
+            .expect("enumerate test windows")
+            .into_iter()
+            .filter(|window| handles.contains(&window.hwnd))
+            .collect::<Vec<_>>();
+
+        assert_eq!(windows.len(), 2);
+        assert!(
+            windows
+                .iter()
+                .any(|window| window.app_id.as_deref() == Some("Dockwind.Test.First"))
+        );
+        assert!(
+            windows
+                .iter()
+                .any(|window| window.app_id.as_deref() == Some("Dockwind.Test.Second"))
+        );
+        assert_eq!(crate::dock::merge(&[], &windows, true).len(), 2);
     }
 }

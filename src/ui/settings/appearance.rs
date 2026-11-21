@@ -501,6 +501,32 @@ impl SettingsView {
                         ),
                     ),
                     render_setting_row(
+                        "Hover zoom",
+                        "Enlarge the icon while keeping the dock and tile size fixed.",
+                        render_toggle(
+                            "icon-hover-zoom",
+                            self.draft.appearance.hover_zoom,
+                            cx.listener(|this: &mut Self, _, _, cx| {
+                                this.draft.appearance.hover_zoom = !this.draft.appearance.hover_zoom;
+                                this.status_message = None;
+                                cx.notify();
+                            }),
+                        ),
+                    ),
+                    render_setting_row(
+                        "Hover background",
+                        "Highlight the tile while the pointer is over it.",
+                        render_toggle(
+                            "icon-hover-background",
+                            self.draft.appearance.hover_background,
+                            cx.listener(|this: &mut Self, _, _, cx| {
+                                this.draft.appearance.hover_background = !this.draft.appearance.hover_background;
+                                this.status_message = None;
+                                cx.notify();
+                            }),
+                        ),
+                    ),
+                    render_setting_row(
                         "Running Indicator Style",
                         "Visual marker beneath running and active applications.",
                         div()

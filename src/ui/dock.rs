@@ -18,7 +18,7 @@ use crate::config::{AlignmentAnchor, Appearance, BlurMode, Clock, Config, DockEd
 use crate::dock::{AutoHide, AutoHideInput, AutoHideSettings, DockItem};
 use crate::win;
 use crate::win::appbar::{AppBarEdge, AppBarHandle};
-use crate::win::menu::MenuAction;
+use crate::win::menu::{MenuAction, PopupAnchor, TrayAction};
 use crate::win::monitors::MonitorInfo;
 
 #[derive(Debug, Clone, Copy)]
@@ -52,6 +52,28 @@ impl CachedIcon {
     }
 }
 
+const APP_HOVER_DURATION: Duration = Duration::from_millis(120);
+const TRAY_BUTTON_WIDTH: f32 = 44.0;
+
+struct AppHover {
+    from: f32,
+    target: f32,
+    started: Instant,
+}
+
+impl AppHover {
+    fn progress(&self, now: Instant, animated: bool) -> f32 {
+        if !animated {
+            return self.target;
+        }
+        let fraction = (now.saturating_duration_since(self.started).as_secs_f32()
+            / APP_HOVER_DURATION.as_secs_f32())
+        .min(1.0);
+        let eased = 1.0 - (1.0 - fraction).powi(3);
+        self.from + (self.target - self.from) * eased
+    }
+}
+
 pub struct DockView {
     controller: Entity<AppController>,
     applied_config: Config,
@@ -66,10 +88,14 @@ pub struct DockView {
     auto_hide: AutoHide,
     auto_hide_settings: AutoHideSettings,
     animations_enabled: bool,
+    app_hover: HashMap<usize, AppHover>,
     appbar: Option<AppBarHandle>,
+    native_taskbar_hidden: bool,
     menu_open: bool,
     progress: f32,
     window_region: Option<[i32; 4]>,
+    backdrop_request: Option<(BlurMode, bool)>,
+    backdrop_enabled: bool,
     last_monitor_check: Instant,
     start_time: Instant,
 }
@@ -81,7 +107,7 @@ impl DockView {
         geometry: DockGeometry,
         theme: Theme,
     ) -> Self {
-        let (config, items) = {
+        let (config, items, native_taskbar_hidden) = {
             let controller = controller.read(cx);
             let items = controller
                 .items()
@@ -89,7 +115,11 @@ impl DockView {
                 .cloned()
                 .map(Arc::new)
                 .collect::<Vec<_>>();
-            (controller.config().clone(), items)
+            (
+                controller.config().clone(),
+                items,
+                controller.native_taskbar_hidden(),
+            )
         };
         let clock = cx.new(|cx| ClockView::new(cx, &config.clock));
         let auto_hide = AutoHide::new(config.behavior.auto_hide);
@@ -113,10 +143,14 @@ impl DockView {
             auto_hide,
             auto_hide_settings: auto_hide_settings(&config, animations_enabled),
             animations_enabled,
+            app_hover: HashMap::new(),
             appbar: None,
+            native_taskbar_hidden,
             menu_open: false,
             progress,
             window_region: None,
+            backdrop_request: None,
+            backdrop_enabled: false,
             last_monitor_check: start_time,
             start_time,
         };
@@ -167,6 +201,9 @@ impl DockView {
     fn sync_controller(&mut self, controller: &Entity<AppController>, cx: &mut Context<Self>) {
         let controller = controller.read(cx);
         let config = controller.config();
+        let native_taskbar_hidden = controller.native_taskbar_hidden();
+        let native_taskbar_changed = self.native_taskbar_hidden != native_taskbar_hidden;
+        self.native_taskbar_hidden = native_taskbar_hidden;
         let count_changed = self.items.len() != controller.items().len();
         let items_changed = self
             .items
@@ -174,6 +211,14 @@ impl DockView {
             .map(Arc::as_ref)
             .ne(controller.items().iter());
         if items_changed {
+            self.app_hover.retain(|index, _| {
+                self.items
+                    .get(*index)
+                    .zip(controller.items().get(*index))
+                    .is_some_and(|(previous, current)| {
+                        previous.key == current.key && previous.args == current.args
+                    })
+            });
             self.items = controller.items().iter().cloned().map(Arc::new).collect();
         }
         let config = (config != &self.applied_config).then(|| config.clone());
@@ -184,6 +229,7 @@ impl DockView {
 
         if let Some(config) = config {
             if !items_changed
+                && !native_taskbar_changed
                 && config.appearance == self.applied_config.appearance
                 && config.behavior == self.applied_config.behavior
                 && config.clock == self.applied_config.clock
@@ -192,15 +238,38 @@ impl DockView {
                 // A saved-layout-only edit changes the menu, which reads this on demand.
                 self.applied_config = config;
             } else {
-                self.apply_config(config, count_changed, cx);
+                self.apply_config(config, count_changed, native_taskbar_changed, cx);
             }
-        } else if items_changed {
-            if count_changed && self.applied_config.appearance.width_mode == WidthMode::Auto {
+        } else if items_changed || native_taskbar_changed {
+            if native_taskbar_changed {
+                let config = self.applied_config.clone();
+                self.update_geometry_and_appbar(&config);
+            } else if count_changed && self.applied_config.appearance.width_mode == WidthMode::Auto
+            {
                 let config = self.applied_config.clone();
                 self.apply_geometry(&config);
             }
             cx.notify();
         }
+    }
+
+    fn set_app_hover(&mut self, index: usize, hovered: bool, cx: &mut Context<Self>) {
+        let now = Instant::now();
+        let target = if hovered { 1.0 } else { 0.0 };
+        let current = self.app_hover.get(&index);
+        if current.map_or(0.0, |hover| hover.target) == target {
+            return;
+        }
+        let from = current.map_or(0.0, |hover| hover.progress(now, self.animations_enabled));
+        self.app_hover.insert(
+            index,
+            AppHover {
+                from,
+                target,
+                started: now,
+            },
+        );
+        cx.notify();
     }
 
     fn load_missing_icons(&mut self, cx: &mut Context<Self>) {
@@ -215,7 +284,13 @@ impl DockView {
                 .get(&item.key)
                 .is_none_or(|icon| icon.needs_lookup(hwnd))
             {
-                requests.insert(item.key.clone(), hwnd);
+                requests.insert(
+                    item.key.clone(),
+                    (
+                        item.executable_path().map(std::path::Path::to_path_buf),
+                        hwnd,
+                    ),
+                );
             }
         }
         if requests.is_empty() {
@@ -226,9 +301,9 @@ impl DockView {
         let load = cx.background_executor().spawn(async move {
             requests
                 .into_iter()
-                .map(|(path, hwnd)| {
-                    let icon = win::icons::load_icon(&path, hwnd);
-                    (path, hwnd, icon)
+                .map(|(key, (path, hwnd))| {
+                    let icon = win::icons::load_icon(path.as_deref(), hwnd);
+                    (key, hwnd, icon)
                 })
                 .collect::<Vec<_>>()
         });
@@ -249,7 +324,13 @@ impl DockView {
         .detach();
     }
 
-    fn apply_config(&mut self, config: Config, count_changed: bool, cx: &mut Context<Self>) {
+    fn apply_config(
+        &mut self,
+        config: Config,
+        count_changed: bool,
+        native_taskbar_changed: bool,
+        cx: &mut Context<Self>,
+    ) {
         let theme = match Theme::from_config(&config.appearance) {
             Ok(theme) => theme,
             Err(error) => {
@@ -258,8 +339,8 @@ impl DockView {
             }
         };
 
-        let blur_changed = self.applied_config.appearance.blur != config.appearance.blur;
         let geometry_changed = [
+            native_taskbar_changed,
             self.applied_config.appearance.width != config.appearance.width,
             self.applied_config.appearance.height != config.appearance.height,
             self.applied_config.appearance.offset != config.appearance.offset,
@@ -294,17 +375,12 @@ impl DockView {
             self.auto_hide = AutoHide::new(false);
         }
         if geometry_changed || (count_changed && config.appearance.width_mode == WidthMode::Auto) {
-            self.apply_geometry(&config);
-            self.sync_appbar(&config);
+            self.update_geometry_and_appbar(&config);
         }
         if config.pinned != self.applied_config.pinned {
             self.app_scroll.set_offset(Point::default());
         }
         self.applied_config = config;
-
-        if blur_changed && self.progress > 0.001 {
-            self.apply_backdrop();
-        }
 
         info!(
             corner_radius = self.applied_config.appearance.corner_radius,
@@ -312,6 +388,17 @@ impl DockView {
             "dock appearance updated"
         );
         cx.notify();
+    }
+
+    fn update_geometry_and_appbar(&mut self, config: &Config) {
+        if self.reserves_space(config) {
+            self.apply_geometry(config);
+            self.sync_appbar(config);
+        } else {
+            // Drop the reservation before reading the work area for placement.
+            self.sync_appbar(config);
+            self.apply_geometry(config);
+        }
     }
 
     fn apply_geometry(&mut self, config: &Config) {
@@ -354,8 +441,13 @@ impl DockView {
         true
     }
 
+    fn reserves_space(&self, config: &Config) -> bool {
+        config.behavior.reserve_space
+            && (!config.behavior.hide_native_taskbar || self.native_taskbar_hidden)
+    }
+
     fn sync_appbar(&mut self, config: &Config) {
-        let reserve = config.behavior.reserve_space;
+        let reserve = self.reserves_space(config);
         let rect = if reserve {
             Some(self.appbar_rect(config))
         } else {
@@ -438,7 +530,7 @@ impl DockView {
                 Ok(monitor)
                     if monitor.bounds != self.geometry.monitor.bounds
                         || monitor.scale_factor != self.geometry.monitor.scale_factor
-                        || (!self.applied_config.behavior.reserve_space
+                        || (!self.reserves_space(&self.applied_config)
                             && monitor.work_area != self.geometry.monitor.work_area) =>
                 {
                     let config = self.applied_config.clone();
@@ -519,17 +611,62 @@ impl DockView {
         }
     }
 
-    fn apply_backdrop(&self) {
-        if let Err(error) = win::dwm::apply_backdrop_to_hwnd(
-            self.geometry.hwnd,
-            self.applied_config.appearance.blur,
-        ) {
-            warn!(%error, "backdrop update failed; keeping transparent");
+    fn sync_backdrop(&mut self, visible: bool) {
+        let mode = if visible {
+            self.applied_config.appearance.blur
+        } else {
+            BlurMode::None
+        };
+        let dark = mode != BlurMode::None && self.theme.text.r > 0.5;
+        if self.backdrop_request == Some((mode, dark)) {
+            return;
         }
+        self.backdrop_request = Some((mode, dark));
+        self.backdrop_enabled = match win::dwm::apply_backdrop(self.geometry.hwnd, mode, dark) {
+            Ok(()) => mode != BlurMode::None,
+            Err(error) => {
+                warn!(%error, "dock backdrop update failed");
+                false
+            }
+        };
+        self.window_region = None;
+    }
+
+    fn open_menu<T: 'static>(
+        &mut self,
+        cx: &mut Context<Self>,
+        show: impl AsyncFnOnce(PopupAnchor) -> anyhow::Result<Option<T>> + 'static,
+        handle: impl FnOnce(&mut Self, T, &mut Context<Self>) + 'static,
+    ) {
+        if self.menu_open {
+            return;
+        }
+        let anchor = match PopupAnchor::at_cursor(self.geometry.hwnd) {
+            Ok(anchor) => anchor,
+            Err(error) => {
+                warn!(%error, "failed to locate the dock menu");
+                return;
+            }
+        };
+        self.menu_open = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            Timer::after(Duration::ZERO).await;
+            let result = show(anchor).await;
+            let _ = this.update(cx, |this, cx| {
+                this.menu_open = false;
+                match result {
+                    Ok(Some(action)) => handle(this, action, cx),
+                    Ok(None) => {}
+                    Err(error) => warn!(%error, "failed to show a dock menu"),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn on_context_menu(&mut self, cx: &mut Context<Self>) {
-        let hwnd = self.geometry.hwnd;
         let layouts = self
             .applied_config
             .pinned_layouts
@@ -537,41 +674,71 @@ impl DockView {
             .map(|(name, apps)| (name.clone(), *apps == self.applied_config.pinned))
             .collect::<Vec<_>>();
         let next_layout = self.applied_config.next_pinned_layout().map(str::to_owned);
-        cx.spawn(async move |this, cx| {
-            Timer::after(Duration::from_millis(0)).await;
-            if this
-                .update(cx, |this, cx| {
-                    this.menu_open = true;
-                    cx.notify();
-                })
-                .is_err()
-            {
-                return;
-            }
-
-            let result = win::menu::show(hwnd, &layouts, next_layout.as_deref());
-            let _ = this.update(cx, |this, cx| {
-                this.menu_open = false;
-                this.handle_menu_result(result, cx);
-            });
-        })
-        .detach();
+        self.open_menu(
+            cx,
+            async move |anchor| win::menu::show(anchor, &layouts, next_layout.as_deref()),
+            Self::handle_menu_action,
+        );
     }
 
-    fn handle_menu_result(
-        &mut self,
-        result: anyhow::Result<Option<MenuAction>>,
-        cx: &mut Context<Self>,
-    ) {
-        let action = match result {
-            Ok(Some(action)) => action,
-            Ok(None) => return,
-            Err(error) => {
-                warn!(%error, "failed to show the dock menu");
-                return;
-            }
-        };
+    fn on_tray_menu(&mut self, cx: &mut Context<Self>) {
+        let hidden = self
+            .applied_config
+            .behavior
+            .hide_native_taskbar
+            .then_some(self.native_taskbar_hidden);
+        let status = cx
+            .background_executor()
+            .spawn(async { win::system_tray::status() });
+        self.open_menu(
+            cx,
+            async move |anchor| win::menu::show_tray(anchor, hidden, status.await),
+            |this, action, cx| match action {
+                TrayAction::ToggleNativeTaskbar => {
+                    this.controller
+                        .update(cx, |controller, cx| controller.toggle_taskbar_for_tray(cx));
+                }
+                TrayAction::OpenSettings(uri) => {
+                    if let Err(error) = win::launch::launch(uri, &[]) {
+                        warn!(%error, uri, "failed to open Windows settings from the dock");
+                    }
+                }
+                TrayAction::Audio(action) => {
+                    cx.background_executor()
+                        .spawn(async move {
+                            if let Err(error) = win::system_tray::apply_audio(action) {
+                                warn!(%error, ?action, "failed to apply the tray audio control");
+                            }
+                        })
+                        .detach();
+                }
+            },
+        );
+    }
 
+    fn on_app_click(&mut self, item: Arc<DockItem>, event: &ClickEvent, cx: &mut Context<Self>) {
+        if item.is_pinned && event.modifiers().shift {
+            self.controller
+                .update(cx, |controller, _| controller.launch_second_instance(&item));
+            return;
+        }
+        let windows = self.controller.read(cx).window_choices(&item);
+        if windows.is_empty() {
+            self.controller
+                .update(cx, |controller, _| controller.activate_or_launch(&item));
+            return;
+        }
+        self.open_menu(
+            cx,
+            async move |anchor| win::menu::show_windows(anchor, &windows),
+            move |this, hwnd, cx| {
+                this.controller
+                    .update(cx, |controller, _| controller.select_window(&item, hwnd));
+            },
+        );
+    }
+
+    fn handle_menu_action(&mut self, action: MenuAction, cx: &mut Context<Self>) {
         match action {
             MenuAction::UsePinnedLayout(name) => {
                 self.controller
@@ -696,7 +863,7 @@ impl Render for DockView {
             ]
         };
 
-        let first_frame = self.window_region.is_none();
+        self.sync_backdrop(!is_hidden);
         if self.window_region != Some(region) {
             let [y, width, height, radius] = region;
             match win::dwm::set_window_shape(self.geometry.hwnd, 0, y, width, height, radius) {
@@ -704,13 +871,32 @@ impl Render for DockView {
                 Err(error) => warn!(%error, "failed to update the dock window region"),
             }
         }
-        if is_hidden && (first_frame || !was_hidden) {
-            if let Err(error) = win::dwm::apply_backdrop_to_hwnd(self.geometry.hwnd, BlurMode::None)
+        let hover_now = Instant::now();
+        let hover_effects = self.theme.hover_zoom || self.theme.hover_background;
+        if is_hidden || !hover_effects {
+            self.app_hover.clear();
+        } else if !window.is_window_hovered() {
+            // A native window leave refreshes GPUI without a per-tile mouse move.
+            for hover in self
+                .app_hover
+                .values_mut()
+                .filter(|hover| hover.target > 0.0)
             {
-                warn!(%error, "failed to clear the hidden dock backdrop");
+                hover.from = hover.progress(hover_now, self.animations_enabled);
+                hover.target = 0.0;
+                hover.started = hover_now;
             }
-        } else if !is_hidden && was_hidden {
-            self.apply_backdrop();
+        }
+        self.app_hover.retain(|_, hover| {
+            hover.target > 0.0 || hover.progress(hover_now, self.animations_enabled) > 0.0
+        });
+        if self.animations_enabled
+            && self.app_hover.values().any(|hover| {
+                hover.from != hover.target
+                    && hover_now.saturating_duration_since(hover.started) < APP_HOVER_DURATION
+            })
+        {
+            window.request_animation_frame();
         }
 
         let (pt, pb, pl, pr) = (
@@ -727,7 +913,7 @@ impl Render for DockView {
             .opacity(visual_progress.clamp(0.0, 1.0))
             .size_full()
             .rounded(self.theme.radius)
-            .bg(self.theme.background)
+            .bg(self.theme.dock_background(self.backdrop_enabled))
             .border(self.theme.border_width)
             .border_color(self.theme.border_color)
             .flex()
@@ -756,9 +942,27 @@ impl Render for DockView {
         let inner_width =
             (self.geometry.bounds.size.width - pl - pr - self.theme.border_width * 2.0)
                 .max(px(0.0));
+        let tray_width = px(TRAY_BUTTON_WIDTH).min(inner_width * 0.3);
+        let content_width = inner_width - tray_width;
+        let text = self.theme.text;
+        let tray = div()
+            .id("dock-tray")
+            .w(tray_width)
+            .h(px(28.0))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(6.0))
+            .text_xs()
+            .cursor_pointer()
+            .hover(move |style| style.bg(Rgba { a: 0.13, ..text }))
+            .active(move |style| style.bg(Rgba { a: 0.20, ..text }))
+            .on_click(cx.listener(|this, _, _, cx| this.on_tray_menu(cx)))
+            .child("Tray");
         let clock_gap = px(12.0);
         let clock_width = preferred_clock_width(&self.applied_config.clock)
-            .min((inner_width * 0.45 - clock_gap).max(px(0.0)));
+            .min((content_width * 0.45 - clock_gap).max(px(0.0)));
 
         let mut apps_div = div()
             .flex()
@@ -787,28 +991,29 @@ impl Render for DockView {
             let clicked = Arc::clone(item);
             let middle_clicked = Arc::clone(item);
             let on_click = cx.listener(move |this, event: &ClickEvent, _, cx| {
-                this.controller.update(cx, |controller, _| {
-                    if clicked.is_pinned && event.modifiers().shift {
-                        controller.launch_second_instance(&clicked);
-                    } else {
-                        controller.activate_or_launch(&clicked);
-                    }
-                });
+                this.on_app_click(Arc::clone(&clicked), event, cx);
             });
             let on_middle = cx.listener(move |this, _: &MouseDownEvent, _, cx| {
                 this.controller.update(cx, |controller, _| {
                     controller.launch_second_instance(&middle_clicked);
                 });
             });
-            render_app_item(
-                index,
-                item,
-                icon,
-                &self.theme,
-                self.icon_size,
-                on_click,
-                on_middle,
-            )
+            let hover = self.app_hover.get(&index).map_or(0.0, |hover| {
+                hover.progress(hover_now, self.animations_enabled)
+            });
+            render_app_item(index, item, icon, &self.theme, self.icon_size, hover)
+                .on_click(on_click)
+                .on_mouse_down(MouseButton::Middle, on_middle)
+                .when(hover_effects, |tile| {
+                    tile.on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                        this.set_app_hover(index, *hovered, cx);
+                    }))
+                    .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                        // Re-entering from outside can leave GPUI's tile hover
+                        // flag set from the previous visit.
+                        this.set_app_hover(index, true, cx);
+                    }))
+                })
         });
 
         let clock_space = if self.applied_config.clock.show {
@@ -816,7 +1021,11 @@ impl Render for DockView {
         } else {
             px(0.0)
         };
-        let app_width = (inner_width - clock_space).max(px(0.0));
+        let trailing_space = clock_space + tray_width;
+        let balance_dock = self.theme.alignment_anchor == AlignmentAnchor::Dock
+            && self.theme.item_alignment == crate::config::ItemAlignment::Center
+            && strip_width + trailing_space * 2.0 <= inner_width;
+        let app_width = inner_width - trailing_space;
         let control_width = px(24.0);
         let show_controls = strip_width > app_width && app_width >= control_width * 3.0;
         let overflow = strip_width - (app_width - control_width * 2.0);
@@ -842,11 +1051,12 @@ impl Render for DockView {
                 row.child(self.render_scroll_control(true, control_width, overflow, cx))
             });
 
-        let dock_bar = if self.applied_config.clock.show {
-            // Center on the dock when there is room to balance the clock's space.
-            let balance_clock = self.theme.alignment_anchor == AlignmentAnchor::Dock
-                && self.theme.item_alignment == crate::config::ItemAlignment::Center
-                && strip_width + clock_space * 2.0 <= inner_width;
+        let mut dock_bar = dock_bar
+            .when(balance_dock, |bar| {
+                bar.child(div().w(trailing_space).flex_shrink_0())
+            })
+            .child(apps);
+        if self.applied_config.clock.show {
             let mut clock = div()
                 .w(clock_width)
                 .h_full()
@@ -860,17 +1070,10 @@ impl Render for DockView {
                 crate::config::VerticalAlign::Top => clock.justify_start(),
                 crate::config::VerticalAlign::Bottom => clock.justify_end(),
             };
-            dock_bar
-                .when(balance_clock, |bar| {
-                    bar.child(div().w(clock_space).flex_shrink_0())
-                })
-                .child(apps)
-                .child(clock.child(self.clock.clone()))
-        } else {
-            dock_bar.child(apps)
-        };
+            dock_bar = dock_bar.child(clock.child(self.clock.clone()));
+        }
 
-        div().size_full().child(dock_bar)
+        div().size_full().child(dock_bar.child(tray))
     }
 }
 
@@ -886,7 +1089,8 @@ pub(super) fn dock_size(
             let (_, _, left, right) = appearance.effective_padding();
             let padding = px((left + right + appearance.border_width * 2) as f32);
             let apps = app_strip_width(appearance, item_count.max(1));
-            (padding + apps + preferred_clock_width(&config.clock) + px(24.0)).max(px(120.0))
+            (padding + apps + preferred_clock_width(&config.clock) + px(24.0 + TRAY_BUTTON_WIDTH))
+                .max(px(120.0))
         }
     };
     size(width.min(work_area_width), px(appearance.height as f32))
@@ -929,6 +1133,26 @@ fn auto_hide_settings(config: &Config, animations_enabled: bool) -> AutoHideSett
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_hover_interpolates_and_respects_reduced_motion() {
+        let started = Instant::now();
+        let entering = AppHover {
+            from: 0.0,
+            target: 1.0,
+            started,
+        };
+        let mid = entering.progress(started + Duration::from_millis(60), true);
+        assert!(mid > 0.0 && mid < 1.0);
+        assert_eq!(entering.progress(started, false), 1.0);
+        let leaving = AppHover {
+            from: mid,
+            target: 0.0,
+            started,
+        };
+        assert_eq!(leaving.progress(started, true), mid);
+        assert_eq!(leaving.progress(started + APP_HOVER_DURATION, true), 0.0);
+    }
 
     #[test]
     fn reduced_motion_keeps_delays_and_disables_the_slide() {

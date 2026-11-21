@@ -23,10 +23,57 @@ jobs:
 
       - name: Cache Rust build output
         uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
 
       - name: Run the canonical quality gate
         shell: pwsh
         run: ./scripts/check.ps1
+
+      - name: Verify the running dock on the Windows desktop
+        shell: pwsh
+        run: ./scripts/smoke-dock.ps1
+
+      - name: Upload dock screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dockwind-desktop-smoke
+          path: target/dock-smoke/*.png
+
+      - name: Upload executable for Windows compatibility check
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dockwind-ci-executable
+          path: target/release/dockwind.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  legacy-backdrop:
+    needs: gate
+    if: github.event_name == 'pull_request'
+    runs-on: windows-2022
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Download the verified executable
+        uses: actions/download-artifact@v4
+        with:
+          name: Dockwind-ci-executable
+          path: target/release
+
+      - name: Verify legacy blur and acrylic on the running dock
+        shell: pwsh
+        run: ./scripts/smoke-dock.ps1 -BackdropOnly
+
+      - name: Upload legacy backdrop screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dockwind-legacy-backdrop-smoke
+          path: target/dock-smoke/*.png
 
   installer:
     needs: gate

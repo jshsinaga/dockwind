@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::config::PinnedApp;
@@ -7,7 +7,10 @@ use crate::config::PinnedApp;
 pub struct WindowInfo {
     pub hwnd: isize,
     pub title: String,
-    pub exe_path: PathBuf,
+    pub exe_path: Option<PathBuf>,
+    pub process_id: u32,
+    pub app_id: Option<String>,
+    pub shared_host: bool,
     pub display_name: Option<String>,
     pub is_minimized: bool,
     pub is_foreground: bool,
@@ -16,6 +19,7 @@ pub struct WindowInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DockItem {
     pub key: PathBuf,
+    executable: Option<PathBuf>,
     pub name: String,
     pub args: Vec<String>,
     pub windows: Vec<isize>,
@@ -26,8 +30,43 @@ pub struct DockItem {
 }
 
 impl DockItem {
+    pub fn executable_path(&self) -> Option<&Path> {
+        self.executable.as_deref()
+    }
+
     pub fn target_window(&self) -> Option<isize> {
         self.active_window.or_else(|| self.windows.first().copied())
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum WindowGroup {
+    Executable(String),
+    AppId(String),
+    Process(u32),
+    HostedWindow(isize),
+}
+
+impl WindowGroup {
+    fn for_window(window: &WindowInfo, executable: Option<&str>) -> Self {
+        if let Some(id) = &window.app_id {
+            Self::AppId(id.clone())
+        } else if window.shared_host {
+            Self::HostedWindow(window.hwnd)
+        } else if let Some(path) = executable {
+            Self::Executable(path.to_owned())
+        } else {
+            Self::Process(window.process_id)
+        }
+    }
+
+    fn tile_key(&self) -> PathBuf {
+        match self {
+            Self::Executable(path) => PathBuf::from(path),
+            Self::AppId(id) => PathBuf::from(format!("app-id:{id}")),
+            Self::Process(pid) => PathBuf::from(format!("process:{pid}")),
+            Self::HostedWindow(hwnd) => PathBuf::from(format!("window:{hwnd}")),
+        }
     }
 }
 
@@ -36,25 +75,43 @@ pub fn merge(
     running: &[WindowInfo],
     show_running_apps: bool,
 ) -> Vec<DockItem> {
-    let mut windows_by_app: BTreeMap<String, Vec<&WindowInfo>> = BTreeMap::new();
+    let mut windows_by_app: BTreeMap<WindowGroup, Vec<&WindowInfo>> = BTreeMap::new();
+    let mut groups_by_path: HashMap<String, Option<WindowGroup>> = HashMap::new();
     for window in running {
-        windows_by_app
-            .entry(normalize_path(&window.exe_path))
-            .or_default()
-            .push(window);
+        let executable = window.exe_path.as_deref().map(normalize_path);
+        let group = WindowGroup::for_window(window, executable.as_deref());
+        if let Some(path) = executable {
+            groups_by_path
+                .entry(path)
+                .and_modify(|existing| {
+                    if existing.as_ref() != Some(&group) {
+                        *existing = None;
+                    }
+                })
+                .or_insert_with(|| Some(group.clone()));
+        }
+        windows_by_app.entry(group).or_default().push(window);
     }
 
     let mut pinned_keys = HashSet::with_capacity(pinned.len());
     let mut items = Vec::with_capacity(pinned.len());
 
     for app in pinned {
-        let key = normalize_path(Path::new(&app.path));
-        let windows = windows_by_app.get(&key).map_or(&[][..], Vec::as_slice);
+        let path = normalize_path(Path::new(&app.path));
+        let executable_group = WindowGroup::Executable(path.clone());
+        // Keep distinct shell apps separate when several AppUserModelIDs share
+        // one executable and a pin does not identify a specific shell app.
+        let group = groups_by_path
+            .get(&path)
+            .and_then(Option::as_ref)
+            .unwrap_or(&executable_group);
+        let windows = windows_by_app.get(group).map_or(&[][..], Vec::as_slice);
         let (target, is_active) = window_target(windows);
-        pinned_keys.insert(key);
+        pinned_keys.insert(group.clone());
 
         items.push(DockItem {
             key: PathBuf::from(&app.path),
+            executable: Some(PathBuf::from(&app.path)),
             name: app.name.clone(),
             args: app.args.clone(),
             windows: windows.iter().map(|window| window.hwnd).collect(),
@@ -73,22 +130,38 @@ pub fn merge(
         if pinned_keys.contains(&key) {
             continue;
         }
-        let path = &windows[0].exe_path;
+        let first = windows[0];
+        let path = windows.iter().find_map(|window| window.exe_path.as_deref());
         let (target, is_active) = window_target(&windows);
+        let distinct_shell_app = matches!(key, WindowGroup::AppId(_))
+            && path.is_some_and(|path| {
+                groups_by_path
+                    .get(&normalize_path(path))
+                    .is_some_and(Option::is_none)
+            });
         let name = windows
             .iter()
             .find_map(|window| window.display_name.as_deref())
             .map(ToString::to_string)
             .or_else(|| {
-                path.file_stem()
-                    .map(|stem| stem.to_string_lossy().to_string())
+                if distinct_shell_app {
+                    return None;
+                }
+                path.and_then(Path::file_stem)
+                    .map(|stem| stem.to_string_lossy().into_owned())
                     .filter(|stem| !stem.is_empty())
             })
-            .or_else(|| windows.first().map(|window| window.title.clone()))
-            .unwrap_or_else(|| path.to_string_lossy().to_string());
+            .or_else(|| {
+                windows
+                    .iter()
+                    .find(|window| !window.title.trim().is_empty())
+                    .map(|window| window.title.clone())
+            })
+            .unwrap_or_else(|| format!("App {}", first.process_id));
 
         items.push(DockItem {
-            key: path.clone(),
+            key: key.tile_key(),
+            executable: path.map(Path::to_path_buf),
             name,
             args: Vec::new(),
             windows: windows.iter().map(|window| window.hwnd).collect(),
@@ -115,7 +188,17 @@ fn window_target(windows: &[&WindowInfo]) -> (Option<isize>, bool) {
 }
 
 fn normalize_path(path: &Path) -> String {
-    path.to_string_lossy().to_ascii_lowercase()
+    let normalized = path
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
+    if let Some(unc) = normalized.strip_prefix(r"\\?\unc\") {
+        format!(r"\\{unc}")
+    } else if let Some(local) = normalized.strip_prefix(r"\\?\") {
+        local.to_owned()
+    } else {
+        normalized
+    }
 }
 
 #[cfg(test)]
@@ -126,7 +209,10 @@ mod tests {
         WindowInfo {
             hwnd,
             title: "window".to_string(),
-            exe_path: PathBuf::from(path),
+            exe_path: Some(PathBuf::from(path)),
+            process_id: hwnd as u32,
+            app_id: None,
+            shared_host: false,
             display_name: None,
             is_minimized: false,
             is_foreground: foreground,
@@ -139,6 +225,30 @@ mod tests {
             path: path.to_string(),
             args: Vec::new(),
         }
+    }
+
+    #[test]
+    fn inaccessible_executable_still_has_an_activatable_running_tile() {
+        let mut first = window(10, "unused.exe", false);
+        first.exe_path = None;
+        first.title = "Elevated editor".into();
+        let mut second = first.clone();
+        second.hwnd = 11;
+        second.is_foreground = true;
+        let items = merge(&[], &[first, second], true);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].name, "Elevated editor");
+        assert_eq!(items[0].target_window(), Some(11));
+        assert!(items[0].executable_path().is_none());
+    }
+
+    #[test]
+    fn extended_path_and_slash_variants_match_the_same_pin() {
+        let pinned = [pinned("Editor", "C:/Apps/Editor.exe")];
+        let running = [window(1, r"\\?\C:\Apps\editor.exe", true)];
+        let items = merge(&pinned, &running, true);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].target_window(), Some(1));
     }
 
     #[test]
@@ -217,9 +327,47 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].name, "Settings");
         assert_eq!(
-            items[0].key,
-            PathBuf::from(r"C:\Windows\ImmersiveControlPanel\SystemSettings.exe")
+            items[0].executable_path(),
+            Some(Path::new(
+                r"C:\Windows\ImmersiveControlPanel\SystemSettings.exe"
+            ))
         );
+    }
+
+    #[test]
+    fn shell_apps_with_the_same_executable_keep_separate_tiles() {
+        let mut editor = window(1, "C:/Apps/editor.exe", false);
+        editor.app_id = Some("Editor.Main".into());
+        let mut preview = window(2, "C:/Apps/editor.exe", true);
+        preview.app_id = Some("Editor.Preview".into());
+        preview.title = "Preview".into();
+        let items = merge(&[], &[editor, preview], true);
+        assert_eq!(items.len(), 2);
+        assert_ne!(items[0].key, items[1].key);
+        assert_eq!(items[1].name, "Preview");
+        assert_eq!(items[1].target_window(), Some(2));
+    }
+
+    #[test]
+    fn a_pin_matches_the_only_shell_app_for_its_path() {
+        let pinned = [pinned("Editor", "C:/Apps/editor.exe")];
+        let mut running = window(1, "C:/Apps/editor.exe", true);
+        running.app_id = Some("Editor.Main".into());
+        let items = merge(&pinned, &[running], true);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].target_window(), Some(1));
+    }
+
+    #[test]
+    fn unresolved_shared_host_windows_stay_independent() {
+        let mut first = window(1, "unused.exe", false);
+        first.exe_path = None;
+        first.shared_host = true;
+        let mut second = first.clone();
+        second.hwnd = 2;
+        let items = merge(&[], &[first, second], true);
+        assert_eq!(items.len(), 2);
+        assert_ne!(items[0].key, items[1].key);
     }
 
     #[test]

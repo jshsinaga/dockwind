@@ -140,14 +140,15 @@ color. The dock has one surface and one hierarchy.
 
 | Mode | Behavior |
 |---|---|
-| `none` | Per-pixel alpha and custom-drawn radius. This is the required Windows 10 mode |
-| `mica` | DWM system backdrop on Windows 11 build 22621 or newer |
-| `acrylic` | DWM transient backdrop on Windows 11 build 22621 or newer |
+| `none` | Per-pixel alpha and the configured corner radius |
+| `mica` | DWM system backdrop on Windows 11 build 22621 or newer, legacy blur behind on older builds |
+| `acrylic` | DWM transient backdrop on Windows 11 build 22621 or newer, legacy acrylic on older builds |
 
-On an older build, Dockwind logs that the backdrop is unavailable and keeps the
-transparent surface. The Mica and Acrylic branches are not verified on this
-machine. Free radius in those modes is not guaranteed because DWM controls the
-window shape.
+The native material sits under the translucent dock tint. The window region
+follows the visible rounded bar as it slides, and Windows controls the outer
+corner shading of its material. A fully hidden dock clears the material and
+reapplies it on reveal. A failed material request restores the plain transparent
+surface and logs the Windows error.
 
 ## Context Menu
 

@@ -130,7 +130,6 @@ are not proposed new features.
 | U02 | Live display changes | Config geometry is live. A one-second poll repositions on display bounds and DPI changes. A real multi-DPI or resolution change is not yet exercised | DPI change and display change reposition the dock without a restart. The trigger strip is rechecked |
 | U03 | App-list polish | Pinned app management, `show_running_apps`, middle-click launch, and horizontal scrolling exist. Chevron buttons page through long app lists. Tooltips remain pending | Middle-click launches a second instance for pinned apps. Tooltips show the app name. A long app list remains usable within the configured width |
 | U04 | UWP identity | Implemented | `ApplicationFrameHost.exe` windows map to the child `Windows.UI.Core.CoreWindow` process. On 2026-11-11 Settings resolved to `SystemSettings.exe` with the name Settings. The icon uses the frame or path fallback; a visual icon check is still missing |
-| U05 | Windows 11 blur verification | Mica and Acrylic code exists and is gated on build 22621. It is not verified on Windows 11 | Mica and Acrylic are exercised on Windows 11 22H2 or newer. The radius behavior in those modes is recorded |
 | U06 | Manual robustness coverage | Implemented | A real Explorer restart was tested on 2026-11-11; the replacement taskbar was re-hidden and the tray icon returned. Controlled panic and console-control events restored the taskbar and auto-hide. A fullscreen app still needs a real check with the taskbar visible afterward |
 | U07 | Multi-DPI UI coverage | Running UI was exercised at 100% only. Conversions are unit-tested to 200% | The running UI is checked at 125%, 150%, and 200% with correct size and placement |
 | U08 | Shutdown latency | Verified | Quit completion is bounded. Three release runs on 2026-11-11 exited in 98 ms, 77 ms, and 77 ms after the quit hotkey |
@@ -141,6 +140,9 @@ These features were proposed after the original plan and are now implemented.
 `Implemented` still means at least one manual or environment check is missing.
 The installer and hosted workflows need execution evidence before they are called
 verified.
+
+The desktop backdrop checks passed on Windows build 26100. The observed
+rendering and frame bounds are recorded in [the handoff](HANDOFF.md#dock-controls-desktop-verification).
 
 ### 6.1 Settings UI
 
@@ -205,8 +207,7 @@ The current release is ready when all of these are true:
 
 - Replacing Start, the system tray, the notification center, or notification
   badges.
-- Supporting Windows 10 blur through the undocumented
-  `SetWindowCompositionAttribute` path.
+- Providing the Windows 11 system Mica material on older Windows builds.
 - A plugin system, theme marketplace, or scripting surface.
 - A database. Dockwind has no ERD.
 - A machine-wide installer, code signing, auto-updater, or delta updates in this

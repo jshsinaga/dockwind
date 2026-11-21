@@ -1,3 +1,4 @@
+#![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 mod app;
@@ -8,9 +9,23 @@ mod ui;
 mod win;
 
 fn main() {
+    let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
+    let has = |flag: &str| arguments.iter().any(|argument| argument == flag);
+    if [
+        "--restore-taskbar",
+        "--enable-autostart",
+        "--disable-autostart",
+        "--settings",
+    ]
+    .into_iter()
+    .any(has)
+    {
+        win::console::attach_parent();
+    }
+
     // The recovery command must stay first and independent of the mutex, the config,
     // and GPUI so a crashed or killed instance can always be recovered.
-    if std::env::args().any(|argument| argument == "--restore-taskbar") {
+    if has("--restore-taskbar") {
         if let Err(error) = win::taskbar::restore_native_recovery() {
             eprintln!("failed to restore the native taskbar: {error:#}");
             std::process::exit(1);
@@ -18,7 +33,7 @@ fn main() {
         return;
     }
 
-    if std::env::args().any(|argument| argument == "--enable-autostart") {
+    if has("--enable-autostart") {
         if let Err(error) = win::autostart::enable() {
             eprintln!("failed to enable autostart: {error:#}");
             std::process::exit(1);
@@ -26,7 +41,7 @@ fn main() {
         return;
     }
 
-    if std::env::args().any(|argument| argument == "--disable-autostart") {
+    if has("--disable-autostart") {
         if let Err(error) = win::autostart::disable() {
             eprintln!("failed to disable autostart: {error:#}");
             std::process::exit(1);
@@ -34,7 +49,7 @@ fn main() {
         return;
     }
 
-    if std::env::args().any(|argument| argument == "--settings") {
+    if has("--settings") {
         let path = match config::default_path() {
             Ok(path) => path,
             Err(error) => {

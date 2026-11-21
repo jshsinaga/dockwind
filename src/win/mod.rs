@@ -1,5 +1,6 @@
 pub mod appbar;
 pub mod autostart;
+pub mod console;
 pub mod cursor;
 pub mod dialogs;
 pub mod dwm;
@@ -11,6 +12,7 @@ pub mod menu;
 pub mod monitors;
 pub mod motion;
 pub mod single_instance;
+pub mod system_tray;
 pub mod taskbar;
 pub mod tray;
 pub mod windows_enum;
