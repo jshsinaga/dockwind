@@ -2,7 +2,8 @@
 [CmdletBinding()]
 param(
     [string]$Executable = (Join-Path $PSScriptRoot '../target/release/dockwind.exe'),
-    [string]$Screenshots = (Join-Path $PSScriptRoot '../target/dock-smoke')
+    [string]$Screenshots = (Join-Path $PSScriptRoot '../target/dock-smoke'),
+    [switch]$BackdropOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -110,7 +111,7 @@ public static class DockwindSmoke {
 }
 '@
 Add-Type -AssemblyName System.Drawing
-Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+if (!$BackdropOnly) { Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes }
 
 $fixtureTitle = 'Dockwind smoke background'
 $fixtureSecondTitle = 'Dockwind smoke second window'
@@ -399,18 +400,29 @@ try {
             return [IntPtr][Convert]::ToInt64($Matches[1], 16)
         }
     }
+    $build = Wait-DockState 'the backdrop backend to start' {
+        if ((Read-DockLogs) -match 'dock backdrop applied build=(\d+) mode=None') {
+            return [int]$Matches[1]
+        }
+    }
 
     $baseline = 0.0
     foreach ($sample in @('none', 'mica', 'acrylic', 'reset')) {
         $mode = if ($sample -eq 'reset') { 'none' } else { $sample }
         $expected = @{ none = 1; mica = 2; acrylic = 3 }[$mode]
+        $pattern = "dock backdrop applied build=$build mode=$mode"
+        $previous = [regex]::Matches((Read-DockLogs), $pattern, 'IgnoreCase').Count
         Write-SmokeConfig $mode
         $null = Wait-DockState "the $mode backdrop on the dock" {
-            $actual = 0
-            $status = [DockwindSmoke]::DwmGetWindowAttribute($window, 38, [ref]$actual, 4)
-            $status -eq 0 -and $actual -eq $expected
+            if ($build -ge 22621) {
+                $actual = 0
+                $status = [DockwindSmoke]::DwmGetWindowAttribute($window, 38, [ref]$actual, 4)
+                return $status -eq 0 -and $actual -eq $expected
+            }
+            $count = [regex]::Matches((Read-DockLogs), $pattern, 'IgnoreCase').Count
+            return $count -gt $previous -or ($sample -eq 'none' -and $count -gt 0)
         }
-        Write-Host "[smoke] Windows reported the $mode backdrop on the running dock"
+        Write-Host "[smoke] The running dock applied $mode on Windows build $build"
         if (![DockwindSmoke]::IsFrameless($window)) {
             throw "The native $mode frame extends beyond the dock client surface."
         }
@@ -429,12 +441,14 @@ try {
             }
         }
     }
-    Test-IconHover $window
-    Test-TrayButton $window
-    Test-WindowPicker $window
-    $restoreTaskbar = $true
-    Test-NativeTrayVisibility $window
-    $restoreTaskbar = $false
+    if (!$BackdropOnly) {
+        Test-IconHover $window
+        Test-TrayButton $window
+        Test-WindowPicker $window
+        $restoreTaskbar = $true
+        Test-NativeTrayVisibility $window
+        $restoreTaskbar = $false
+    }
 }
 catch {
     Write-Host (Read-DockLogs)
