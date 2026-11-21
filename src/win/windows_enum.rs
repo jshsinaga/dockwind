@@ -7,10 +7,7 @@ use tracing::debug;
 use windows::Win32::{
     Foundation::{CloseHandle, HWND, LPARAM, PROPERTYKEY, SetLastError, WIN32_ERROR},
     Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute},
-    System::Com::{
-        CoTaskMemFree,
-        StructuredStorage::{PropVariantClear, PropVariantToStringAlloc},
-    },
+    System::Com::StructuredStorage::{PropVariantClear, PropVariantToString},
     System::Threading::{
         AttachThreadInput, GetCurrentProcessId, GetCurrentThreadId, OpenProcess,
         PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
@@ -142,23 +139,19 @@ fn window_app_id(hwnd: HWND) -> Option<String> {
             .and_then(|store| store.GetValue(&APP_USER_MODEL_ID))
     }
     .ok()?;
-    // SAFETY: the conversion accepts an initialized PROPVARIANT. Its output,
-    // when present, is an independent null-terminated COM allocation.
-    let text = unsafe { PropVariantToStringAlloc(&property) };
+    // An AppUserModelID is at most 128 characters, plus its terminator.
+    let mut text = [0; 129];
+    // SAFETY: property is initialized and text is a writable UTF-16 buffer.
+    let converted = unsafe { PropVariantToString(&property, &mut text) };
     // SAFETY: GetValue initialized the variant; no references into it remain.
     if let Err(error) = unsafe { PropVariantClear(&mut property) } {
         debug!(%error, "failed to clear a window property");
     }
-    let text = text.ok()?;
-    if text.is_null() {
-        return None;
-    }
-    // SAFETY: text is the null-terminated allocation returned by propsys.
-    let value = unsafe { text.to_string() }.ok();
-    // SAFETY: the string was allocated with the COM allocator and the Rust
-    // conversion copied it before this free.
-    unsafe { CoTaskMemFree(Some(text.0.cast())) };
-    value.filter(|id| !id.trim().is_empty())
+    converted.ok()?;
+    let length = text.iter().position(|&unit| unit == 0)?;
+    String::from_utf16(&text[..length])
+        .ok()
+        .filter(|id| !id.trim().is_empty())
 }
 
 fn is_application_frame_host(path: &Path) -> bool {
@@ -583,6 +576,7 @@ mod tests {
     fn native_windows_with_distinct_app_ids_are_enumerated_as_separate_apps() {
         use std::mem::ManuallyDrop;
         use windows::Win32::System::{Com::StructuredStorage::*, Variant::VT_LPWSTR};
+        use windows::Win32::UI::Shell::SHStrDupW;
         use windows::Win32::UI::WindowsAndMessaging::{
             CreateWindowExW, DestroyWindow, SW_SHOWNOACTIVATE, WS_POPUP,
         };
@@ -592,8 +586,14 @@ mod tests {
 
         impl Drop for TestWindow {
             fn drop(&mut self) {
-                // SAFETY: the test owns the window and runs on its creator thread.
-                let _ = unsafe { DestroyWindow(self.0) };
+                // SAFETY: the test owns the live window and COM is still active
+                // on the creator thread. An empty variant removes the property.
+                unsafe {
+                    if let Ok(store) = SHGetPropertyStoreForWindow::<IPropertyStore>(self.0) {
+                        let _ = store.SetValue(&APP_USER_MODEL_ID, &PROPVARIANT::default());
+                    }
+                    let _ = DestroyWindow(self.0);
+                }
             }
         }
 
@@ -617,24 +617,31 @@ mod tests {
                 )?
             };
             let window = TestWindow(hwnd);
-            let value = PROPVARIANT {
+            // SAFETY: app_id is a null-terminated string and SHStrDupW allocates
+            // a copy with the COM allocator expected by PROPVARIANT.
+            let allocated_id = unsafe { SHStrDupW(app_id)? };
+            let mut value = PROPVARIANT {
                 Anonymous: PROPVARIANT_0 {
                     Anonymous: ManuallyDrop::new(PROPVARIANT_0_0 {
                         vt: VT_LPWSTR,
                         Anonymous: PROPVARIANT_0_0_0 {
-                            pwszVal: PWSTR(app_id.0.cast_mut()),
+                            pwszVal: allocated_id,
                         },
                         ..Default::default()
                     }),
                 },
             };
-            // SAFETY: COM is initialized by the test. SetValue copies the
-            // borrowed static string and the live HWND belongs to this test.
-            unsafe {
-                SHGetPropertyStoreForWindow::<IPropertyStore>(hwnd)?
-                    .SetValue(&APP_USER_MODEL_ID, &value)?;
-                let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-            }
+            // SAFETY: COM is initialized by the test. SetValue borrows the
+            // initialized variant and the live HWND belongs to this test.
+            let result = unsafe {
+                SHGetPropertyStoreForWindow::<IPropertyStore>(hwnd)
+                    .and_then(|store| store.SetValue(&APP_USER_MODEL_ID, &value))
+            };
+            // SAFETY: the variant is initialized and owns the allocated string.
+            unsafe { PropVariantClear(&mut value)? };
+            result?;
+            // SAFETY: the window is live and belongs to this thread.
+            let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
             Ok(window)
         }
 
