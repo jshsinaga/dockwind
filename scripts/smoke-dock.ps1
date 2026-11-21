@@ -49,6 +49,18 @@ public static class DockwindSmoke {
     [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(IntPtr window, IntPtr processId);
 
+    [DllImport("user32.dll", EntryPoint = "GetWindowThreadProcessId")]
+    private static extern uint GetWindowAndProcessId(IntPtr window, out uint processId);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    public static extern bool IsWindowVisible(IntPtr window);
+
+    [DllImport("user32.dll")]
+    private static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
+
     [DllImport("user32.dll")]
     private static extern bool GetGUIThreadInfo(uint thread, ref GuiThreadInfo info);
 
@@ -58,6 +70,16 @@ public static class DockwindSmoke {
     public static void Click() {
         mouse_event(2, 0, 0, 0, UIntPtr.Zero);
         mouse_event(4, 0, 0, 0, UIntPtr.Zero);
+    }
+
+    public static void Key(byte key) {
+        keybd_event(key, 0, 0, UIntPtr.Zero);
+        keybd_event(key, 0, 2, UIntPtr.Zero);
+    }
+
+    public static uint WindowProcess(IntPtr window) {
+        GetWindowAndProcessId(window, out var processId);
+        return processId;
     }
 
     public static bool IsDockMenuOpen(IntPtr window) {
@@ -74,12 +96,14 @@ public static class DockwindSmoke {
 Add-Type -AssemblyName System.Drawing
 
 $fixtureTitle = 'Dockwind smoke background'
+$fixtureSecondTitle = 'Dockwind smoke second window'
 
 function Start-Fixture {
-    Start-Job -ArgumentList $fixtureTitle -ScriptBlock {
-        param([string]$Title)
+    Start-Job -ArgumentList $fixtureTitle, $fixtureSecondTitle -ScriptBlock {
+        param([string]$Title, [string]$SecondTitle)
         Add-Type -AssemblyName System.Windows.Forms
         $form = [Windows.Forms.Form]::new()
+        $second = [Windows.Forms.Form]::new()
         $form.Text = $Title
         $form.FormBorderStyle = 'None'
         $form.StartPosition = 'Manual'
@@ -91,10 +115,15 @@ function Start-Fixture {
                 $eventArgs.Graphics.FillRectangle([Drawing.Brushes]::White, $x, 0, 6, $sender.ClientSize.Height)
             }
         })
+        $second.Text = $SecondTitle
+        $second.StartPosition = 'Manual'
+        $second.Bounds = [Drawing.Rectangle]::new($form.Left + 12, $form.Top + 12, 250, 120)
+        $second.Show()
         try {
             [Windows.Forms.Application]::Run($form)
         }
         finally {
+            $second.Dispose()
             $form.Dispose()
         }
     }
@@ -247,21 +276,83 @@ path = '$app'
     }
 }
 
-function Test-TrayButton([IntPtr]$Window) {
+function Open-TrayMenu([IntPtr]$Window) {
     $rect = Get-DockRect $Window
     $inset = [int](($rect.Right - $rect.Left) * 27 / 560)
     $null = [DockwindSmoke]::SetCursorPos(($rect.Right - $inset), [int](($rect.Top + $rect.Bottom) / 2))
     [DockwindSmoke]::Click()
     $null = Wait-DockState 'the Dockwind tray menu' { [DockwindSmoke]::IsDockMenuOpen($Window) }
+}
+
+function Test-TrayButton([IntPtr]$Window) {
+    Open-TrayMenu $Window
     [DockwindSmoke]::DismissMenu($Window)
     $null = Wait-DockState 'the tray menu to close' { ![DockwindSmoke]::IsDockMenuOpen($Window) }
     Write-Host '[smoke] The Tray button opened and dismissed the native menu'
+}
+
+function Test-WindowPicker([IntPtr]$Window) {
+    $first = [DockwindSmoke]::FindWindow($null, $fixtureTitle)
+    $second = [DockwindSmoke]::FindWindow($null, $fixtureSecondTitle)
+    $fixtureProcess = [DockwindSmoke]::WindowProcess($first)
+    if ($fixtureProcess -eq 0 -or $fixtureProcess -ne [DockwindSmoke]::WindowProcess($second)) {
+        throw 'The two smoke test windows should belong to the same process.'
+    }
+    $fixturePath = (Get-Process -Id $fixtureProcess).Path
+    $notepadPath = Join-Path $env:WINDIR 'System32/notepad.exe'
+    $updates = [regex]::Matches((Read-DockLogs), 'dock appearance updated').Count
+    (Get-Content -LiteralPath $configPath -Raw).Replace($notepadPath, $fixturePath) |
+        Set-Content -LiteralPath $configPath -Encoding utf8NoBOM
+    $null = Wait-DockState 'the pinned window fixture' {
+        [regex]::Matches((Read-DockLogs), 'dock appearance updated').Count -gt $updates
+    }
+    $rect = Get-DockRect $Window
+    $null = [DockwindSmoke]::SetCursorPos([int](($rect.Left + $rect.Right) / 2), [int](($rect.Top + $rect.Bottom) / 2))
+    $previous = [DockwindSmoke]::GetForegroundWindow()
+    [DockwindSmoke]::Click()
+    $null = Wait-DockState 'the window picker for the grouped apps' { [DockwindSmoke]::IsDockMenuOpen($Window) }
+    [DockwindSmoke]::Key(0x23) # End selects the last window, below the foreground one.
+    [DockwindSmoke]::Key(0x0D) # Enter activates the selected window.
+    $null = Wait-DockState 'the selected app window in the foreground' {
+        $foreground = [DockwindSmoke]::GetForegroundWindow()
+        $foreground -ne $previous -and ($foreground -eq $first -or $foreground -eq $second)
+    }
+    Write-Host '[smoke] The window picker switched between two windows from the same app'
+}
+
+function Test-NativeTrayVisibility([IntPtr]$Window) {
+    $taskbar = [DockwindSmoke]::FindWindow('Shell_TrayWnd', $null)
+    if ($taskbar -eq [IntPtr]::Zero) {
+        Write-Host '[smoke] Explorer taskbar is unavailable on this test desktop'
+        return
+    }
+    $normalConfig = Get-Content -LiteralPath $configPath -Raw
+    try {
+        $normalConfig.Replace('hide_native_taskbar = false', 'hide_native_taskbar = true') |
+            Set-Content -LiteralPath $configPath -Encoding utf8NoBOM
+        $null = Wait-DockState 'the native taskbar to hide' { ![DockwindSmoke]::IsWindowVisible($taskbar) }
+        foreach ($visible in @($true, $false)) {
+            Start-Sleep -Milliseconds 300
+            Open-TrayMenu $Window
+            [DockwindSmoke]::Key(0x24) # Home selects the native taskbar action.
+            [DockwindSmoke]::Key(0x0D)
+            $null = Wait-DockState "native taskbar visibility $visible" {
+                [DockwindSmoke]::IsWindowVisible($taskbar) -eq $visible
+            }
+        }
+        Write-Host '[smoke] The dock tray revealed and re-hid the native Windows taskbar'
+    }
+    finally {
+        $normalConfig | Set-Content -LiteralPath $configPath -Encoding utf8NoBOM
+        $null = Wait-DockState 'the native taskbar to restore' { [DockwindSmoke]::IsWindowVisible($taskbar) }
+    }
 }
 
 $null = New-Item -ItemType Directory -Path $configDir -Force
 $null = New-Item -ItemType Directory -Path $Screenshots -Force
 $process = $null
 $fixture = $null
+$restoreTaskbar = $false
 try {
     Write-SmokeConfig 'none'
     $fixture = Start-Fixture
@@ -305,6 +396,10 @@ try {
     }
     Test-IconHover $window
     Test-TrayButton $window
+    Test-WindowPicker $window
+    $restoreTaskbar = $true
+    Test-NativeTrayVisibility $window
+    $restoreTaskbar = $false
 }
 catch {
     Write-Host (Read-DockLogs)
@@ -315,6 +410,9 @@ finally {
     if ($process -and !$process.HasExited) {
         Stop-Process -Id $process.Id
         $process.WaitForExit()
+    }
+    if ($restoreTaskbar) {
+        Start-Process -FilePath $Executable -ArgumentList '--restore-taskbar' -Wait
     }
     if ($fixture) { Remove-Job -Job $fixture -Force }
     Remove-Item -LiteralPath $configPath -ErrorAction SilentlyContinue
