@@ -21,6 +21,13 @@ public static class DockwindSmoke {
     [StructLayout(LayoutKind.Sequential)]
     public struct Rect { public int Left, Top, Right, Bottom; }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct GuiThreadInfo {
+        public int Size, Flags;
+        public IntPtr Active, Focus, Capture, MenuOwner, MoveSize, Caret;
+        public Rect CaretRect;
+    }
+
     [DllImport("dwmapi.dll")]
     public static extern int DwmGetWindowAttribute(IntPtr window, int attribute, out int value, int size);
 
@@ -32,6 +39,36 @@ public static class DockwindSmoke {
 
     [DllImport("user32.dll")]
     public static extern bool GetWindowRect(IntPtr window, out Rect rect);
+
+    [DllImport("user32.dll")]
+    public static extern bool SetCursorPos(int x, int y);
+
+    [DllImport("user32.dll")]
+    private static extern void mouse_event(uint flags, uint x, uint y, uint data, UIntPtr extra);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr window, IntPtr processId);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetGUIThreadInfo(uint thread, ref GuiThreadInfo info);
+
+    [DllImport("user32.dll")]
+    private static extern bool PostMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
+
+    public static void Click() {
+        mouse_event(2, 0, 0, 0, UIntPtr.Zero);
+        mouse_event(4, 0, 0, 0, UIntPtr.Zero);
+    }
+
+    public static bool IsDockMenuOpen(IntPtr window) {
+        var info = new GuiThreadInfo { Size = Marshal.SizeOf<GuiThreadInfo>() };
+        return GetGUIThreadInfo(GetWindowThreadProcessId(window, IntPtr.Zero), ref info)
+            && info.MenuOwner == window;
+    }
+
+    public static void DismissMenu(IntPtr window) {
+        PostMessage(window, 0x001F, IntPtr.Zero, IntPtr.Zero); // WM_CANCELMODE
+    }
 }
 '@
 Add-Type -AssemblyName System.Drawing
@@ -97,18 +134,35 @@ function Wait-DockState([string]$Description, [scriptblock]$Check) {
     throw "Timed out waiting for $Description."
 }
 
-function Read-DockPixels([IntPtr]$Window, [string]$Name) {
+function Get-DockRect([IntPtr]$Window) {
     $rect = [DockwindSmoke+Rect]::new()
     if (![DockwindSmoke]::GetWindowRect($Window, [ref]$rect)) {
         throw 'Could not read the dock bounds.'
     }
-    Start-Sleep -Milliseconds 180
+    return $rect
+}
+
+function Save-DockImage([IntPtr]$Window, [string]$Name) {
+    $rect = Get-DockRect $Window
+    Start-Sleep -Milliseconds 250
     $null = [DockwindSmoke]::DwmFlush()
     $bitmap = [Drawing.Bitmap]::new(($rect.Right - $rect.Left), ($rect.Bottom - $rect.Top))
     $graphics = [Drawing.Graphics]::FromImage($bitmap)
     try {
         $graphics.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bitmap.Size)
-        $bitmap.Save((Join-Path $Screenshots "$Name.png"))
+        $path = Join-Path $Screenshots "$Name.png"
+        $bitmap.Save($path)
+        return $path
+    }
+    finally {
+        $graphics.Dispose()
+        $bitmap.Dispose()
+    }
+}
+
+function Read-EdgeContrast([string]$Path) {
+    $bitmap = [Drawing.Bitmap]::new($Path)
+    try {
         # Measure adjacent pixels across the empty portion to the left of the clock.
         $y = [int]($bitmap.Height / 2)
         $sum = 0.0
@@ -118,9 +172,90 @@ function Read-DockPixels([IntPtr]$Window, [string]$Name) {
         return ($sum / 120)
     }
     finally {
-        $graphics.Dispose()
         $bitmap.Dispose()
     }
+}
+
+function Count-IconPixelChanges([string]$Before, [string]$After) {
+    $first = [Drawing.Bitmap]::new($Before)
+    $second = [Drawing.Bitmap]::new($After)
+    try {
+        if ($first.Size -ne $second.Size) {
+            throw 'Hovering resized the dock window.'
+        }
+        $centerX = [int]($first.Width / 2)
+        $centerY = [int]($first.Height / 2)
+        $changes = 0
+        for ($y = $centerY - 24; $y -le $centerY + 24; $y++) {
+            for ($x = $centerX - 27; $x -le $centerX + 27; $x++) {
+                if ($first.GetPixel($x, $y) -ne $second.GetPixel($x, $y)) { $changes++ }
+            }
+        }
+        return $changes
+    }
+    finally {
+        $first.Dispose()
+        $second.Dispose()
+    }
+}
+
+function Test-IconHover([IntPtr]$Window) {
+    $app = Join-Path $env:WINDIR 'System32/notepad.exe'
+    foreach ($case in @(
+        @{ name = 'off'; zoom = 'false'; background = 'false' },
+        @{ name = 'zoom'; zoom = 'true'; background = 'false' },
+        @{ name = 'background'; zoom = 'false'; background = 'true' },
+        @{ name = 'both'; zoom = 'true'; background = 'true' }
+    )) {
+        $appearanceUpdates = [regex]::Matches((Read-DockLogs), 'dock appearance updated').Count
+        @"
+[appearance]
+width = 560
+height = 92
+alignment_anchor = "dock"
+background = "#172036F0"
+hover_zoom = $($case.zoom)
+hover_background = $($case.background)
+
+[behavior]
+auto_hide = false
+hide_native_taskbar = false
+show_running_apps = false
+
+[clock]
+show = false
+
+[[pinned]]
+name = "Notepad"
+path = '$app'
+"@ | Set-Content -LiteralPath $configPath -Encoding utf8NoBOM
+        $null = Wait-DockState "the $($case.name) hover settings" {
+            [regex]::Matches((Read-DockLogs), 'dock appearance updated').Count -gt $appearanceUpdates
+        }
+        $rect = Get-DockRect $Window
+        $x = [int](($rect.Left + $rect.Right) / 2)
+        $y = [int](($rect.Top + $rect.Bottom) / 2)
+        $null = [DockwindSmoke]::SetCursorPos($x, $rect.Top - 24)
+        $before = Save-DockImage $Window "hover-$($case.name)-before"
+        $null = [DockwindSmoke]::SetCursorPos($x, $y)
+        $after = Save-DockImage $Window "hover-$($case.name)-after"
+        $changes = Count-IconPixelChanges $before $after
+        if (($case.name -eq 'off' -and $changes -gt 10) -or ($case.name -ne 'off' -and $changes -lt 30)) {
+            throw "Unexpected icon rendering with hover $($case.name). Pixels changed: $changes."
+        }
+        Write-Host "[smoke] Hover $($case.name) changed $changes icon pixels at fixed dock bounds"
+    }
+}
+
+function Test-TrayButton([IntPtr]$Window) {
+    $rect = Get-DockRect $Window
+    $inset = [int](($rect.Right - $rect.Left) * 27 / 560)
+    $null = [DockwindSmoke]::SetCursorPos(($rect.Right - $inset), [int](($rect.Top + $rect.Bottom) / 2))
+    [DockwindSmoke]::Click()
+    $null = Wait-DockState 'the Dockwind tray menu' { [DockwindSmoke]::IsDockMenuOpen($Window) }
+    [DockwindSmoke]::DismissMenu($Window)
+    $null = Wait-DockState 'the tray menu to close' { ![DockwindSmoke]::IsDockMenuOpen($Window) }
+    Write-Host '[smoke] The Tray button opened and dismissed the native menu'
 }
 
 $null = New-Item -ItemType Directory -Path $configDir -Force
@@ -153,7 +288,7 @@ try {
             $status -eq 0 -and $actual -eq $expected
         }
         Write-Host "[smoke] Windows reported the $mode backdrop on the running dock"
-        $contrast = Read-DockPixels $window $sample
+        $contrast = Read-EdgeContrast (Save-DockImage $window $sample)
         Write-Host "[smoke] $sample edge contrast = $contrast"
         switch ($sample) {
             'none' {
@@ -168,6 +303,8 @@ try {
             }
         }
     }
+    Test-IconHover $window
+    Test-TrayButton $window
 }
 catch {
     Write-Host (Read-DockLogs)
