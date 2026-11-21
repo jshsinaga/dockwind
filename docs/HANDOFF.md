@@ -1,8 +1,8 @@
 # Dockwind Handoff
 
-Last updated: 2026-11-11
-Stage: settings, tray, live theming, installer, and CI integrated. Full gate
-passed on 2026-11-11. A clean-profile installer check remains.
+Last updated: 2026-11-21
+Stage: the layouts and Settings improvements are merged. The Windows CI gate
+passed for PR #1. Clean-profile installer and Windows desktop checks remain.
 Historical baseline: `482bd7a`
 
 This is the starting point for a fresh agent. It records current state, pending
@@ -14,7 +14,7 @@ work, and dated evidence. It does not repeat the architecture. Read
 | Item | Value |
 |---|---|
 | Product | Floating Windows 10/11 dock bar in Rust |
-| Version | 0.3.0 |
+| Version | 0.4.0 |
 | UI | GPUI `=0.2.2`, native Windows target |
 | Branch | `main` |
 | Source layout | Target layout integrated |
@@ -187,6 +187,13 @@ Read this before changing taskbar or worker code.
   test succeeds.
 
 ## Evidence
+
+### 2026-11-21 release preparation
+
+The full Windows quality gate passed for PR #1 on commit `97d33ba`, merged
+into `main` as `9fef7a1`. The run covered formatting, check, Clippy, tests,
+the release build, and Markdown link checks.
+[Windows CI run](https://github.com/jshsinaga/dockwind/actions/runs/44869841544)
 
 ### 2026-11-18 dock and Settings improvements
 

@@ -3,6 +3,49 @@
 All notable changes to Dockwind are recorded here. Versions follow
 `MAJOR.MINOR.PATCH` from `Cargo.toml`.
 
+## 0.4.0 - 2026-11-21
+
+### Added
+
+- Save, rename, duplicate, and load named sets of pinned apps. Switch from the
+  dock's right-click menu or choose **Next layout** to cycle through distinct
+  sets in name order.
+- Edit pinned app names and add, edit, reorder, or remove launch arguments in
+  Settings. Shift+click or middle-click starts another instance with that
+  pin's arguments.
+- Page through overflowing app lists with chevrons that dim at the ends.
+- Use Ctrl+A, Ctrl+C, Ctrl+X, Ctrl+V, and Ctrl+S in Settings. Press Enter in the
+  installed-app picker to pin the sole matching result.
+
+### Changed
+
+- Auto-hide slides and fades together, reverses when the pointer returns
+  mid-hide, and respects the Windows animation effects setting. App tiles stay
+  in place on hover and show distinct hover, press, and foreground states.
+- The dock stays within the display work area and reserves space for the clock
+  beside the scrolling app strip. Switching layouts resets the strip to its
+  first app.
+- Window discovery and icon loading run in the background. The installed-app
+  picker scans in the background, draws only visible rows, and searches app
+  names and executable paths.
+- The clock updates every second when either line shows seconds, pauses while
+  hidden, and redraws only when its text changes.
+
+### Fixed
+
+- Settings offers to save or discard unsaved edits before closing. External
+  config changes can be reloaded from Settings, and a second external edit
+  requires a new overwrite confirmation.
+- Config saves use separate temporary files. Autostart-only changes leave the
+  config file untouched.
+- Invalid clock formats show an inline preview error and can be corrected before
+  saving. Focusing the background hex field preserves its alpha value.
+- Duplicate pins keep independent tile state, and clicks remain tied to the
+  rendered app when the running list changes.
+- Native pickers report errors in Settings. File browsing uses the modern
+  Windows dialog to preserve the working directory, and installed-app discovery
+  skips linked directories.
+
 ## 0.3.0 - 2026-11-11
 
 ### Added

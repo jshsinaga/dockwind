@@ -8,7 +8,7 @@ Dockwind shows pinned and running apps, a clock and date, and optional auto-hide
 It has a native settings window, a system tray icon, per-user autostart, a global
 quit hotkey, a standalone taskbar restore command, and an Inno Setup installer.
 
-Latest release: [Dockwind 0.2.0](https://github.com/jshsinaga/dockwind/releases/tag/v0.2.0).
+Latest release: [Dockwind 0.4.0](https://github.com/jshsinaga/dockwind/releases/tag/v0.4.0).
 
 Current build status: the full gate passes on the current source. Settings, tray,
 live geometry, live taskbar toggling, native auto-hide suspension, AppBar
