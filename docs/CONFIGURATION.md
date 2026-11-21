@@ -460,10 +460,10 @@ Do not swallow a write or parse error. Log it or show it to the user.
 | Entry | Action |
 |---|---|
 | Dock right-click | Settings..., Reload config, autostart toggle, Restore taskbar & Quit |
-| Dock Tray button | Windows settings shortcuts and temporary access to the native notification area when Dockwind hides the taskbar |
+| Dock Tray button | System status, volume and mute controls, Windows settings shortcuts, and temporary access to the native notification area when Dockwind hides the taskbar |
 | Tray right-click | Settings..., Reload config, Start with Windows, Restore taskbar, Quit |
 | Tray double-click | Open settings |
-| `dockwind --settings` | Open the settings window and wait for it to close |
+| `dockwind --settings` | Open or focus the settings window |
 
 The tray icon is created by a dedicated worker thread. It is removed on normal
 shutdown and re-added if Explorer broadcasts `TaskbarCreated`. While the native

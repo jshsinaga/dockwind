@@ -262,25 +262,22 @@ Keep editing, Discard, and Save & Close, including an external config conflict.
 With the app picker, taskbar confirmation, and pinned-app delete confirmation
 open, verify that clicks and scrolling do not reach Settings behind them.
 
-### Dock controls follow-up
+### Dock controls desktop verification
 
-On a Windows desktop, try each combination of Hover zoom and Hover background.
-Check that entering and leaving a tile keeps dock height, icon spacing, and
-indicator positions fixed, including when Windows animation effects are off.
+On 2026-11-21, [Windows CI](https://github.com/jshsinaga/dockwind/actions/runs/44880068582)
+ran 157 Rust tests and launched the release application on the Windows Server
+2025 desktop (build 26100, 100% DPI).
 
-Open Explorer, an elevated app, and an app with an owned modal dialog. Compare
-the running tiles to the Windows taskbar. Minimize, switch focus, and close
-those windows, including the dialog, and check that Dockwind updates the tiles.
+| Area | Observed result |
+|---|---|
+| Icon hover | Disabled, zoom only, background only, and both settings rendered independently. Pointer exit restored the resting state. All captures had the same dock dimensions |
+| Window sync | Native windows with distinct AppUserModelIDs stayed separate. The dock window picker switched focus between two windows from one executable |
+| Tray | The dock button opened and dismissed the menu. Its show and hide actions changed the actual Windows taskbar visibility. The test restored the taskbar |
+| Startup | The release executable launched on the desktop. Its PE header declared the Windows GUI subsystem |
+| Blur | None, Mica, Acrylic, and None applied without restarting. Screenshots over a striped test window showed both materials soften its pattern, and None restored the original contrast. The client and native frame bounds matched |
 
-With Hide Windows taskbar and Reserve space enabled, open the dock Tray menu
-and show the native taskbar. Open its hidden-icons menu and a third-party tray
-icon's context menu. Hide the taskbar again from Dockwind and check that the
-dock resumes reserving space. Repeat with Windows auto-hide enabled. Select a
-Windows settings shortcut with the dock clock hidden.
-
-Launch the release executable from Explorer and from a Start Menu shortcut.
-Check for a console flash. Run the Settings command from an existing terminal
-and verify that it still opens the settings window.
+The runner uses test windows and a standard display. Third-party app behavior,
+physical audio devices, and other display scales were outside this run.
 
 ### Historical evidence, baseline `482bd7a`
 
@@ -345,7 +342,6 @@ Not verified on the current integrated code:
 
 - Clean-profile install and Start Menu shortcut creation. The upgrade, uninstall, and shortcut removal path passed.
 - Windows 11 behavior.
-- Mica or Acrylic.
 - Real multi-DPI desktop.
 
 Startup geometry, first-frame DirectComposition presentation without user click,
@@ -369,11 +365,9 @@ Order is a recommendation, not a commitment.
    repositions itself. See PRD U02.
 3. **App-list polish.** Add tooltips and a clearer overflow affordance.
    Middle-click launch and horizontal scrolling are implemented. See PRD U03.
-4. **Windows 11 blur.** Exercise Mica and Acrylic on Windows 11 22H2 or newer.
-   See PRD U05.
-5. **Multi-DPI UI.** Exercise the running UI at 125%, 150%, and 200%. See PRD U07.
-6. **Settings polish.** Inline field validation.
-7. **Code signing.** The installer and binary are unsigned. Add signing only with
+4. **Multi-DPI UI.** Exercise the running UI at 125%, 150%, and 200%. See PRD U07.
+5. **Settings polish.** Inline field validation.
+6. **Code signing.** The installer and binary are unsigned. Add signing only with
    a certificate and a recorded decision.
 
 ## Known Limitations
@@ -393,7 +387,6 @@ section 9. The short version:
 - UWP frame hosts map to the hosted child process for identity and name; the
   icon is not visually checked.
 - `clock.locale` is unused.
-- Mica and Acrylic are unverified on Windows 11.
 - The running UI was exercised at 100% DPI only.
 - The installer is built and the first-run, 0.1.0 to 0.2.0 upgrade, install, and
   uninstall path passed. A clean Windows profile was not tested. The installer is

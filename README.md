@@ -282,8 +282,8 @@ manifest and icon. The embedded resources are checked by the build.
 - Placement updates live for config changes and is polled once per second for
   work-area, display, and DPI changes. A real multi-DPI or resolution change has
   not been manually exercised.
-- The Mica and Acrylic backdrop branches need Windows 11 22H2 or newer and have
-  not been verified. The current machine is Windows 10 22H2.
+- Windows 11 22H2 and newer uses the Windows Mica and Acrylic materials. Older
+  Windows builds use their legacy blur and acrylic effects.
 - The running UI was exercised at 100% DPI only. The physical to logical
   conversion and dock rectangle are unit-tested at 100%, 125%, 150%, and 200%.
 - A fullscreen app check is still pending. Panic restore, console-control
