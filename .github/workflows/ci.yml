@@ -23,12 +23,14 @@ jobs:
 
       - name: Cache Rust build output
         uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
 
       - name: Run the canonical quality gate
         shell: pwsh
         run: ./scripts/check.ps1
 
-      - name: Verify backdrop changes on the running dock
+      - name: Verify the running dock on the Windows desktop
         shell: pwsh
         run: ./scripts/smoke-dock.ps1
 

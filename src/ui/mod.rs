@@ -73,7 +73,9 @@ pub fn open_dock_window(
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(TitlebarOptions {
                     title: Some(SharedString::from("Dockwind")),
-                    appears_transparent: true,
+                    // Dockwind removes the native frame. GPUI's transparent
+                    // titlebar would reserve resize insets around the dock.
+                    appears_transparent: false,
                     ..Default::default()
                 }),
                 focus: false,

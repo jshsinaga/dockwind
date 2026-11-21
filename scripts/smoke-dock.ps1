@@ -22,6 +22,9 @@ public static class DockwindSmoke {
     public struct Rect { public int Left, Top, Right, Bottom; }
 
     [StructLayout(LayoutKind.Sequential)]
+    private struct Point { public int X, Y; }
+
+    [StructLayout(LayoutKind.Sequential)]
     private struct GuiThreadInfo {
         public int Size, Flags;
         public IntPtr Active, Focus, Capture, MenuOwner, MoveSize, Caret;
@@ -42,6 +45,20 @@ public static class DockwindSmoke {
 
     [DllImport("user32.dll")]
     public static extern bool GetWindowRect(IntPtr window, out Rect rect);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetClientRect(IntPtr window, out Rect rect);
+
+    [DllImport("user32.dll")]
+    private static extern bool ClientToScreen(IntPtr window, ref Point point);
+
+    public static bool IsFrameless(IntPtr window) {
+        var origin = new Point();
+        return GetWindowRect(window, out var frame) && GetClientRect(window, out var client)
+            && ClientToScreen(window, ref origin)
+            && frame.Left == origin.X && frame.Top == origin.Y
+            && frame.Right - frame.Left == client.Right && frame.Bottom - frame.Top == client.Bottom;
+    }
 
     [DllImport("user32.dll")]
     public static extern bool SetCursorPos(int x, int y);
@@ -387,6 +404,9 @@ try {
             $status -eq 0 -and $actual -eq $expected
         }
         Write-Host "[smoke] Windows reported the $mode backdrop on the running dock"
+        if (![DockwindSmoke]::IsFrameless($window)) {
+            throw "The native $mode frame extends beyond the dock client surface."
+        }
         $contrast = Read-EdgeContrast (Save-DockImage $window $sample)
         Write-Host "[smoke] $sample edge contrast = $contrast"
         switch ($sample) {

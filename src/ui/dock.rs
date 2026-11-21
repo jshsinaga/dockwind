@@ -256,10 +256,11 @@ impl DockView {
     fn set_app_hover(&mut self, index: usize, hovered: bool, cx: &mut Context<Self>) {
         let now = Instant::now();
         let target = if hovered { 1.0 } else { 0.0 };
-        let from = self
-            .app_hover
-            .get(&index)
-            .map_or(0.0, |hover| hover.progress(now, self.animations_enabled));
+        let current = self.app_hover.get(&index);
+        if current.map_or(0.0, |hover| hover.target) == target {
+            return;
+        }
+        let from = current.map_or(0.0, |hover| hover.progress(now, self.animations_enabled));
         self.app_hover.insert(
             index,
             AppHover {
@@ -628,6 +629,7 @@ impl DockView {
                 false
             }
         };
+        self.window_region = None;
     }
 
     fn open_menu<T: 'static>(
@@ -861,6 +863,7 @@ impl Render for DockView {
             ]
         };
 
+        self.sync_backdrop(!is_hidden);
         if self.window_region != Some(region) {
             let [y, width, height, radius] = region;
             match win::dwm::set_window_shape(self.geometry.hwnd, 0, y, width, height, radius) {
@@ -868,12 +871,21 @@ impl Render for DockView {
                 Err(error) => warn!(%error, "failed to update the dock window region"),
             }
         }
-        self.sync_backdrop(!is_hidden);
-
         let hover_now = Instant::now();
         let hover_effects = self.theme.hover_zoom || self.theme.hover_background;
         if is_hidden || !hover_effects {
             self.app_hover.clear();
+        } else if !window.is_window_hovered() {
+            // A native window leave refreshes GPUI without a per-tile mouse move.
+            for hover in self
+                .app_hover
+                .values_mut()
+                .filter(|hover| hover.target > 0.0)
+            {
+                hover.from = hover.progress(hover_now, self.animations_enabled);
+                hover.target = 0.0;
+                hover.started = hover_now;
+            }
         }
         self.app_hover.retain(|_, hover| {
             hover.target > 0.0 || hover.progress(hover_now, self.animations_enabled) > 0.0
@@ -995,6 +1007,11 @@ impl Render for DockView {
                 .when(hover_effects, |tile| {
                     tile.on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                         this.set_app_hover(index, *hovered, cx);
+                    }))
+                    .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                        // Re-entering from outside can leave GPUI's tile hover
+                        // flag set from the previous visit.
+                        this.set_app_hover(index, true, cx);
                     }))
                 })
         });
