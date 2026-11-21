@@ -13,9 +13,9 @@ use windows::Win32::{
     },
     UI::WindowsAndMessaging::{
         EnumChildWindows, EnumWindows, GW_OWNER, GWL_EXSTYLE, GetClassNameW, GetForegroundWindow,
-        GetWindow, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW,
+        GetLastActivePopup, GetWindow, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW,
         GetWindowThreadProcessId, IsIconic, IsWindowVisible, SW_MINIMIZE, SW_RESTORE,
-        SetForegroundWindow, ShowWindow, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+        SetForegroundWindow, ShowWindow, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
     },
 };
 use windows::core::BOOL;
@@ -27,7 +27,8 @@ use crate::dock::WindowInfo;
 pub struct WindowFlags {
     pub is_visible: bool,
     pub is_cloaked: bool,
-    pub has_owner: bool,
+    pub has_visible_owner: bool,
+    pub is_noactivate: bool,
     pub is_toolwindow: bool,
     pub is_appwindow: bool,
     pub has_title: bool,
@@ -58,7 +59,7 @@ pub fn list_app_windows() -> Result<Vec<WindowInfo>> {
 
     for hwnd in handles {
         let pid = window_process_id(hwnd);
-        if pid == current_pid {
+        if pid == 0 || pid == current_pid {
             continue;
         }
         let title = window_title(hwnd);
@@ -67,38 +68,49 @@ pub fn list_app_windows() -> Result<Vec<WindowInfo>> {
             continue;
         }
 
-        let Some(exe_path) = process_paths
+        let exe_path = process_paths
             .entry(pid)
             .or_insert_with(|| match process_path(pid) {
                 Ok(path) => Some(path),
                 Err(error) => {
-                    debug!(%error, pid, "skipping windows without an executable path");
+                    debug!(%error, pid, "tracking window without an executable path");
                     None
                 }
-            })
-        else {
-            continue;
-        };
-
-        let (exe_path, display_name) = if is_application_frame_host(exe_path) {
-            match frame_host_app(hwnd, pid, &title) {
-                Some((path, name)) => (path, Some(name)),
-                None => (exe_path.clone(), Some(title.clone())),
+            });
+        let (exe_path, display_name) = match exe_path.as_deref() {
+            Some(path) if is_application_frame_host(path) => {
+                match frame_host_app(hwnd, pid, &title) {
+                    Some((path, name)) => (Some(path), Some(name)),
+                    None => (Some(path.to_path_buf()), Some(title.clone())),
+                }
             }
-        } else {
-            (exe_path.clone(), None)
+            path => (path.map(Path::to_path_buf), None),
         };
 
         result.push(WindowInfo {
             hwnd: hwnd.0 as isize,
             title,
             exe_path,
+            process_id: pid,
             display_name,
             // SAFETY: `hwnd` came from EnumWindows in this call and may have closed
             // since; IsIconic reports false for an invalid handle, which is harmless.
             is_minimized: unsafe { IsIconic(hwnd) }.as_bool(),
-            is_foreground: hwnd.0 == foreground.0,
+            is_foreground: false,
         });
+    }
+
+    // A modal dialog may be foreground even though its owner is the taskbar entry.
+    let mut candidate = foreground;
+    while !candidate.0.is_null() {
+        if let Some(window) = result
+            .iter_mut()
+            .find(|window| window.hwnd == candidate.0 as isize)
+        {
+            window.is_foreground = true;
+            break;
+        }
+        candidate = window_owner(candidate).unwrap_or_default();
     }
 
     Ok(result)
@@ -227,9 +239,12 @@ fn window_class_name(hwnd: HWND) -> String {
 pub fn is_taskbar_worthy(flags: &WindowFlags) -> bool {
     flags.is_visible
         && !flags.is_cloaked
-        && flags.has_title
         && !flags.is_own_process
-        && (flags.is_appwindow || (!flags.has_owner && !flags.is_toolwindow))
+        && (flags.is_appwindow
+            || (flags.has_title
+                && !flags.has_visible_owner
+                && !flags.is_toolwindow
+                && !flags.is_noactivate))
 }
 
 pub fn activate_or_minimize(hwnd: isize) -> Result<()> {
@@ -243,7 +258,12 @@ pub fn activate_or_minimize(hwnd: isize) -> Result<()> {
     // is verified with IsIconic. The foreground retry attaches input only for live
     // thread ids and detaches them again.
     unsafe {
-        if GetForegroundWindow().0 == hwnd.0 {
+        let foreground = GetForegroundWindow();
+        let popup = GetLastActivePopup(hwnd);
+        let foreground_popup = foreground.0 == popup.0
+            && !popup.0.is_null()
+            && GetWindowLongPtrW(popup, GWL_EXSTYLE) as u32 & WS_EX_APPWINDOW.0 == 0;
+        if foreground.0 == hwnd.0 || foreground_popup {
             let _ = ShowWindow(hwnd, SW_MINIMIZE);
             ensure!(
                 IsIconic(hwnd).as_bool(),
@@ -260,7 +280,15 @@ pub fn activate_or_minimize(hwnd: isize) -> Result<()> {
             );
         }
 
-        if SetForegroundWindow(hwnd).as_bool() {
+        let focus_target = if !popup.0.is_null()
+            && IsWindowVisible(popup).as_bool()
+            && GetWindowLongPtrW(popup, GWL_EXSTYLE) as u32 & WS_EX_APPWINDOW.0 == 0
+        {
+            popup
+        } else {
+            hwnd
+        };
+        if SetForegroundWindow(focus_target).as_bool() {
             return Ok(());
         }
 
@@ -270,7 +298,7 @@ pub fn activate_or_minimize(hwnd: isize) -> Result<()> {
             && foreground_thread != current_thread
             && AttachThreadInput(current_thread, foreground_thread, true).as_bool();
 
-        let restored = SetForegroundWindow(hwnd).as_bool();
+        let restored = SetForegroundWindow(focus_target).as_bool();
         if attached && !AttachThreadInput(current_thread, foreground_thread, false).as_bool() {
             debug!("failed to detach the foreground input queue");
         }
@@ -284,26 +312,32 @@ pub fn activate_or_minimize(hwnd: isize) -> Result<()> {
 }
 
 fn window_flags(hwnd: HWND, has_title: bool) -> WindowFlags {
-    // SAFETY: all calls take a handle from EnumWindows. Style and owner queries are
-    // read-only; GetWindow(GW_OWNER) returns an error when the window has no owner.
-    let (ex_style, owner) = unsafe {
-        let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
-        let owner = GetWindow(hwnd, GW_OWNER)
-            .ok()
-            .is_some_and(|owner| !owner.0.is_null());
-        (ex_style, owner)
-    };
+    // SAFETY: hwnd and its owner come from read-only window queries.
+    let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 };
+    let has_visible_owner = window_owner(hwnd).is_some_and(|owner| {
+        // SAFETY: read-only visibility query for the owner of an enumerated window.
+        unsafe { IsWindowVisible(owner) }.as_bool()
+    });
 
     WindowFlags {
         // SAFETY: read-only visibility query for an enumerated window.
         is_visible: unsafe { IsWindowVisible(hwnd) }.as_bool(),
         is_cloaked: is_cloaked(hwnd),
-        has_owner: owner,
+        has_visible_owner,
+        is_noactivate: ex_style & WS_EX_NOACTIVATE.0 != 0,
         is_toolwindow: ex_style & WS_EX_TOOLWINDOW.0 != 0,
         is_appwindow: ex_style & WS_EX_APPWINDOW.0 != 0,
         has_title,
         is_own_process: false,
     }
+}
+
+fn window_owner(hwnd: HWND) -> Option<HWND> {
+    // SAFETY: this read-only query accepts an HWND from Windows and reports
+    // failure when the window has closed or it has no owner.
+    unsafe { GetWindow(hwnd, GW_OWNER) }
+        .ok()
+        .filter(|owner| !owner.0.is_null())
 }
 
 fn is_cloaked(hwnd: HWND) -> bool {
@@ -458,18 +492,32 @@ mod tests {
         assert!(!is_taskbar_worthy(&tool));
 
         let owned = WindowFlags {
-            has_owner: true,
+            has_visible_owner: true,
             ..worthy_flags()
         };
         assert!(!is_taskbar_worthy(&owned));
 
         let appwindow = WindowFlags {
             is_toolwindow: true,
-            has_owner: true,
+            has_visible_owner: true,
             is_appwindow: true,
             ..worthy_flags()
         };
         assert!(is_taskbar_worthy(&appwindow));
+    }
+
+    #[test]
+    fn explicit_taskbar_windows_are_tracked_even_without_a_caption() {
+        assert!(is_taskbar_worthy(&WindowFlags {
+            has_title: false,
+            is_appwindow: true,
+            is_noactivate: true,
+            ..worthy_flags()
+        }));
+        assert!(!is_taskbar_worthy(&WindowFlags {
+            is_noactivate: true,
+            ..worthy_flags()
+        }));
     }
 
     #[test]

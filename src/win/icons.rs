@@ -23,9 +23,9 @@ use windows::{
     core::{HSTRING, PCWSTR},
 };
 
-pub fn load_icon(path: &Path, hwnd: Option<isize>) -> Option<Arc<RenderImage>> {
+pub fn load_icon(path: Option<&Path>, hwnd: Option<isize>) -> Option<Arc<RenderImage>> {
     hwnd.and_then(|hwnd| icon_from_window(HWND(hwnd as *mut c_void)))
-        .or_else(|| icon_from_path(path))
+        .or_else(|| path.and_then(icon_from_path))
 }
 
 fn icon_from_window(hwnd: HWND) -> Option<Arc<RenderImage>> {

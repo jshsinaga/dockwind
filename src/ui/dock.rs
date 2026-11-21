@@ -267,7 +267,7 @@ impl DockView {
                 .get(&item.key)
                 .is_none_or(|icon| icon.needs_lookup(hwnd))
             {
-                requests.insert(item.key.clone(), hwnd);
+                requests.insert(item.key.clone(), (item.executable_path().is_some(), hwnd));
             }
         }
         if requests.is_empty() {
@@ -278,8 +278,8 @@ impl DockView {
         let load = cx.background_executor().spawn(async move {
             requests
                 .into_iter()
-                .map(|(path, hwnd)| {
-                    let icon = win::icons::load_icon(&path, hwnd);
+                .map(|(path, (has_path, hwnd))| {
+                    let icon = win::icons::load_icon(has_path.then_some(path.as_path()), hwnd);
                     (path, hwnd, icon)
                 })
                 .collect::<Vec<_>>()
