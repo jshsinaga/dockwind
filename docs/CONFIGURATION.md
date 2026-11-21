@@ -149,10 +149,13 @@ space when the items fit within the centered region.
 `vertical_align` controls vertical placement of items (`center`, `top`, `bottom`) within
 the dock frame.
 
-`blur = "acrylic"` and `blur = "mica"` use `SetWindowCompositionAttribute` on Windows 10
-and DWM system backdrops (`DwmExtendFrameIntoClientArea` + `DWMWA_SYSTEMBACKDROP_TYPE`)
-on Windows 11 build 22621 or newer. On unsupported platforms, Dockwind logs that the
-backdrop is unavailable and keeps the transparent surface.
+Windows 11 build 22621 or newer uses the system's Mica and Acrylic materials.
+On older supported Windows builds, `mica` uses blur behind the dock and `acrylic`
+uses the legacy acrylic effect. Windows can substitute its solid material when
+system transparency is disabled. The dock tint retains the selected color and
+uses up to 65% opacity while a native backdrop is active. Selecting `none` clears
+the native backdrop and applies the configured opacity directly. If Windows
+rejects a backdrop, Dockwind logs the error and restores the transparent surface.
 
 `corner_radius` is replaced with `min(default, max_radius)` when it exceeds the
 cap. The cap is half of `icon_size + 2 * padding`.

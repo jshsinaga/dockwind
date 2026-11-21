@@ -14,7 +14,7 @@ use gpui::{
     App, AppContext, Entity, Render, SharedString, TitlebarOptions, Window,
     WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, div, prelude::*,
 };
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::app::AppController;
 use crate::config::Config;
@@ -61,7 +61,6 @@ pub fn open_dock_window(
     );
     let scale_factor = monitor.scale_factor;
     let theme = Theme::from_config(&config.appearance).context("failed to build the dock theme")?;
-    let blur = config.appearance.blur;
 
     info!(?monitor, ?bounds, "positioning dock");
     let previous_foreground = win::dwm::foreground_window();
@@ -96,9 +95,6 @@ pub fn open_dock_window(
                     let p_height = (f32::from(bounds.size.height) * scale_factor).round() as i32;
                     let p_radius = (f32::from(theme.radius) * scale_factor).round() as i32;
                     let _ = win::dwm::set_window_shape(hwnd, 0, 0, p_width, p_height, p_radius);
-                    if let Err(error) = win::dwm::apply_backdrop(window, blur) {
-                        warn!(%error, "backdrop configuration failed; keeping transparent");
-                    }
                     let geometry = DockGeometry {
                         bounds,
                         trigger,

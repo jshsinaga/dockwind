@@ -94,6 +94,8 @@ pub struct DockView {
     menu_open: bool,
     progress: f32,
     window_region: Option<[i32; 4]>,
+    backdrop_request: Option<(BlurMode, bool)>,
+    backdrop_enabled: bool,
     last_monitor_check: Instant,
     start_time: Instant,
 }
@@ -147,6 +149,8 @@ impl DockView {
             menu_open: false,
             progress,
             window_region: None,
+            backdrop_request: None,
+            backdrop_enabled: false,
             last_monitor_check: start_time,
             start_time,
         };
@@ -331,7 +335,6 @@ impl DockView {
             }
         };
 
-        let blur_changed = self.applied_config.appearance.blur != config.appearance.blur;
         let geometry_changed = [
             native_taskbar_changed,
             self.applied_config.appearance.width != config.appearance.width,
@@ -374,10 +377,6 @@ impl DockView {
             self.app_scroll.set_offset(Point::default());
         }
         self.applied_config = config;
-
-        if blur_changed && self.progress > 0.001 {
-            self.apply_backdrop();
-        }
 
         info!(
             corner_radius = self.applied_config.appearance.corner_radius,
@@ -608,13 +607,24 @@ impl DockView {
         }
     }
 
-    fn apply_backdrop(&self) {
-        if let Err(error) = win::dwm::apply_backdrop_to_hwnd(
-            self.geometry.hwnd,
-            self.applied_config.appearance.blur,
-        ) {
-            warn!(%error, "backdrop update failed; keeping transparent");
+    fn sync_backdrop(&mut self, visible: bool) {
+        let mode = if visible {
+            self.applied_config.appearance.blur
+        } else {
+            BlurMode::None
+        };
+        let dark = mode != BlurMode::None && self.theme.text.r > 0.5;
+        if self.backdrop_request == Some((mode, dark)) {
+            return;
         }
+        self.backdrop_request = Some((mode, dark));
+        self.backdrop_enabled = match win::dwm::apply_backdrop(self.geometry.hwnd, mode, dark) {
+            Ok(()) => mode != BlurMode::None,
+            Err(error) => {
+                warn!(%error, "dock backdrop update failed");
+                false
+            }
+        };
     }
 
     fn on_context_menu(&mut self, cx: &mut Context<Self>) {
@@ -821,7 +831,6 @@ impl Render for DockView {
             ]
         };
 
-        let first_frame = self.window_region.is_none();
         if self.window_region != Some(region) {
             let [y, width, height, radius] = region;
             match win::dwm::set_window_shape(self.geometry.hwnd, 0, y, width, height, radius) {
@@ -829,14 +838,7 @@ impl Render for DockView {
                 Err(error) => warn!(%error, "failed to update the dock window region"),
             }
         }
-        if is_hidden && (first_frame || !was_hidden) {
-            if let Err(error) = win::dwm::apply_backdrop_to_hwnd(self.geometry.hwnd, BlurMode::None)
-            {
-                warn!(%error, "failed to clear the hidden dock backdrop");
-            }
-        } else if !is_hidden && was_hidden {
-            self.apply_backdrop();
-        }
+        self.sync_backdrop(!is_hidden);
 
         let hover_now = Instant::now();
         let hover_effects = self.theme.hover_zoom || self.theme.hover_background;
@@ -869,7 +871,7 @@ impl Render for DockView {
             .opacity(visual_progress.clamp(0.0, 1.0))
             .size_full()
             .rounded(self.theme.radius)
-            .bg(self.theme.background)
+            .bg(self.theme.dock_background(self.backdrop_enabled))
             .border(self.theme.border_width)
             .border_color(self.theme.border_color)
             .flex()

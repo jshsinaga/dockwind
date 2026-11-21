@@ -1,4 +1,5 @@
 use std::ffi::c_void;
+use std::sync::OnceLock;
 
 use anyhow::{Context as _, Result, bail, ensure};
 use gpui::{Bounds, Pixels, Window};
@@ -10,8 +11,9 @@ use windows::{
         Foundation::{HWND, LPARAM, WPARAM},
         Graphics::Dwm::{
             DWM_SYSTEMBACKDROP_TYPE, DWM_WINDOW_CORNER_PREFERENCE, DWMNCRP_DISABLED,
-            DWMSBT_MAINWINDOW, DWMSBT_NONE, DWMSBT_TRANSIENTWINDOW, DWMWA_BORDER_COLOR,
-            DWMWA_COLOR_NONE, DWMWA_NCRENDERING_POLICY, DWMWA_SYSTEMBACKDROP_TYPE,
+            DWMNCRP_ENABLED, DWMSBT_MAINWINDOW, DWMSBT_NONE, DWMSBT_TRANSIENTWINDOW,
+            DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_NCRENDERING_POLICY,
+            DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE,
             DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DwmExtendFrameIntoClientArea,
             DwmSetWindowAttribute,
         },
@@ -23,7 +25,7 @@ use windows::{
         UI::WindowsAndMessaging::{
             GWL_EXSTYLE, GWL_STYLE, GetForegroundWindow, GetWindowLongPtrW,
             GetWindowThreadProcessId, HWND_TOPMOST, IsWindowVisible, SW_SHOWNOACTIVATE,
-            SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SendMessageW,
+            SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW,
             SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, WM_USER, WS_BORDER,
             WS_CAPTION, WS_EX_APPWINDOW, WS_EX_CLIENTEDGE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
             WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_EX_WINDOWEDGE, WS_OVERLAPPED, WS_POPUP,
@@ -67,7 +69,7 @@ pub fn set_click_through(hwnd: isize, enabled: bool) -> Result<()> {
             0,
             0,
             0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER | SWP_FRAMECHANGED,
         )
         .context("SetWindowPos(click-through) failed")?;
 
@@ -225,8 +227,11 @@ pub fn set_window_shape(
     unsafe {
         let hrgn = if width <= 0 || height <= 0 {
             CreateRectRgn(0, 0, 0, 0)
+        } else if radius <= 0 {
+            CreateRectRgn(x, y, x + width, y + height)
         } else {
-            CreateRoundRectRgn(x, y, x + width + 1, y + height + 1, radius * 2, radius * 2)
+            let diameter = (radius * 2).min(width).min(height);
+            CreateRoundRectRgn(x, y, x + width, y + height, diameter, diameter)
         };
         if hrgn.0.is_null() {
             bail!("CreateRoundRectRgn returned NULL");
@@ -346,103 +351,147 @@ fn restore_foreground(dock: HWND, previous: HWND) -> bool {
     }
 }
 
-pub fn apply_backdrop(window: &Window, mode: BlurMode) -> Result<()> {
-    let hwnd = raw_hwnd(window)?;
-    apply_backdrop_to_hwnd(hwnd.0 as isize, mode)
-}
+const FIRST_SYSTEM_BACKDROP_BUILD: u32 = 22621;
+const ACCENT_DISABLED: AccentPolicy = AccentPolicy::new(0, 0, 0);
+const ACCENT_TRANSPARENT: AccentPolicy = AccentPolicy::new(2, 2, 0);
+const ACCENT_BLUR: AccentPolicy = AccentPolicy::new(3, 0, 0);
+// Acrylic requires a nonzero alpha, even when GPUI draws the tint.
+const ACCENT_ACRYLIC: AccentPolicy = AccentPolicy::new(4, 0, 0x01000000);
 
-pub fn apply_backdrop_to_hwnd(hwnd: isize, mode: BlurMode) -> Result<()> {
-    let hwnd = HWND(hwnd as *mut c_void);
+pub fn apply_backdrop(hwnd: isize, mode: BlurMode, dark: bool) -> Result<()> {
     let build = windows_build()?;
+    let hwnd = HWND(hwnd as *mut c_void);
 
-    if build >= 22621 {
-        let margins = MARGINS {
-            cxLeftWidth: -1,
-            cxRightWidth: -1,
-            cyTopHeight: -1,
-            cyBottomHeight: -1,
-        };
-        // SAFETY: DwmExtendFrameIntoClientArea extends the frame into the client area.
-        unsafe {
-            let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
-        }
-
-        let backdrop = match mode {
-            BlurMode::None => DWMSBT_NONE,
-            BlurMode::Mica => DWMSBT_MAINWINDOW,
-            BlurMode::Acrylic => DWMSBT_TRANSIENTWINDOW,
-        };
-        let _ = set_backdrop(hwnd, backdrop);
-        let _ = set_corner_preference(hwnd, DWMWCP_DONOTROUND);
+    let result = if build >= FIRST_SYSTEM_BACKDROP_BUILD {
+        apply_system_backdrop(hwnd, mode, dark)
     } else {
-        apply_win10_accent_policy(hwnd, mode)?;
-        if build >= 22000 {
-            let _ = set_corner_preference(hwnd, DWMWCP_DONOTROUND);
+        let policy = match mode {
+            BlurMode::None => ACCENT_TRANSPARENT,
+            BlurMode::Mica => ACCENT_BLUR,
+            BlurMode::Acrylic => ACCENT_ACRYLIC,
+        };
+        set_accent_policy(hwnd, policy)
+    };
+    if let Err(error) = result {
+        if mode != BlurMode::None {
+            let reset = if build >= FIRST_SYSTEM_BACKDROP_BUILD {
+                apply_system_backdrop(hwnd, BlurMode::None, dark)
+            } else {
+                set_accent_policy(hwnd, ACCENT_TRANSPARENT)
+            };
+            if let Err(reset_error) = reset {
+                warn!(%reset_error, "could not restore the transparent dock surface");
+            }
         }
+        return Err(error)
+            .with_context(|| format!("could not apply {mode:?} backdrop on build {build}"));
     }
 
-    info!(build, mode = ?mode, "backdrop applied");
+    info!(build, ?mode, "dock backdrop applied");
     Ok(())
 }
 
-fn apply_win10_accent_policy(hwnd: HWND, mode: BlurMode) -> Result<()> {
-    #[repr(C)]
-    struct AccentPolicy {
-        accent_state: u32,
-        accent_flags: u32,
-        gradient_color: u32,
-        animation_id: u32,
+fn system_backdrop(mode: BlurMode) -> DWM_SYSTEMBACKDROP_TYPE {
+    match mode {
+        BlurMode::None => DWMSBT_NONE,
+        BlurMode::Mica => DWMSBT_MAINWINDOW,
+        BlurMode::Acrylic => DWMSBT_TRANSIENTWINDOW,
+    }
+}
+
+fn apply_system_backdrop(hwnd: HWND, mode: BlurMode, dark: bool) -> Result<()> {
+    let enabled = mode != BlurMode::None;
+    let margin = if enabled { -1 } else { 0 };
+    let margins = MARGINS {
+        cxLeftWidth: margin,
+        cxRightWidth: margin,
+        cyTopHeight: margin,
+        cyBottomHeight: margin,
+    };
+
+    if enabled {
+        // GPUI installs a transparent accent at window creation. The system
+        // backdrop owns the surface while an actual material is selected.
+        set_accent_policy(hwnd, ACCENT_DISABLED)?;
+        set_dwm_attribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &i32::from(dark))?;
+    } else {
+        set_dwm_attribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &DWMSBT_NONE.0)?;
     }
 
+    let policy = if enabled {
+        DWMNCRP_ENABLED
+    } else {
+        DWMNCRP_DISABLED
+    };
+    set_dwm_attribute(hwnd, DWMWA_NCRENDERING_POLICY, &policy.0)?;
+    // SAFETY: hwnd belongs to the live dock window and margins is an initialized
+    // MARGINS. Zero clears any earlier extension back into the client area.
+    unsafe { DwmExtendFrameIntoClientArea(hwnd, &margins) }
+        .context("DwmExtendFrameIntoClientArea failed")?;
+
+    if enabled {
+        set_dwm_attribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &system_backdrop(mode).0)?;
+    } else {
+        set_accent_policy(hwnd, ACCENT_TRANSPARENT)?;
+    }
+    Ok(())
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct AccentPolicy {
+    state: u32,
+    flags: u32,
+    color: u32,
+    animation_id: u32,
+}
+
+impl AccentPolicy {
+    const fn new(state: u32, flags: u32, color: u32) -> Self {
+        Self {
+            state,
+            flags,
+            color,
+            animation_id: 0,
+        }
+    }
+}
+
+fn set_accent_policy(hwnd: HWND, policy: AccentPolicy) -> Result<()> {
     #[repr(C)]
-    struct WindowCompositionAttributeData {
+    struct CompositionAttribute {
         attribute: u32,
-        data: *mut c_void,
+        data: *const AccentPolicy,
         size: usize,
     }
 
-    const WCA_ACCENT_POLICY: u32 = 19;
-    const ACCENT_DISABLED: u32 = 0;
-    const ACCENT_ENABLE_BLURBEHIND: u32 = 3;
-    const ACCENT_ENABLE_ACRYLICBLURBEHIND: u32 = 4;
-
-    let accent_state = match mode {
-        BlurMode::None => ACCENT_DISABLED,
-        BlurMode::Mica => ACCENT_ENABLE_BLURBEHIND,
-        BlurMode::Acrylic => ACCENT_ENABLE_ACRYLICBLURBEHIND,
-    };
-
-    let mut policy = AccentPolicy {
-        accent_state,
-        accent_flags: 0,
-        gradient_color: 0,
-        animation_id: 0,
-    };
-
-    let mut data = WindowCompositionAttributeData {
-        attribute: WCA_ACCENT_POLICY,
-        data: &mut policy as *mut _ as *mut c_void,
+    let data = CompositionAttribute {
+        attribute: 19,
+        data: &policy,
         size: std::mem::size_of::<AccentPolicy>(),
     };
 
-    // SAFETY: user32.dll is always loaded into Windows processes, and SetWindowCompositionAttribute
-    // accepts a valid pointer to WindowCompositionAttributeData.
+    // SAFETY: the loader functions take null-terminated strings. The resolved
+    // function takes the live window and a composition attribute for this call.
     unsafe {
         let user32 = GetModuleHandleA(s!("user32.dll"))?;
-        let proc = GetProcAddress(user32, s!("SetWindowCompositionAttribute"));
-        if let Some(func) = proc {
-            type Pfn = unsafe extern "system" fn(
-                HWND,
-                *mut WindowCompositionAttributeData,
-            ) -> windows::core::BOOL;
-            let func: Pfn = std::mem::transmute(func);
-            let _ = func(hwnd, &mut data);
-        }
+        let proc = GetProcAddress(user32, s!("SetWindowCompositionAttribute"))
+            .context("SetWindowCompositionAttribute is unavailable")?;
+        type SetAttribute =
+            unsafe extern "system" fn(HWND, *const CompositionAttribute) -> windows::core::BOOL;
+        let set_attribute =
+            std::mem::transmute::<unsafe extern "system" fn() -> isize, SetAttribute>(proc);
+        set_attribute(hwnd, &data)
+            .ok()
+            .context("SetWindowCompositionAttribute failed")
     }
-    Ok(())
 }
 
 pub fn windows_build() -> Result<u32> {
+    static BUILD: OnceLock<u32> = OnceLock::new();
+    if let Some(build) = BUILD.get() {
+        return Ok(*build);
+    }
     let mut version = OSVERSIONINFOW {
         dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as u32,
         ..Default::default()
@@ -455,39 +504,29 @@ pub fn windows_build() -> Result<u32> {
         "RtlGetVersion failed with NTSTATUS 0x{:08X}",
         status.0
     );
+    let _ = BUILD.set(version.dwBuildNumber);
     Ok(version.dwBuildNumber)
 }
 
-fn set_backdrop(hwnd: HWND, backdrop: DWM_SYSTEMBACKDROP_TYPE) -> Result<()> {
-    let value = backdrop.0;
-    set_dwm_attribute(
-        hwnd,
-        DWMWA_SYSTEMBACKDROP_TYPE,
-        &value as *const i32 as *const c_void,
-        std::mem::size_of::<i32>() as u32,
-    )
-}
-
 fn set_corner_preference(hwnd: HWND, preference: DWM_WINDOW_CORNER_PREFERENCE) -> Result<()> {
-    let value = preference.0;
-    set_dwm_attribute(
-        hwnd,
-        DWMWA_WINDOW_CORNER_PREFERENCE,
-        &value as *const i32 as *const c_void,
-        std::mem::size_of::<i32>() as u32,
-    )
+    set_dwm_attribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &preference.0)
 }
 
 fn set_dwm_attribute(
     hwnd: HWND,
     attribute: windows::Win32::Graphics::Dwm::DWMWINDOWATTRIBUTE,
-    value: *const c_void,
-    size: u32,
+    value: &i32,
 ) -> Result<()> {
-    // SAFETY: `value` points to a stack value of `size` bytes in every caller, and
-    // `hwnd` is the live dock window. DWM copies the value during the call.
-    unsafe { DwmSetWindowAttribute(hwnd, attribute, value, size) }
-        .context("DwmSetWindowAttribute failed")
+    // SAFETY: value is a live i32 and DWM copies it during the call.
+    unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            attribute,
+            std::ptr::from_ref(value).cast(),
+            std::mem::size_of::<i32>() as u32,
+        )
+    }
+    .with_context(|| format!("DwmSetWindowAttribute({}) failed", attribute.0))
 }
 
 fn raw_hwnd(window: &Window) -> Result<HWND> {
@@ -505,19 +544,11 @@ fn raw_hwnd(window: &Window) -> Result<HWND> {
 mod tests {
     use super::*;
 
-    fn backdrop_value(mode: BlurMode) -> Option<i32> {
-        match mode {
-            BlurMode::None => None,
-            BlurMode::Mica => Some(DWMSBT_MAINWINDOW.0),
-            BlurMode::Acrylic => Some(DWMSBT_TRANSIENTWINDOW.0),
-        }
-    }
-
     #[test]
     fn blur_modes_map_to_dwm_backdrops() {
-        assert_eq!(backdrop_value(BlurMode::None), None);
-        assert_eq!(backdrop_value(BlurMode::Mica), Some(2));
-        assert_eq!(backdrop_value(BlurMode::Acrylic), Some(3));
+        assert_eq!(system_backdrop(BlurMode::None), DWMSBT_NONE);
+        assert_eq!(system_backdrop(BlurMode::Mica), DWMSBT_MAINWINDOW);
+        assert_eq!(system_backdrop(BlurMode::Acrylic), DWMSBT_TRANSIENTWINDOW);
     }
 
     #[test]
