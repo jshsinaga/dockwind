@@ -360,9 +360,9 @@ These are current limits. Do not describe them as fixed.
 | Content size defaults to `560x92` | The app list scrolls horizontally; a large list has no visible overflow affordance |
 | UWP frame hosts map through a child `CoreWindow` | Identity and name resolve to the hosted process; the icon is not visually checked |
 | `clock.locale` is accepted but unused | Clock text uses the process locale |
-| Mica and Acrylic are gated on build 22621 and unverified | Windows 11 visual behavior is not proven on this machine |
+| System materials require build 22621 or newer | The running dock was checked on build 26100. Older builds use the legacy composition effects |
 | Running UI was exercised at 100% DPI | 125% to 200% are unit-tested conversions only |
-| Manual desktop cases are unverified | Windows 11, Mica, and real multi-DPI are not verified on the integrated code. Panic restore, console-control recovery, normal quit, taskbar hide and restore, Explorer restart, and the restore CLI passed |
+| Manual desktop coverage | Panic restore, console-control recovery, normal quit, taskbar hide and restore, Explorer restart, and the restore CLI passed. Multi-DPI desktops remain outside the observed runs |
 
 ## 10. Change Rules
 
