@@ -457,6 +457,7 @@ Do not swallow a write or parse error. Log it or show it to the user.
 | Entry | Action |
 |---|---|
 | Dock right-click | Settings..., Reload config, autostart toggle, Restore taskbar & Quit |
+| Dock Tray button | Windows settings shortcuts and temporary access to the native notification area when Dockwind hides the taskbar |
 | Tray right-click | Settings..., Reload config, Start with Windows, Restore taskbar, Quit |
 | Tray double-click | Open settings |
 | `dockwind --settings` | Open the settings window and wait for it to close |

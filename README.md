@@ -105,6 +105,13 @@ taskbar is hidden. The settings window rejects the combination without hiding.
 
 ## Tray
 
+Click **Tray** on the dock to open Windows settings for network, sound,
+microphone privacy, power, language, notifications, or the taskbar. If Dockwind
+hides the Windows taskbar, choose **Show Windows taskbar and tray** to use the
+native notification area and its hidden-icons menu. Use **Hide Windows taskbar
+and tray** to return to dock-only mode. This temporary toggle preserves your
+saved settings and Windows' own auto-hide preference.
+
 A Dockwind tray icon appears while the dock is running. Right-click it for:
 
 - Settings...

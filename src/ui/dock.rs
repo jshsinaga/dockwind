@@ -18,7 +18,7 @@ use crate::config::{AlignmentAnchor, Appearance, BlurMode, Clock, Config, DockEd
 use crate::dock::{AutoHide, AutoHideInput, AutoHideSettings, DockItem};
 use crate::win;
 use crate::win::appbar::{AppBarEdge, AppBarHandle};
-use crate::win::menu::MenuAction;
+use crate::win::menu::{MenuAction, TrayAction};
 use crate::win::monitors::MonitorInfo;
 
 #[derive(Debug, Clone, Copy)]
@@ -53,6 +53,7 @@ impl CachedIcon {
 }
 
 const APP_HOVER_DURATION: Duration = Duration::from_millis(120);
+const TRAY_BUTTON_WIDTH: f32 = 44.0;
 
 struct AppHover {
     from: f32,
@@ -89,6 +90,7 @@ pub struct DockView {
     animations_enabled: bool,
     app_hover: HashMap<usize, AppHover>,
     appbar: Option<AppBarHandle>,
+    native_taskbar_hidden: bool,
     menu_open: bool,
     progress: f32,
     window_region: Option<[i32; 4]>,
@@ -103,7 +105,7 @@ impl DockView {
         geometry: DockGeometry,
         theme: Theme,
     ) -> Self {
-        let (config, items) = {
+        let (config, items, native_taskbar_hidden) = {
             let controller = controller.read(cx);
             let items = controller
                 .items()
@@ -111,7 +113,11 @@ impl DockView {
                 .cloned()
                 .map(Arc::new)
                 .collect::<Vec<_>>();
-            (controller.config().clone(), items)
+            (
+                controller.config().clone(),
+                items,
+                controller.native_taskbar_hidden(),
+            )
         };
         let clock = cx.new(|cx| ClockView::new(cx, &config.clock));
         let auto_hide = AutoHide::new(config.behavior.auto_hide);
@@ -137,6 +143,7 @@ impl DockView {
             animations_enabled,
             app_hover: HashMap::new(),
             appbar: None,
+            native_taskbar_hidden,
             menu_open: false,
             progress,
             window_region: None,
@@ -190,6 +197,9 @@ impl DockView {
     fn sync_controller(&mut self, controller: &Entity<AppController>, cx: &mut Context<Self>) {
         let controller = controller.read(cx);
         let config = controller.config();
+        let native_taskbar_hidden = controller.native_taskbar_hidden();
+        let native_taskbar_changed = self.native_taskbar_hidden != native_taskbar_hidden;
+        self.native_taskbar_hidden = native_taskbar_hidden;
         let count_changed = self.items.len() != controller.items().len();
         let items_changed = self
             .items
@@ -218,6 +228,7 @@ impl DockView {
 
         if let Some(config) = config {
             if !items_changed
+                && !native_taskbar_changed
                 && config.appearance == self.applied_config.appearance
                 && config.behavior == self.applied_config.behavior
                 && config.clock == self.applied_config.clock
@@ -226,10 +237,14 @@ impl DockView {
                 // A saved-layout-only edit changes the menu, which reads this on demand.
                 self.applied_config = config;
             } else {
-                self.apply_config(config, count_changed, cx);
+                self.apply_config(config, count_changed, native_taskbar_changed, cx);
             }
-        } else if items_changed {
-            if count_changed && self.applied_config.appearance.width_mode == WidthMode::Auto {
+        } else if items_changed || native_taskbar_changed {
+            if native_taskbar_changed {
+                let config = self.applied_config.clone();
+                self.update_geometry_and_appbar(&config);
+            } else if count_changed && self.applied_config.appearance.width_mode == WidthMode::Auto
+            {
                 let config = self.applied_config.clone();
                 self.apply_geometry(&config);
             }
@@ -301,7 +316,13 @@ impl DockView {
         .detach();
     }
 
-    fn apply_config(&mut self, config: Config, count_changed: bool, cx: &mut Context<Self>) {
+    fn apply_config(
+        &mut self,
+        config: Config,
+        count_changed: bool,
+        native_taskbar_changed: bool,
+        cx: &mut Context<Self>,
+    ) {
         let theme = match Theme::from_config(&config.appearance) {
             Ok(theme) => theme,
             Err(error) => {
@@ -312,6 +333,7 @@ impl DockView {
 
         let blur_changed = self.applied_config.appearance.blur != config.appearance.blur;
         let geometry_changed = [
+            native_taskbar_changed,
             self.applied_config.appearance.width != config.appearance.width,
             self.applied_config.appearance.height != config.appearance.height,
             self.applied_config.appearance.offset != config.appearance.offset,
@@ -346,8 +368,7 @@ impl DockView {
             self.auto_hide = AutoHide::new(false);
         }
         if geometry_changed || (count_changed && config.appearance.width_mode == WidthMode::Auto) {
-            self.apply_geometry(&config);
-            self.sync_appbar(&config);
+            self.update_geometry_and_appbar(&config);
         }
         if config.pinned != self.applied_config.pinned {
             self.app_scroll.set_offset(Point::default());
@@ -364,6 +385,17 @@ impl DockView {
             "dock appearance updated"
         );
         cx.notify();
+    }
+
+    fn update_geometry_and_appbar(&mut self, config: &Config) {
+        if self.reserves_space(config) {
+            self.apply_geometry(config);
+            self.sync_appbar(config);
+        } else {
+            // Drop the reservation before reading the work area for placement.
+            self.sync_appbar(config);
+            self.apply_geometry(config);
+        }
     }
 
     fn apply_geometry(&mut self, config: &Config) {
@@ -406,8 +438,13 @@ impl DockView {
         true
     }
 
+    fn reserves_space(&self, config: &Config) -> bool {
+        config.behavior.reserve_space
+            && (!config.behavior.hide_native_taskbar || self.native_taskbar_hidden)
+    }
+
     fn sync_appbar(&mut self, config: &Config) {
-        let reserve = config.behavior.reserve_space;
+        let reserve = self.reserves_space(config);
         let rect = if reserve {
             Some(self.appbar_rect(config))
         } else {
@@ -490,7 +527,7 @@ impl DockView {
                 Ok(monitor)
                     if monitor.bounds != self.geometry.monitor.bounds
                         || monitor.scale_factor != self.geometry.monitor.scale_factor
-                        || (!self.applied_config.behavior.reserve_space
+                        || (!self.reserves_space(&self.applied_config)
                             && monitor.work_area != self.geometry.monitor.work_area) =>
                 {
                     let config = self.applied_config.clone();
@@ -605,6 +642,42 @@ impl DockView {
             let _ = this.update(cx, |this, cx| {
                 this.menu_open = false;
                 this.handle_menu_result(result, cx);
+            });
+        })
+        .detach();
+    }
+
+    fn on_tray_menu(&mut self, cx: &mut Context<Self>) {
+        if self.menu_open {
+            return;
+        }
+        self.menu_open = true;
+        cx.notify();
+        let hwnd = self.geometry.hwnd;
+        let hidden = self
+            .applied_config
+            .behavior
+            .hide_native_taskbar
+            .then_some(self.native_taskbar_hidden);
+        cx.spawn(async move |this, cx| {
+            Timer::after(Duration::ZERO).await;
+            let result = win::menu::show_tray(hwnd, hidden);
+            let _ = this.update(cx, |this, cx| {
+                this.menu_open = false;
+                match result {
+                    Ok(Some(TrayAction::ToggleNativeTaskbar)) => {
+                        this.controller
+                            .update(cx, |controller, cx| controller.toggle_taskbar_for_tray(cx));
+                    }
+                    Ok(Some(TrayAction::OpenSettings(uri))) => {
+                        if let Err(error) = win::launch::launch(uri, &[]) {
+                            warn!(%error, uri, "failed to open Windows settings from the dock");
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => warn!(%error, "failed to show the dock tray menu"),
+                }
+                cx.notify();
             });
         })
         .detach();
@@ -825,9 +898,27 @@ impl Render for DockView {
         let inner_width =
             (self.geometry.bounds.size.width - pl - pr - self.theme.border_width * 2.0)
                 .max(px(0.0));
+        let tray_width = px(TRAY_BUTTON_WIDTH).min(inner_width * 0.3);
+        let content_width = inner_width - tray_width;
+        let text = self.theme.text;
+        let tray = div()
+            .id("dock-tray")
+            .w(tray_width)
+            .h(px(28.0))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(6.0))
+            .text_xs()
+            .cursor_pointer()
+            .hover(move |style| style.bg(Rgba { a: 0.13, ..text }))
+            .active(move |style| style.bg(Rgba { a: 0.20, ..text }))
+            .on_click(cx.listener(|this, _, _, cx| this.on_tray_menu(cx)))
+            .child("Tray");
         let clock_gap = px(12.0);
         let clock_width = preferred_clock_width(&self.applied_config.clock)
-            .min((inner_width * 0.45 - clock_gap).max(px(0.0)));
+            .min((content_width * 0.45 - clock_gap).max(px(0.0)));
 
         let mut apps_div = div()
             .flex()
@@ -887,7 +978,11 @@ impl Render for DockView {
         } else {
             px(0.0)
         };
-        let app_width = (inner_width - clock_space).max(px(0.0));
+        let trailing_space = clock_space + tray_width;
+        let balance_dock = self.theme.alignment_anchor == AlignmentAnchor::Dock
+            && self.theme.item_alignment == crate::config::ItemAlignment::Center
+            && strip_width + trailing_space * 2.0 <= inner_width;
+        let app_width = inner_width - trailing_space;
         let control_width = px(24.0);
         let show_controls = strip_width > app_width && app_width >= control_width * 3.0;
         let overflow = strip_width - (app_width - control_width * 2.0);
@@ -913,11 +1008,12 @@ impl Render for DockView {
                 row.child(self.render_scroll_control(true, control_width, overflow, cx))
             });
 
-        let dock_bar = if self.applied_config.clock.show {
-            // Center on the dock when there is room to balance the clock's space.
-            let balance_clock = self.theme.alignment_anchor == AlignmentAnchor::Dock
-                && self.theme.item_alignment == crate::config::ItemAlignment::Center
-                && strip_width + clock_space * 2.0 <= inner_width;
+        let mut dock_bar = dock_bar
+            .when(balance_dock, |bar| {
+                bar.child(div().w(trailing_space).flex_shrink_0())
+            })
+            .child(apps);
+        if self.applied_config.clock.show {
             let mut clock = div()
                 .w(clock_width)
                 .h_full()
@@ -931,17 +1027,10 @@ impl Render for DockView {
                 crate::config::VerticalAlign::Top => clock.justify_start(),
                 crate::config::VerticalAlign::Bottom => clock.justify_end(),
             };
-            dock_bar
-                .when(balance_clock, |bar| {
-                    bar.child(div().w(clock_space).flex_shrink_0())
-                })
-                .child(apps)
-                .child(clock.child(self.clock.clone()))
-        } else {
-            dock_bar.child(apps)
-        };
+            dock_bar = dock_bar.child(clock.child(self.clock.clone()));
+        }
 
-        div().size_full().child(dock_bar)
+        div().size_full().child(dock_bar.child(tray))
     }
 }
 
@@ -957,7 +1046,8 @@ pub(super) fn dock_size(
             let (_, _, left, right) = appearance.effective_padding();
             let padding = px((left + right + appearance.border_width * 2) as f32);
             let apps = app_strip_width(appearance, item_count.max(1));
-            (padding + apps + preferred_clock_width(&config.clock) + px(24.0)).max(px(120.0))
+            (padding + apps + preferred_clock_width(&config.clock) + px(24.0 + TRAY_BUTTON_WIDTH))
+                .max(px(120.0))
         }
     };
     size(width.min(work_area_width), px(appearance.height as f32))

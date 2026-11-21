@@ -22,6 +22,18 @@ const CMD_RESTORE_QUIT: usize = 3;
 const CMD_SETTINGS: usize = 4;
 const CMD_NEXT_LAYOUT: usize = 5;
 const FIRST_LAYOUT_COMMAND: usize = 100;
+const CMD_TOGGLE_TASKBAR: usize = 1;
+const FIRST_TRAY_SETTING_COMMAND: usize = 2;
+
+const TRAY_SETTINGS: &[(&str, &str)] = &[
+    ("Network and internet", "ms-settings:network-status"),
+    ("Sound", "ms-settings:sound"),
+    ("Microphone privacy", "ms-settings:privacy-microphone"),
+    ("Power and battery", "ms-settings:powersleep"),
+    ("Language and region", "ms-settings:regionlanguage"),
+    ("Notifications", "ms-settings:notifications"),
+    ("Taskbar settings", "ms-settings:taskbar"),
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MenuAction {
@@ -30,6 +42,11 @@ pub enum MenuAction {
     ReloadConfig,
     ToggleAutostart,
     RestoreAndQuit,
+}
+
+pub enum TrayAction {
+    ToggleNativeTaskbar,
+    OpenSettings(&'static str),
 }
 
 pub fn show(
@@ -42,9 +59,7 @@ pub fn show(
         false
     });
 
-    // SAFETY: CreatePopupMenu has no preconditions; a null handle means failure.
-    let menu = unsafe { CreatePopupMenu() }.context("CreatePopupMenu failed")?;
-    let result = (|| -> Result<Option<MenuAction>> {
+    with_popup_menu(|menu| {
         // SAFETY: `menu` is a live popup menu. Each appended string is a temporary
         // HSTRING that lives until AppendMenuW has copied it.
         unsafe {
@@ -78,42 +93,7 @@ pub fn show(
             append_layouts(menu, layouts, next_layout.is_some())?;
         }
 
-        let mut cursor = POINT::default();
-        // SAFETY: `cursor` is a valid POINT written by the API.
-        unsafe { GetCursorPos(&mut cursor) }.context("GetCursorPos failed")?;
-        // SAFETY: read-only foreground query; may return null.
-        let previous_foreground = unsafe { GetForegroundWindow() };
-        let dock = HWND(hwnd as *mut c_void);
-        // SAFETY: setting the dock as foreground owner is what lets the popup dismiss
-        // when the user clicks elsewhere. Failure is tolerated because TrackPopupMenu
-        // still runs and the foreground window is restored below when possible.
-        let _ = unsafe { SetForegroundWindow(dock) };
-
-        // SAFETY: the menu is live, `dock` is the owner window, and the coordinates
-        // came from GetCursorPos. TPM_RETURNCMD makes this call synchronous without a
-        // posted WM_COMMAND.
-        let command = unsafe {
-            TrackPopupMenu(
-                menu,
-                TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD,
-                cursor.x,
-                cursor.y,
-                None,
-                dock,
-                None,
-            )
-        };
-
-        // SAFETY: both calls only read the foreground window and try to restore the
-        // previously active window. A denied restore is reported, not fatal.
-        let restored = unsafe {
-            GetForegroundWindow().0 != dock.0 || SetForegroundWindow(previous_foreground).as_bool()
-        };
-        if !restored {
-            warn!("failed to restore the foreground window after the dock menu");
-        }
-
-        Ok(match command.0 as usize {
+        Ok(match popup_command(hwnd, menu)? {
             CMD_NEXT_LAYOUT => next_layout.map(|name| MenuAction::UsePinnedLayout(name.to_owned())),
             CMD_SETTINGS => Some(MenuAction::OpenSettings),
             CMD_RELOAD => Some(MenuAction::ReloadConfig),
@@ -124,13 +104,92 @@ pub fn show(
                 .and_then(|index| layouts.get(index))
                 .map(|(name, _)| MenuAction::UsePinnedLayout(name.clone())),
         })
-    })();
+    })
+}
+
+pub fn show_tray(hwnd: isize, native_taskbar_hidden: Option<bool>) -> Result<Option<TrayAction>> {
+    with_popup_menu(|menu| {
+        // SAFETY: the menu is live and AppendMenuW copies the labels during each call.
+        unsafe {
+            if let Some(hidden) = native_taskbar_hidden {
+                let label = if hidden {
+                    "Show Windows taskbar and tray"
+                } else {
+                    "Hide Windows taskbar and tray"
+                };
+                AppendMenuW(menu, MF_STRING, CMD_TOGGLE_TASKBAR, &HSTRING::from(label))
+                    .context("AppendMenuW(taskbar toggle) failed")?;
+                AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null())
+                    .context("AppendMenuW(tray separator) failed")?;
+            }
+            for (index, (label, _)) in TRAY_SETTINGS.iter().enumerate() {
+                AppendMenuW(
+                    menu,
+                    MF_STRING,
+                    FIRST_TRAY_SETTING_COMMAND + index,
+                    &HSTRING::from(*label),
+                )
+                .with_context(|| format!("AppendMenuW({label}) failed"))?;
+            }
+        }
+
+        Ok(match popup_command(hwnd, menu)? {
+            CMD_TOGGLE_TASKBAR if native_taskbar_hidden.is_some() => {
+                Some(TrayAction::ToggleNativeTaskbar)
+            }
+            id => id
+                .checked_sub(FIRST_TRAY_SETTING_COMMAND)
+                .and_then(|index| TRAY_SETTINGS.get(index))
+                .map(|(_, uri)| TrayAction::OpenSettings(uri)),
+        })
+    })
+}
+
+fn with_popup_menu<T>(show_menu: impl FnOnce(HMENU) -> Result<T>) -> Result<T> {
+    // SAFETY: CreatePopupMenu has no preconditions; a null handle means failure.
+    let menu = unsafe { CreatePopupMenu() }.context("CreatePopupMenu failed")?;
+    let result = show_menu(menu);
 
     // SAFETY: `menu` was created by this function and is destroyed exactly once.
     if let Err(error) = unsafe { DestroyMenu(menu) } {
         warn!(%error, "failed to destroy the dock popup menu");
     }
     result
+}
+
+fn popup_command(hwnd: isize, menu: HMENU) -> Result<usize> {
+    let mut cursor = POINT::default();
+    // SAFETY: `cursor` is a valid POINT written by the API.
+    unsafe { GetCursorPos(&mut cursor) }.context("GetCursorPos failed")?;
+    // SAFETY: read-only foreground query; may return null.
+    let previous_foreground = unsafe { GetForegroundWindow() };
+    let dock = HWND(hwnd as *mut c_void);
+    // SAFETY: setting the dock as foreground owner lets the popup dismiss when
+    // the user clicks elsewhere. TrackPopupMenu still runs if activation is denied.
+    let _ = unsafe { SetForegroundWindow(dock) };
+
+    // SAFETY: the menu is live, `dock` is the owner, and the coordinates came from
+    // GetCursorPos. TPM_RETURNCMD returns the selection without posting WM_COMMAND.
+    let command = unsafe {
+        TrackPopupMenu(
+            menu,
+            TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD,
+            cursor.x,
+            cursor.y,
+            None,
+            dock,
+            None,
+        )
+    };
+
+    // SAFETY: the calls only query foreground and try to restore the previous window.
+    let restored = unsafe {
+        GetForegroundWindow().0 != dock.0 || SetForegroundWindow(previous_foreground).as_bool()
+    };
+    if !restored {
+        warn!("failed to restore the foreground window after the dock menu");
+    }
+    Ok(command.0 as usize)
 }
 
 fn append_layouts(menu: HMENU, layouts: &[(String, bool)], can_cycle: bool) -> Result<()> {

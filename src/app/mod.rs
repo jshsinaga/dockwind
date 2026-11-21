@@ -150,9 +150,15 @@ impl AppController {
             TrayEvent::ReloadConfig => self.reload_config(cx),
             TrayEvent::ToggleAutostart => self.toggle_autostart(),
             TrayEvent::RestoreTaskbar => {
-                if let Err(error) = win::taskbar::restore_native(false) {
+                let result = if self.native_taskbar_hidden() {
+                    self.taskbar.borrow_mut().disable()
+                } else {
+                    win::taskbar::restore_native(false)
+                };
+                if let Err(error) = result {
                     warn!(%error, "failed to restore the taskbar from the tray");
                 }
+                cx.notify();
             }
             TrayEvent::Quit => self.restore_and_quit(cx),
         }
@@ -160,6 +166,26 @@ impl AppController {
 
     pub fn config(&self) -> &Config {
         &self.config
+    }
+
+    pub fn native_taskbar_hidden(&self) -> bool {
+        self.taskbar.borrow().is_hiding()
+    }
+
+    pub fn toggle_taskbar_for_tray(&mut self, cx: &mut Context<Self>) {
+        if !self.config.behavior.hide_native_taskbar {
+            return;
+        }
+        let mut taskbar = self.taskbar.borrow_mut();
+        let result = if taskbar.is_hiding() {
+            taskbar.disable()
+        } else {
+            taskbar.enable()
+        };
+        if let Err(error) = result {
+            warn!(%error, "failed to toggle the Windows taskbar from the dock");
+        }
+        cx.notify();
     }
 
     pub fn config_path(&self) -> &std::path::Path {

@@ -268,6 +268,20 @@ On a Windows desktop, try each combination of Hover zoom and Hover background.
 Check that entering and leaving a tile keeps dock height, icon spacing, and
 indicator positions fixed, including when Windows animation effects are off.
 
+Open Explorer, an elevated app, and an app with an owned modal dialog. Compare
+the running tiles to the Windows taskbar. Minimize, switch focus, and close
+those windows, including the dialog, and check that Dockwind updates the tiles.
+
+With Hide Windows taskbar and Reserve space enabled, open the dock Tray menu
+and show the native taskbar. Open its hidden-icons menu and a third-party tray
+icon's context menu. Hide the taskbar again from Dockwind and check that the
+dock resumes reserving space. Repeat with Windows auto-hide enabled. Select a
+Windows settings shortcut with the dock clock hidden.
+
+Launch the release executable from Explorer and from a Start Menu shortcut.
+Check for a console flash. Run the Settings command from an existing terminal
+and verify that it still opens the settings window.
+
 ### Historical evidence, baseline `482bd7a`
 
 | Date | Area | Evidence |

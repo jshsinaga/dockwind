@@ -548,6 +548,10 @@ pub struct TaskbarRuntime {
 }
 
 impl TaskbarRuntime {
+    pub fn is_hiding(&self) -> bool {
+        self.guard.is_some()
+    }
+
     pub fn enable(&mut self) -> Result<()> {
         if self.guard.is_some() {
             return Ok(());
@@ -592,9 +596,10 @@ impl TaskbarRuntime {
     }
 
     pub fn disable(&mut self) -> Result<()> {
-        if let Some(mut guard) = self.guard.take() {
+        if let Some(guard) = self.guard.as_mut() {
             guard.restore()?;
         }
+        self.guard = None;
         if let Some(mut watcher) = self.watcher.take() {
             watcher.shutdown()?;
         }
