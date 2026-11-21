@@ -32,6 +32,13 @@ jobs:
         shell: pwsh
         run: ./scripts/smoke-dock.ps1
 
+      - name: Upload dock screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dockwind-desktop-smoke
+          path: target/dock-smoke/*.png
+
   installer:
     needs: gate
     if: github.event_name != 'pull_request'
