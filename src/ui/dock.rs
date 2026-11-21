@@ -18,7 +18,7 @@ use crate::config::{AlignmentAnchor, Appearance, BlurMode, Clock, Config, DockEd
 use crate::dock::{AutoHide, AutoHideInput, AutoHideSettings, DockItem};
 use crate::win;
 use crate::win::appbar::{AppBarEdge, AppBarHandle};
-use crate::win::menu::{MenuAction, TrayAction};
+use crate::win::menu::{MenuAction, PopupAnchor, TrayAction};
 use crate::win::monitors::MonitorInfo;
 
 #[derive(Debug, Clone, Copy)]
@@ -633,18 +633,24 @@ impl DockView {
     fn open_menu<T: 'static>(
         &mut self,
         cx: &mut Context<Self>,
-        show: impl FnOnce(isize) -> anyhow::Result<Option<T>> + 'static,
+        show: impl AsyncFnOnce(PopupAnchor) -> anyhow::Result<Option<T>> + 'static,
         handle: impl FnOnce(&mut Self, T, &mut Context<Self>) + 'static,
     ) {
         if self.menu_open {
             return;
         }
+        let anchor = match PopupAnchor::at_cursor(self.geometry.hwnd) {
+            Ok(anchor) => anchor,
+            Err(error) => {
+                warn!(%error, "failed to locate the dock menu");
+                return;
+            }
+        };
         self.menu_open = true;
         cx.notify();
-        let hwnd = self.geometry.hwnd;
         cx.spawn(async move |this, cx| {
             Timer::after(Duration::ZERO).await;
-            let result = show(hwnd);
+            let result = show(anchor).await;
             let _ = this.update(cx, |this, cx| {
                 this.menu_open = false;
                 match result {
@@ -668,7 +674,7 @@ impl DockView {
         let next_layout = self.applied_config.next_pinned_layout().map(str::to_owned);
         self.open_menu(
             cx,
-            move |hwnd| win::menu::show(hwnd, &layouts, next_layout.as_deref()),
+            async move |anchor| win::menu::show(anchor, &layouts, next_layout.as_deref()),
             Self::handle_menu_action,
         );
     }
@@ -679,9 +685,12 @@ impl DockView {
             .behavior
             .hide_native_taskbar
             .then_some(self.native_taskbar_hidden);
+        let status = cx
+            .background_executor()
+            .spawn(async { win::system_tray::status() });
         self.open_menu(
             cx,
-            move |hwnd| win::menu::show_tray(hwnd, hidden),
+            async move |anchor| win::menu::show_tray(anchor, hidden, status.await),
             |this, action, cx| match action {
                 TrayAction::ToggleNativeTaskbar => {
                     this.controller
@@ -691,6 +700,15 @@ impl DockView {
                     if let Err(error) = win::launch::launch(uri, &[]) {
                         warn!(%error, uri, "failed to open Windows settings from the dock");
                     }
+                }
+                TrayAction::Audio(action) => {
+                    cx.background_executor()
+                        .spawn(async move {
+                            if let Err(error) = win::system_tray::apply_audio(action) {
+                                warn!(%error, ?action, "failed to apply the tray audio control");
+                            }
+                        })
+                        .detach();
                 }
             },
         );
@@ -710,7 +728,7 @@ impl DockView {
         }
         self.open_menu(
             cx,
-            move |hwnd| win::menu::show_windows(hwnd, &windows),
+            async move |anchor| win::menu::show_windows(anchor, &windows),
             move |this, hwnd, cx| {
                 this.controller
                     .update(cx, |controller, _| controller.select_window(&item, hwnd));

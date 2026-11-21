@@ -12,6 +12,7 @@ pub mod menu;
 pub mod monitors;
 pub mod motion;
 pub mod single_instance;
+pub mod system_tray;
 pub mod taskbar;
 pub mod tray;
 pub mod windows_enum;

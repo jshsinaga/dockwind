@@ -15,6 +15,7 @@ use windows::{
 };
 
 use crate::win::autostart;
+use crate::win::system_tray::{AudioAction, TrayStatus};
 
 const CMD_RELOAD: usize = 1;
 const CMD_AUTOSTART: usize = 2;
@@ -22,19 +23,6 @@ const CMD_RESTORE_QUIT: usize = 3;
 const CMD_SETTINGS: usize = 4;
 const CMD_NEXT_LAYOUT: usize = 5;
 const FIRST_LAYOUT_COMMAND: usize = 100;
-const CMD_TOGGLE_TASKBAR: usize = 1;
-const FIRST_TRAY_SETTING_COMMAND: usize = 2;
-
-const TRAY_SETTINGS: &[(&str, &str)] = &[
-    ("Network and internet", "ms-settings:network-status"),
-    ("Sound", "ms-settings:sound"),
-    ("Microphone privacy", "ms-settings:privacy-microphone"),
-    ("Power and battery", "ms-settings:powersleep"),
-    ("Language and region", "ms-settings:regionlanguage"),
-    ("Notifications", "ms-settings:notifications"),
-    ("Taskbar settings", "ms-settings:taskbar"),
-];
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MenuAction {
     OpenSettings,
@@ -44,13 +32,29 @@ pub enum MenuAction {
     RestoreAndQuit,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TrayAction {
     ToggleNativeTaskbar,
     OpenSettings(&'static str),
+    Audio(AudioAction),
+}
+
+pub struct PopupAnchor {
+    hwnd: isize,
+    cursor: POINT,
+}
+
+impl PopupAnchor {
+    pub fn at_cursor(hwnd: isize) -> Result<Self> {
+        let mut cursor = POINT::default();
+        // SAFETY: cursor is a valid POINT written by the API.
+        unsafe { GetCursorPos(&mut cursor) }.context("GetCursorPos failed")?;
+        Ok(Self { hwnd, cursor })
+    }
 }
 
 pub fn show(
-    hwnd: isize,
+    anchor: PopupAnchor,
     layouts: &[(String, bool)],
     next_layout: Option<&str>,
 ) -> Result<Option<MenuAction>> {
@@ -93,7 +97,7 @@ pub fn show(
             append_layouts(menu, layouts, next_layout.is_some())?;
         }
 
-        Ok(match popup_command(hwnd, menu)? {
+        Ok(match popup_command(anchor, menu) {
             CMD_NEXT_LAYOUT => next_layout.map(|name| MenuAction::UsePinnedLayout(name.to_owned())),
             CMD_SETTINGS => Some(MenuAction::OpenSettings),
             CMD_RELOAD => Some(MenuAction::ReloadConfig),
@@ -107,7 +111,10 @@ pub fn show(
     })
 }
 
-pub fn show_windows(hwnd: isize, windows: &[(isize, String, bool)]) -> Result<Option<isize>> {
+pub fn show_windows(
+    anchor: PopupAnchor,
+    windows: &[(isize, String, bool)],
+) -> Result<Option<isize>> {
     with_popup_menu(|menu| {
         for (index, (_, title, active)) in windows.iter().enumerate() {
             let flags = if *active {
@@ -120,16 +127,21 @@ pub fn show_windows(hwnd: isize, windows: &[(isize, String, bool)]) -> Result<Op
             unsafe { AppendMenuW(menu, flags, index + 1, &label) }
                 .context("AppendMenuW(window title) failed")?;
         }
-        Ok(popup_command(hwnd, menu)?
+        Ok(popup_command(anchor, menu)
             .checked_sub(1)
             .and_then(|index| windows.get(index))
             .map(|(hwnd, _, _)| *hwnd))
     })
 }
 
-pub fn show_tray(hwnd: isize, native_taskbar_hidden: Option<bool>) -> Result<Option<TrayAction>> {
+pub fn show_tray(
+    anchor: PopupAnchor,
+    native_taskbar_hidden: Option<bool>,
+    status: TrayStatus,
+) -> Result<Option<TrayAction>> {
+    let entries = tray_entries(status);
     with_popup_menu(|menu| {
-        // SAFETY: the menu is live and AppendMenuW copies the labels during each call.
+        // SAFETY: the menu is live and AppendMenuW copies labels during each call.
         unsafe {
             if let Some(hidden) = native_taskbar_hidden {
                 let label = if hidden {
@@ -137,32 +149,106 @@ pub fn show_tray(hwnd: isize, native_taskbar_hidden: Option<bool>) -> Result<Opt
                 } else {
                     "Hide Windows taskbar and tray"
                 };
-                AppendMenuW(menu, MF_STRING, CMD_TOGGLE_TASKBAR, &HSTRING::from(label))
+                AppendMenuW(menu, MF_STRING, 1, &HSTRING::from(label))
                     .context("AppendMenuW(taskbar toggle) failed")?;
                 AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null())
                     .context("AppendMenuW(tray separator) failed")?;
             }
-            for (index, (label, _)) in TRAY_SETTINGS.iter().enumerate() {
-                AppendMenuW(
-                    menu,
-                    MF_STRING,
-                    FIRST_TRAY_SETTING_COMMAND + index,
-                    &HSTRING::from(*label),
-                )
-                .with_context(|| format!("AppendMenuW({label}) failed"))?;
+            for (index, (label, _)) in entries.iter().enumerate() {
+                AppendMenuW(menu, MF_STRING, index + 2, &HSTRING::from(label.as_str()))
+                    .with_context(|| format!("AppendMenuW({label}) failed"))?;
             }
         }
 
-        Ok(match popup_command(hwnd, menu)? {
-            CMD_TOGGLE_TASKBAR if native_taskbar_hidden.is_some() => {
-                Some(TrayAction::ToggleNativeTaskbar)
-            }
+        let command = popup_command(anchor, menu);
+        Ok(match command {
+            1 if native_taskbar_hidden.is_some() => Some(TrayAction::ToggleNativeTaskbar),
             id => id
-                .checked_sub(FIRST_TRAY_SETTING_COMMAND)
-                .and_then(|index| TRAY_SETTINGS.get(index))
-                .map(|(_, uri)| TrayAction::OpenSettings(uri)),
+                .checked_sub(2)
+                .and_then(|index| entries.get(index))
+                .map(|(_, action)| *action),
         })
     })
+}
+
+fn tray_entries(status: TrayStatus) -> Vec<(String, TrayAction)> {
+    let setting = TrayAction::OpenSettings;
+    let audio = TrayAction::Audio;
+    let mut entries = vec![
+        (
+            status.network.map_or_else(
+                || "Network and internet".into(),
+                |network| format!("Network ({network})"),
+            ),
+            setting("ms-settings:network-status"),
+        ),
+        (
+            status.sound.as_ref().map_or_else(
+                || "Sound".into(),
+                |sound| {
+                    let mute = if sound.muted { ", muted" } else { "" };
+                    format!("Sound ({}%{mute})", sound.percentage)
+                },
+            ),
+            setting("ms-settings:sound"),
+        ),
+    ];
+    if let Some(sound) = status.sound {
+        entries.push((
+            if sound.muted {
+                "Unmute sound"
+            } else {
+                "Mute sound"
+            }
+            .into(),
+            audio(AudioAction::SetOutputMute(!sound.muted)),
+        ));
+        entries.push((
+            "Volume up 5%".into(),
+            audio(AudioAction::ChangeVolume(0.05)),
+        ));
+        entries.push((
+            "Volume down 5%".into(),
+            audio(AudioAction::ChangeVolume(-0.05)),
+        ));
+    }
+    if let Some(muted) = status.microphone_muted {
+        entries.push((
+            if muted {
+                "Unmute microphone"
+            } else {
+                "Mute microphone"
+            }
+            .into(),
+            audio(AudioAction::SetMicrophoneMute(!muted)),
+        ));
+    }
+    entries.extend([
+        (
+            "Microphone privacy".into(),
+            setting("ms-settings:privacy-microphone"),
+        ),
+        (
+            status.power.map_or_else(
+                || "Power and battery".into(),
+                |power| format!("Battery ({power})"),
+            ),
+            setting("ms-settings:powersleep"),
+        ),
+        (
+            status.input_language.map_or_else(
+                || "Language and region".into(),
+                |language| format!("Language and region ({language})"),
+            ),
+            setting("ms-settings:regionlanguage"),
+        ),
+        (
+            "Notification settings".into(),
+            setting("ms-settings:notifications"),
+        ),
+        ("Taskbar settings".into(), setting("ms-settings:taskbar")),
+    ]);
+    entries
 }
 
 fn with_popup_menu<T>(show_menu: impl FnOnce(HMENU) -> Result<T>) -> Result<T> {
@@ -177,13 +263,10 @@ fn with_popup_menu<T>(show_menu: impl FnOnce(HMENU) -> Result<T>) -> Result<T> {
     result
 }
 
-fn popup_command(hwnd: isize, menu: HMENU) -> Result<usize> {
-    let mut cursor = POINT::default();
-    // SAFETY: `cursor` is a valid POINT written by the API.
-    unsafe { GetCursorPos(&mut cursor) }.context("GetCursorPos failed")?;
+fn popup_command(anchor: PopupAnchor, menu: HMENU) -> usize {
     // SAFETY: read-only foreground query; may return null.
     let previous_foreground = unsafe { GetForegroundWindow() };
-    let dock = HWND(hwnd as *mut c_void);
+    let dock = HWND(anchor.hwnd as *mut c_void);
     // SAFETY: setting the dock as foreground owner lets the popup dismiss when
     // the user clicks elsewhere. TrackPopupMenu still runs if activation is denied.
     let _ = unsafe { SetForegroundWindow(dock) };
@@ -194,8 +277,8 @@ fn popup_command(hwnd: isize, menu: HMENU) -> Result<usize> {
         TrackPopupMenu(
             menu,
             TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD,
-            cursor.x,
-            cursor.y,
+            anchor.cursor.x,
+            anchor.cursor.y,
             None,
             dock,
             None,
@@ -209,7 +292,7 @@ fn popup_command(hwnd: isize, menu: HMENU) -> Result<usize> {
     if !restored {
         warn!("failed to restore the foreground window after the dock menu");
     }
-    Ok(command.0 as usize)
+    command.0 as usize
 }
 
 fn append_layouts(menu: HMENU, layouts: &[(String, bool)], can_cycle: bool) -> Result<()> {
@@ -253,5 +336,50 @@ fn append_layouts(menu: HMENU, layouts: &[(String, bool)], can_cycle: bool) -> R
             warn!(%error, "failed to destroy the layouts submenu");
         }
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::win::system_tray::SoundStatus;
+
+    #[test]
+    fn audio_actions_reflect_the_reported_device_state() {
+        let entries = tray_entries(TrayStatus {
+            sound: Some(SoundStatus {
+                percentage: 42,
+                muted: true,
+            }),
+            microphone_muted: Some(false),
+            ..TrayStatus::default()
+        });
+        assert!(
+            entries
+                .iter()
+                .any(|(label, _)| label == "Sound (42%, muted)")
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|(_, action)| *action == TrayAction::Audio(AudioAction::SetOutputMute(false)))
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|(_, action)| *action
+                    == TrayAction::Audio(AudioAction::SetMicrophoneMute(true)))
+        );
+    }
+
+    #[test]
+    fn tray_keeps_settings_shortcuts_without_audio_devices() {
+        let entries = tray_entries(TrayStatus::default());
+        assert!(
+            entries
+                .iter()
+                .all(|(_, action)| matches!(action, TrayAction::OpenSettings(_)))
+        );
+        assert!(entries.iter().any(|(label, _)| label == "Sound"));
     }
 }
