@@ -52,6 +52,27 @@ impl CachedIcon {
     }
 }
 
+const APP_HOVER_DURATION: Duration = Duration::from_millis(120);
+
+struct AppHover {
+    from: f32,
+    target: f32,
+    started: Instant,
+}
+
+impl AppHover {
+    fn progress(&self, now: Instant, animated: bool) -> f32 {
+        if !animated {
+            return self.target;
+        }
+        let fraction = (now.saturating_duration_since(self.started).as_secs_f32()
+            / APP_HOVER_DURATION.as_secs_f32())
+        .min(1.0);
+        let eased = 1.0 - (1.0 - fraction).powi(3);
+        self.from + (self.target - self.from) * eased
+    }
+}
+
 pub struct DockView {
     controller: Entity<AppController>,
     applied_config: Config,
@@ -66,6 +87,7 @@ pub struct DockView {
     auto_hide: AutoHide,
     auto_hide_settings: AutoHideSettings,
     animations_enabled: bool,
+    app_hover: HashMap<usize, AppHover>,
     appbar: Option<AppBarHandle>,
     menu_open: bool,
     progress: f32,
@@ -113,6 +135,7 @@ impl DockView {
             auto_hide,
             auto_hide_settings: auto_hide_settings(&config, animations_enabled),
             animations_enabled,
+            app_hover: HashMap::new(),
             appbar: None,
             menu_open: false,
             progress,
@@ -174,6 +197,17 @@ impl DockView {
             .map(Arc::as_ref)
             .ne(controller.items().iter());
         if items_changed {
+            if self
+                .items
+                .iter()
+                .map(|item| (&item.key, &item.args))
+                .ne(controller
+                    .items()
+                    .iter()
+                    .map(|item| (&item.key, &item.args)))
+            {
+                self.app_hover.clear();
+            }
             self.items = controller.items().iter().cloned().map(Arc::new).collect();
         }
         let config = (config != &self.applied_config).then(|| config.clone());
@@ -201,6 +235,24 @@ impl DockView {
             }
             cx.notify();
         }
+    }
+
+    fn set_app_hover(&mut self, index: usize, hovered: bool, cx: &mut Context<Self>) {
+        let now = Instant::now();
+        let target = if hovered { 1.0 } else { 0.0 };
+        let from = self
+            .app_hover
+            .get(&index)
+            .map_or(0.0, |hover| hover.progress(now, self.animations_enabled));
+        self.app_hover.insert(
+            index,
+            AppHover {
+                from,
+                target,
+                started: now,
+            },
+        );
+        cx.notify();
     }
 
     fn load_missing_icons(&mut self, cx: &mut Context<Self>) {
@@ -713,6 +765,23 @@ impl Render for DockView {
             self.apply_backdrop();
         }
 
+        let hover_now = Instant::now();
+        let hover_effects = self.theme.hover_zoom || self.theme.hover_background;
+        if is_hidden || !hover_effects {
+            self.app_hover.clear();
+        }
+        self.app_hover.retain(|_, hover| {
+            hover.target > 0.0 || hover.progress(hover_now, self.animations_enabled) > 0.0
+        });
+        if self.animations_enabled
+            && self.app_hover.values().any(|hover| {
+                hover.from != hover.target
+                    && hover_now.saturating_duration_since(hover.started) < APP_HOVER_DURATION
+            })
+        {
+            window.request_animation_frame();
+        }
+
         let (pt, pb, pl, pr) = (
             self.theme.padding_top,
             self.theme.padding_bottom,
@@ -800,15 +869,17 @@ impl Render for DockView {
                     controller.launch_second_instance(&middle_clicked);
                 });
             });
-            render_app_item(
-                index,
-                item,
-                icon,
-                &self.theme,
-                self.icon_size,
-                on_click,
-                on_middle,
-            )
+            let hover = self.app_hover.get(&index).map_or(0.0, |hover| {
+                hover.progress(hover_now, self.animations_enabled)
+            });
+            render_app_item(index, item, icon, &self.theme, self.icon_size, hover)
+                .on_click(on_click)
+                .on_mouse_down(MouseButton::Middle, on_middle)
+                .when(hover_effects, |tile| {
+                    tile.on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                        this.set_app_hover(index, *hovered, cx);
+                    }))
+                })
         });
 
         let clock_space = if self.applied_config.clock.show {
@@ -929,6 +1000,26 @@ fn auto_hide_settings(config: &Config, animations_enabled: bool) -> AutoHideSett
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_hover_interpolates_and_respects_reduced_motion() {
+        let started = Instant::now();
+        let entering = AppHover {
+            from: 0.0,
+            target: 1.0,
+            started,
+        };
+        let mid = entering.progress(started + Duration::from_millis(60), true);
+        assert!(mid > 0.0 && mid < 1.0);
+        assert_eq!(entering.progress(started, false), 1.0);
+        let leaving = AppHover {
+            from: mid,
+            target: 0.0,
+            started,
+        };
+        assert_eq!(leaving.progress(started, true), mid);
+        assert_eq!(leaving.progress(started + APP_HOVER_DURATION, true), 0.0);
+    }
 
     #[test]
     fn reduced_motion_keeps_delays_and_disables_the_slide() {

@@ -113,6 +113,8 @@ duplicate item.
 | `border_width` | integer | 1 | 0 to 20 | Live |
 | `shadow` | bool | false | None | Live |
 | `item_spacing` | integer | 8 | 0 to 64 | Live |
+| `hover_zoom` | bool | false | Enlarges the icon inside its existing tile | Live |
+| `hover_background` | bool | true | Highlights the tile on hover | Live |
 | `indicator_style` | enum | `line` | `line` or `dot` | Live |
 | `item_alignment` | enum | `center` | `center`, `left`, or `right` | Live |
 | `alignment_anchor` | enum | `dock` | `dock` or `clock` | Live |

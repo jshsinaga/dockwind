@@ -262,6 +262,12 @@ Keep editing, Discard, and Save & Close, including an external config conflict.
 With the app picker, taskbar confirmation, and pinned-app delete confirmation
 open, verify that clicks and scrolling do not reach Settings behind them.
 
+### Dock controls follow-up
+
+On a Windows desktop, try each combination of Hover zoom and Hover background.
+Check that entering and leaving a tile keeps dock height, icon spacing, and
+indicator positions fixed, including when Windows animation effects are off.
+
 ### Historical evidence, baseline `482bd7a`
 
 | Date | Area | Evidence |
