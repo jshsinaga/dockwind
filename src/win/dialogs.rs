@@ -1,29 +1,33 @@
 use std::collections::HashSet;
+use std::os::windows::{ffi::OsStringExt, fs::MetadataExt};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
-use windows::Win32::Foundation::{COLORREF, HWND};
+use windows::Win32::Foundation::{COLORREF, ERROR_CANCELLED, HWND};
+use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT};
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
-    CoUninitialize, IPersistFile, STGM_READ,
+    CoTaskMemFree, CoUninitialize, IPersistFile, STGM_READ,
 };
 use windows::Win32::UI::Controls::Dialogs::{
-    CC_FULLOPEN, CC_RGBINIT, CHOOSECOLORW, ChooseColorW, CommDlgExtendedError, GetOpenFileNameW,
-    OFN_EXPLORER, OFN_FILEMUSTEXIST, OFN_PATHMUSTEXIST, OPENFILENAMEW,
+    CC_FULLOPEN, CC_RGBINIT, CHOOSECOLORW, ChooseColorW, CommDlgExtendedError,
 };
-use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
+use windows::Win32::UI::Shell::{
+    Common::COMDLG_FILTERSPEC, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FOS_NOCHANGEDIR,
+    FOS_PATHMUSTEXIST, FileOpenDialog, IFileOpenDialog, IShellLinkW, SIGDN_FILESYSPATH, ShellLink,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowW, SW_RESTORE, SetForegroundWindow, ShowWindow,
 };
-use windows::core::{HSTRING, Interface, PCWSTR, w};
+use windows::core::{HRESULT, HSTRING, Interface, PCWSTR, w};
 
 use crate::config::parse_rgba_hex;
 
 #[derive(Debug)]
-struct ComApartmentGuard(bool);
+pub(super) struct ComApartmentGuard(bool);
 
 impl ComApartmentGuard {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         // SAFETY: CoInitializeEx initializes the COM apartment on the calling thread.
         let ok = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok() };
         Self(ok)
@@ -128,9 +132,15 @@ fn collect_shortcuts_recursive(directory: &Path, apps: &mut Vec<InstalledApp>) {
         return;
     };
     for entry in entries.flatten() {
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
         let path = entry.path();
-        if path.is_dir() {
-            collect_shortcuts_recursive(&path, apps);
+        let attributes = metadata.file_attributes();
+        if attributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0 {
+            if can_scan_directory(attributes) {
+                collect_shortcuts_recursive(&path, apps);
+            }
         } else if let Some(extension) = path.extension() {
             if extension.eq_ignore_ascii_case("lnk")
                 && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
@@ -150,6 +160,11 @@ fn collect_shortcuts_recursive(directory: &Path, apps: &mut Vec<InstalledApp>) {
             }
         }
     }
+}
+
+fn can_scan_directory(attributes: u32) -> bool {
+    // A reparse point can redirect traversal outside this search root or back to a parent.
+    attributes & FILE_ATTRIBUTE_REPARSE_POINT.0 == 0
 }
 
 pub fn pick_color_async(
@@ -174,7 +189,18 @@ pub fn pick_file_async() -> futures::channel::oneshot::Receiver<Result<Option<Pa
         .name("dockwind-pick-file".to_string())
         .spawn(move || {
             let _com = ComApartmentGuard::new();
-            let result = pick_app_dialog();
+            let result = pick_app_dialog().map(|path| {
+                path.map(|path| {
+                    if path
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("lnk"))
+                    {
+                        resolve_shortcut(&path).unwrap_or(path)
+                    } else {
+                        path
+                    }
+                })
+            });
             let _ = sender.send(result);
         });
     if let Err(error) = spawn_result {
@@ -183,41 +209,44 @@ pub fn pick_file_async() -> futures::channel::oneshot::Receiver<Result<Option<Pa
     receiver
 }
 
-pub fn pick_app_dialog() -> Result<Option<PathBuf>> {
-    let mut buffer = [0u16; 2048];
-    let filter: Vec<u16> = "Applications\0*.exe;*.lnk;*.bat;*.cmd\0All files\0*.*\0\0"
-        .encode_utf16()
-        .collect();
-    let mut dialog = OPENFILENAMEW {
-        lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
-        hwndOwner: HWND::default(),
-        lpstrFilter: PCWSTR(filter.as_ptr()),
-        lpstrFile: windows::core::PWSTR(buffer.as_mut_ptr()),
-        nMaxFile: buffer.len() as u32,
-        Flags: OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST,
-        ..Default::default()
+fn pick_app_dialog() -> Result<Option<PathBuf>> {
+    let filters = [
+        COMDLG_FILTERSPEC {
+            pszName: w!("Applications"),
+            pszSpec: w!("*.exe;*.lnk;*.bat;*.cmd"),
+        },
+        COMDLG_FILTERSPEC {
+            pszName: w!("All files"),
+            pszSpec: w!("*.*"),
+        },
+    ];
+    // SAFETY: the file-picker worker initializes COM before this call. The filters
+    // use static strings, and no owner window is required for the dialog.
+    let display_name = unsafe {
+        let dialog: IFileOpenDialog =
+            CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)?;
+        let options = dialog.GetOptions()?;
+        dialog.SetOptions(
+            options | FOS_NOCHANGEDIR | FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST | FOS_FORCEFILESYSTEM,
+        )?;
+        dialog.SetFileTypes(&filters)?;
+        match dialog.Show(None) {
+            Ok(()) => dialog.GetResult()?.GetDisplayName(SIGDN_FILESYSPATH)?,
+            Err(error) if error.code() == HRESULT::from_win32(ERROR_CANCELLED.0) => {
+                return Ok(None);
+            }
+            Err(error) => return Err(error.into()),
+        }
     };
 
-    // SAFETY: every pointer in `dialog` refers to a live buffer for the duration of
-    // the call. The dialog blocks until the user closes it.
-    let accepted = unsafe { GetOpenFileNameW(&mut dialog) }.as_bool();
-    if !accepted {
-        // SAFETY: CommDlgExtendedError has no preconditions. Zero means the user
-        // cancelled rather than an error.
-        let error = unsafe { CommDlgExtendedError() };
-        if error.0 != 0 {
-            bail!("file picker failed with code {}", error.0);
-        }
-        return Ok(None);
-    }
-
-    let length = buffer
-        .iter()
-        .position(|unit| *unit == 0)
-        .unwrap_or(buffer.len());
-    Ok(Some(PathBuf::from(String::from_utf16_lossy(
-        &buffer[..length],
-    ))))
+    // SAFETY: GetDisplayName returned an owned null-terminated string allocated
+    // by COM. Copy its UTF-16 units into an OsString before freeing it.
+    let path = unsafe {
+        let path = std::ffi::OsString::from_wide(display_name.as_wide());
+        CoTaskMemFree(Some(display_name.0.cast()));
+        PathBuf::from(path)
+    };
+    Ok(Some(path))
 }
 
 pub fn pick_color_dialog(initial_hex: &str) -> Result<Option<String>> {
@@ -235,6 +264,11 @@ pub fn pick_color_dialog(initial_hex: &str) -> Result<Option<String>> {
     // SAFETY: every pointer in `dialog` refers to a live buffer for the duration of
     // the call. The dialog blocks until the user closes it.
     if !unsafe { ChooseColorW(&mut dialog) }.as_bool() {
+        // SAFETY: CommDlgExtendedError has no preconditions. Zero means cancellation.
+        let error = unsafe { CommDlgExtendedError() };
+        if error.0 != 0 {
+            bail!("color picker failed with code {}", error.0);
+        }
         return Ok(None);
     }
 
@@ -277,19 +311,30 @@ mod tests {
     }
 
     #[test]
-    fn test_scan_installed_apps_returns_list() {
-        let apps = scan_installed_apps();
-        assert!(!apps.is_empty());
-        for app in &apps {
-            assert!(!app.name.is_empty());
-            assert!(app.path.exists());
-            assert_eq!(
-                app.path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .map(|s| s.to_lowercase()),
-                Some("exe".to_string())
-            );
-        }
+    fn scan_finds_executables_in_normal_subdirectories() {
+        let root = tempfile::tempdir().expect("temporary scan root");
+        let nested = root.path().join("Tools");
+        std::fs::create_dir(&nested).expect("create nested directory");
+        let executable = nested.join("Editor.exe");
+        std::fs::write(&executable, "").expect("create executable fixture");
+        std::fs::write(nested.join("Notes.txt"), "").expect("create unrelated file");
+
+        let mut apps = Vec::new();
+        collect_shortcuts_recursive(root.path(), &mut apps);
+        assert_eq!(
+            apps,
+            vec![InstalledApp {
+                name: "Editor".into(),
+                path: executable
+            }]
+        );
+    }
+
+    #[test]
+    fn scan_does_not_descend_into_directory_reparse_points() {
+        assert!(can_scan_directory(FILE_ATTRIBUTE_DIRECTORY.0));
+        assert!(!can_scan_directory(
+            FILE_ATTRIBUTE_DIRECTORY.0 | FILE_ATTRIBUTE_REPARSE_POINT.0
+        ));
     }
 }

@@ -2,6 +2,7 @@ mod appearance;
 mod behavior;
 mod clock;
 pub mod controls;
+mod layouts;
 mod modals;
 mod pinned;
 
@@ -13,12 +14,13 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context as _, Result};
 use gpui::{
     App, Bounds, Context, FocusHandle, FontWeight, IntoElement, KeyDownEvent, Render, RenderImage,
-    ScrollHandle, SharedString, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds,
-    WindowKind, WindowOptions, div, point, prelude::*, px, rgba, size,
+    ScrollHandle, ScrollStrategy, SharedString, TitlebarOptions, UniformListScrollHandle, Window,
+    WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, div, point, prelude::*,
+    px, rgba, size,
 };
 use tracing::error;
 
-use crate::config::Config;
+use crate::config::{Config, ConfigError, ConfigSnapshot};
 use crate::win;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +39,10 @@ pub enum ActiveInput {
     ClockDateFormat,
     ClockFontColor,
     AppPickerSearch,
+    LayoutName,
+    PinnedAppName(usize),
+    PinnedAppArgument(usize, usize),
+    NewPinnedAppArgument(usize),
 }
 
 #[derive(Clone, Copy)]
@@ -71,6 +77,9 @@ pub struct SettingsView {
     pub(super) config_path: PathBuf,
     pub(super) draft: Config,
     pub(super) saved: Config,
+    saved_source: String,
+    conflict_source: Option<ConfigSnapshot>,
+    showing_close_confirm: bool,
     pub(super) autostart_draft: bool,
     pub(super) autostart_saved: bool,
     pub(super) active_tab: SettingsTab,
@@ -80,22 +89,32 @@ pub struct SettingsView {
     pub(super) scroll_handle: ScrollHandle,
     pub(super) installed_apps: Option<Vec<win::dialogs::InstalledApp>>,
     pub(super) showing_app_picker: bool,
+    app_picker_loading: bool,
+    native_picker_open: bool,
+    app_picker_scroll: UniformListScrollHandle,
     pub(super) app_picker_search: String,
     pub(super) app_picker_filter: Option<char>,
     pub(super) showing_taskbar_confirm: bool,
     pub(super) active_input: Option<ActiveInput>,
     pub(super) input_buffer: String,
+    input_selected: bool,
+    new_pin_argument: String,
+    pub(super) layout_name: String,
+    renaming_layout: Option<String>,
     pub(super) focus_handle: Option<FocusHandle>,
     pub(super) font_dropdown_open: bool,
     pub(super) icon_cache: RefCell<HashMap<PathBuf, Option<Arc<RenderImage>>>>,
 }
 
 impl SettingsView {
-    pub fn new(config_path: PathBuf, config: Config, autostart: bool) -> Self {
+    fn new(config_path: PathBuf, config: Config, saved_source: String, autostart: bool) -> Self {
         Self {
             config_path,
             draft: config.clone(),
             saved: config,
+            saved_source,
+            conflict_source: None,
+            showing_close_confirm: false,
             autostart_draft: autostart,
             autostart_saved: autostart,
             active_tab: SettingsTab::Appearance,
@@ -105,11 +124,18 @@ impl SettingsView {
             scroll_handle: ScrollHandle::default(),
             installed_apps: None,
             showing_app_picker: false,
+            app_picker_loading: false,
+            native_picker_open: false,
+            app_picker_scroll: UniformListScrollHandle::default(),
             app_picker_search: String::new(),
             app_picker_filter: None,
             showing_taskbar_confirm: false,
             active_input: None,
             input_buffer: String::new(),
+            input_selected: false,
+            new_pin_argument: String::new(),
+            layout_name: String::new(),
+            renaming_layout: None,
             focus_handle: None,
             font_dropdown_open: false,
             icon_cache: RefCell::new(HashMap::new()),
@@ -120,72 +146,201 @@ impl SettingsView {
         self.draft != self.saved || self.autostart_draft != self.autostart_saved
     }
 
+    fn open_app_picker(&mut self, cx: &mut Context<Self>) {
+        self.showing_app_picker = true;
+        self.app_picker_search.clear();
+        self.app_picker_filter = None;
+        self.active_input = Some(ActiveInput::AppPickerSearch);
+        self.input_selected = false;
+        self.input_buffer.clear();
+        self.status_message = None;
+        self.reset_app_picker_scroll();
+
+        if self.installed_apps.is_none() && !self.app_picker_loading {
+            self.app_picker_loading = true;
+            let scan = cx
+                .background_executor()
+                .spawn(async { win::dialogs::scan_installed_apps() });
+            cx.spawn(async move |this, cx| {
+                let apps = scan.await;
+                let _ = this.update(cx, |this, cx| {
+                    this.installed_apps = Some(apps);
+                    this.app_picker_loading = false;
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+        cx.notify();
+    }
+
+    fn reset_app_picker_scroll(&self) {
+        self.app_picker_scroll
+            .scroll_to_item_strict(0, ScrollStrategy::Top);
+    }
+
+    fn can_close(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.has_unsaved_changes() {
+            return true;
+        }
+        self.showing_close_confirm = true;
+        cx.notify();
+        false
+    }
+
     fn handle_key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
-        if self.showing_app_picker && event.keystroke.key == "escape" {
-            self.showing_app_picker = false;
-            self.active_input = None;
-            cx.notify();
+        let key = &event.keystroke.key;
+        let modifiers = event.keystroke.modifiers;
+        if self.showing_close_confirm {
+            if key == "escape" {
+                self.showing_close_confirm = false;
+                cx.notify();
+            }
+            return;
+        }
+        if key == "escape" {
+            if self.showing_taskbar_confirm {
+                self.showing_taskbar_confirm = false;
+                cx.notify();
+                return;
+            }
+            if self.showing_app_picker {
+                self.showing_app_picker = false;
+                self.active_input = None;
+                cx.notify();
+                return;
+            }
+            if self.delete_confirm_index.take().is_some() {
+                cx.notify();
+                return;
+            }
+        }
+
+        if self.showing_taskbar_confirm || self.delete_confirm_index.is_some() {
             return;
         }
 
-        if self.delete_confirm_index.is_some() && event.keystroke.key == "escape" {
-            self.delete_confirm_index = None;
-            cx.notify();
+        if modifiers.control && !modifiers.alt && key == "s" && !event.is_held {
+            if !self.showing_app_picker
+                && (self.has_unsaved_changes() || self.active_input.is_some())
+            {
+                self.apply_and_save(false, cx);
+            }
+            return;
+        }
+
+        if self.showing_app_picker && key == "enter" {
+            if !event.is_held {
+                self.pin_single_app_picker_result();
+                cx.notify();
+            }
             return;
         }
 
         let Some(field) = self.active_input else {
             return;
         };
-
-        let key = &event.keystroke.key;
         if key == "escape" || key == "enter" {
-            self.commit_input(field);
+            self.live_update_input(field);
+            if key == "enter"
+                && let ActiveInput::NewPinnedAppArgument(index) = field
+            {
+                self.add_pin_argument(index);
+                cx.notify();
+                return;
+            }
+            if field == ActiveInput::LayoutName {
+                if key == "enter" {
+                    self.save_layout_name();
+                    cx.notify();
+                    return;
+                }
+                if self.renaming_layout.is_some() {
+                    self.clear_layout_name();
+                }
+            }
             self.active_input = None;
             cx.notify();
             return;
         }
 
-        if key == "backspace" {
-            self.input_buffer.pop();
-            self.live_update_input(field);
+        let hex_field = matches!(
+            field,
+            ActiveInput::BackgroundHex | ActiveInput::BorderColorHex | ActiveInput::ClockFontColor
+        );
+        let text_limit = match field {
+            ActiveInput::PinnedAppArgument(_, _) | ActiveInput::NewPinnedAppArgument(_) => 4096,
+            _ => 64,
+        };
+        let editing_shortcut = modifiers.control && !modifiers.alt;
+        if editing_shortcut && key == "a" {
+            self.input_selected = !self.input_buffer.is_empty();
             cx.notify();
             return;
         }
-
-        let char_to_add = if key == "space" {
-            Some(' ')
-        } else if key.chars().count() == 1
-            && !event.keystroke.modifiers.control
-            && !event.keystroke.modifiers.alt
-        {
-            key.chars().next()
+        if editing_shortcut && matches!(key.as_str(), "c" | "x") {
+            if self.input_selected {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(self.input_buffer.clone()));
+                if key == "x" {
+                    self.input_buffer.clear();
+                    self.input_selected = false;
+                    self.live_update_input(field);
+                    cx.notify();
+                }
+            }
+            return;
+        }
+        if editing_shortcut && key == "v" {
+            let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+                return;
+            };
+            if hex_field {
+                let hex = text.trim();
+                if crate::config::parse_rgba_hex(hex).is_none() {
+                    return;
+                }
+                self.input_buffer = hex.to_ascii_uppercase();
+            } else {
+                self.input_buffer = text
+                    .chars()
+                    .filter(|ch| !ch.is_control())
+                    .take(text_limit)
+                    .collect();
+            }
+            self.input_selected = false;
+        } else if key == "backspace" || (key == "delete" && self.input_selected) {
+            if std::mem::take(&mut self.input_selected) {
+                self.input_buffer.clear();
+            } else {
+                self.input_buffer.pop();
+            }
         } else {
-            None
-        };
+            let Some(text) = &event.keystroke.key_char else {
+                return;
+            };
+            self.insert_input_text(text, hex_field, text_limit);
+        }
+        self.live_update_input(field);
+        cx.notify();
+    }
 
-        if let Some(ch) = char_to_add {
-            match field {
-                ActiveInput::BackgroundHex
-                | ActiveInput::BorderColorHex
-                | ActiveInput::ClockFontColor => {
-                    let is_valid_hex_char =
-                        (ch == '#' && self.input_buffer.is_empty()) || ch.is_ascii_hexdigit();
-                    if is_valid_hex_char && self.input_buffer.len() < 9 {
-                        self.input_buffer.push(ch.to_ascii_uppercase());
-                        self.live_update_input(field);
-                        cx.notify();
-                    }
+    fn insert_input_text(&mut self, text: &str, hex_field: bool, text_limit: usize) {
+        for ch in text.chars().filter(|ch| !ch.is_control()) {
+            if hex_field
+                && !ch.is_ascii_hexdigit()
+                && !(ch == '#' && (self.input_selected || self.input_buffer.is_empty()))
+            {
+                continue;
+            }
+            if std::mem::take(&mut self.input_selected) {
+                self.input_buffer.clear();
+            }
+            if hex_field {
+                if self.input_buffer.len() < 9 {
+                    self.input_buffer.push(ch.to_ascii_uppercase());
                 }
-                ActiveInput::ClockTimeFormat
-                | ActiveInput::ClockDateFormat
-                | ActiveInput::AppPickerSearch => {
-                    if self.input_buffer.len() < 64 {
-                        self.input_buffer.push(ch);
-                        self.live_update_input(field);
-                        cx.notify();
-                    }
-                }
+            } else if self.input_buffer.chars().count() < text_limit {
+                self.input_buffer.push(ch);
             }
         }
     }
@@ -195,7 +350,9 @@ impl SettingsView {
             ActiveInput::BackgroundHex => {
                 let trimmed = self.input_buffer.trim();
                 let clean = trimmed.strip_prefix('#').unwrap_or(trimmed);
-                if clean.len() == 6 && clean.bytes().all(|b| b.is_ascii_hexdigit()) {
+                if (clean.len() == 6 || clean.len() == 8)
+                    && clean.bytes().all(|b| b.is_ascii_hexdigit())
+                {
                     self.draft.appearance.background = format!("#{clean}");
                 }
             }
@@ -227,70 +384,122 @@ impl SettingsView {
                     self.draft.clock.font_color = None;
                 }
             }
+            ActiveInput::PinnedAppName(index) => {
+                let name = self.input_buffer.trim();
+                if !name.is_empty()
+                    && let Some(app) = self.draft.pinned.get_mut(index)
+                {
+                    app.name = name.to_owned();
+                }
+            }
+            ActiveInput::PinnedAppArgument(pin, argument) => {
+                if let Some(value) = self
+                    .draft
+                    .pinned
+                    .get_mut(pin)
+                    .and_then(|app| app.args.get_mut(argument))
+                {
+                    value.clone_from(&self.input_buffer);
+                }
+            }
+            ActiveInput::NewPinnedAppArgument(_) => {
+                self.new_pin_argument.clone_from(&self.input_buffer)
+            }
+            ActiveInput::LayoutName => self.layout_name.clone_from(&self.input_buffer),
             ActiveInput::AppPickerSearch => {
-                self.app_picker_search = self.input_buffer.clone();
+                if self.app_picker_search != self.input_buffer {
+                    self.app_picker_search.clone_from(&self.input_buffer);
+                    self.reset_app_picker_scroll();
+                }
             }
         }
     }
 
-    fn commit_input(&mut self, field: ActiveInput) {
-        self.live_update_input(field);
-        match field {
-            ActiveInput::BackgroundHex => {
-                let trimmed = self.input_buffer.trim();
-                let clean = trimmed.strip_prefix('#').unwrap_or(trimmed);
-                if clean.len() == 6 && clean.bytes().all(|b| b.is_ascii_hexdigit()) {
-                    self.draft.appearance.background = format!("#{clean}");
-                }
-            }
-            ActiveInput::ClockFontColor if self.input_buffer.trim().is_empty() => {
-                self.draft.clock.font_color = None;
-            }
-            _ => {}
-        }
+    fn reload_draft_from_disk(&mut self) -> Result<(), ConfigError> {
+        let (loaded, source) = Config::load_existing_with_source(&self.config_path)?;
+        self.saved_source = source;
+        self.saved = loaded.config;
+        self.draft.clone_from(&self.saved);
+        self.autostart_draft = self.autostart_saved;
+        self.conflict_source = None;
+        self.selected_pinned_index = None;
+        self.delete_confirm_index = None;
+        self.clear_layout_name();
+        self.status_message = Some(("Loaded config from disk.".into(), false));
+        Ok(())
     }
 
-    fn apply_and_save(&mut self, cx: &mut Context<Self>) {
-        match self.draft.save_atomic_preserving(&self.config_path) {
-            Ok(loaded) => {
-                self.saved = loaded.config;
-                self.draft = self.saved.clone();
+    fn save_config_draft(&mut self, overwrite: bool) -> Result<bool, ConfigError> {
+        if !overwrite && self.draft == self.saved {
+            return Ok(false);
+        }
 
-                if self.autostart_draft != self.autostart_saved {
-                    let autostart_result = if self.autostart_draft {
-                        win::autostart::enable()
-                    } else {
-                        win::autostart::disable()
-                    };
-                    match autostart_result {
-                        Ok(()) => {
-                            self.autostart_saved = self.autostart_draft;
-                        }
-                        Err(error) => {
-                            self.status_message = Some((
-                                SharedString::from(format!(
-                                    "Settings saved, but autostart update failed: {error:#}"
-                                )),
-                                true,
-                            ));
-                            cx.notify();
-                            return;
-                        }
-                    }
-                }
+        let expected = if overwrite {
+            self.conflict_source.as_ref().map(ConfigSnapshot::contents)
+        } else {
+            None
+        }
+        .unwrap_or(Some(self.saved_source.as_str()));
+        let (loaded, saved_source) = self
+            .draft
+            .save_atomic_preserving(&self.config_path, Some(expected))?;
+        self.conflict_source = None;
+        self.saved_source = saved_source;
+        self.saved = loaded.config;
+        self.draft.clone_from(&self.saved);
+        Ok(true)
+    }
 
-                self.status_message = Some((
-                    SharedString::from("Settings saved and applied successfully!"),
-                    false,
-                ));
+    fn apply_and_save(&mut self, overwrite: bool, cx: &mut Context<Self>) {
+        if let Some(field) = self.active_input.take() {
+            self.live_update_input(field);
+        }
+        if (overwrite || self.draft != self.saved)
+            && let Some(message) = clock::clock_format_error(&self.draft.clock)
+        {
+            self.status_message = Some((message.into(), true));
+            cx.notify();
+            return;
+        }
+
+        let config_saved = match self.save_config_draft(overwrite) {
+            Ok(saved) => saved,
+            Err(ConfigError::ChangedOnDisk { current_source, .. }) => {
+                self.conflict_source = Some(current_source);
+                self.status_message = None;
+                cx.notify();
+                return;
             }
             Err(error) => {
-                self.status_message = Some((
-                    SharedString::from(format!("Failed to save settings: {error}")),
-                    true,
-                ));
+                self.status_message =
+                    Some((format!("Failed to save settings: {error}").into(), true));
+                cx.notify();
+                return;
             }
+        };
+
+        let autostart_changed = self.autostart_draft != self.autostart_saved;
+        if autostart_changed {
+            let result = if self.autostart_draft {
+                win::autostart::enable()
+            } else {
+                win::autostart::disable()
+            };
+            if let Err(error) = result {
+                let message = if config_saved {
+                    format!("Config saved. Autostart update failed: {error:#}")
+                } else {
+                    format!("Autostart update failed: {error:#}")
+                };
+                self.status_message = Some((message.into(), true));
+                cx.notify();
+                return;
+            }
+            self.autostart_saved = self.autostart_draft;
         }
+
+        self.status_message = (config_saved || autostart_changed)
+            .then(|| (SharedString::from("Settings saved"), false));
         cx.notify();
     }
 
@@ -311,10 +520,14 @@ impl SettingsView {
             .flex()
             .items_center()
             .justify_between()
+            .flex_wrap()
+            .gap_3()
             .child(
                 div()
                     .flex()
                     .flex_col()
+                    .min_w(px(0.0))
+                    .max_w_full()
                     .gap_1()
                     .child(
                         div()
@@ -327,6 +540,7 @@ impl SettingsView {
                         div()
                             .text_xs()
                             .text_color(rgba(0x6C7086FF))
+                            .truncate()
                             .child(self.config_path.display().to_string()),
                     ),
             )
@@ -365,6 +579,9 @@ impl SettingsView {
                                 }
                             })
                             .on_click(cx.listener(move |this: &mut Self, _, _, cx| {
+                                if let Some(field) = this.active_input.take() {
+                                    this.live_update_input(field);
+                                }
                                 this.active_tab = tab;
                                 this.showing_app_picker = false;
                                 this.delete_confirm_index = None;
@@ -386,6 +603,11 @@ impl SettingsView {
                     rgba(0xA6E3A1FF)
                 },
             )
+        } else if self.conflict_source.is_some() {
+            (
+                SharedString::from("Config changed on disk. Choose which version to keep."),
+                rgba(0xF9E2AFFF),
+            )
         } else if self.has_unsaved_changes() {
             (SharedString::from("● Unsaved changes"), rgba(0xF9E2AFFF))
         } else {
@@ -401,8 +623,15 @@ impl SettingsView {
             .flex()
             .items_center()
             .justify_between()
+            .gap_4()
+            .when(self.conflict_source.is_some(), |footer| footer.flex_wrap())
             .child(
                 div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .when(self.conflict_source.is_some(), |status| {
+                        status.w_full().flex_none()
+                    })
                     .text_xs()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(status_color)
@@ -412,7 +641,32 @@ impl SettingsView {
                 div()
                     .flex()
                     .items_center()
+                    .flex_wrap()
                     .gap_3()
+                    .when(self.conflict_source.is_some(), |actions| {
+                        actions.child(
+                            div()
+                                .id("btn-reload-settings")
+                                .px_4()
+                                .py_2()
+                                .rounded_lg()
+                                .bg(rgba(0x313244FF))
+                                .hover(|style| style.bg(rgba(0x45475AFF)))
+                                .text_xs()
+                                .text_color(rgba(0xCDD6F4FF))
+                                .cursor_pointer()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    if let Err(error) = this.reload_draft_from_disk() {
+                                        this.status_message = Some((
+                                            format!("Failed to reload config: {error}").into(),
+                                            true,
+                                        ));
+                                    }
+                                    cx.notify();
+                                }))
+                                .child("Discard draft & reload"),
+                        )
+                    })
                     .child(
                         div()
                             .id("btn-close-settings")
@@ -425,8 +679,10 @@ impl SettingsView {
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(rgba(0xCDD6F4FF))
                             .cursor_pointer()
-                            .on_click(cx.listener(|_, _, window, _| {
-                                window.remove_window();
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                if this.can_close(cx) {
+                                    window.remove_window();
+                                }
                             }))
                             .child("Close"),
                     )
@@ -443,9 +699,13 @@ impl SettingsView {
                             .text_color(rgba(0x11111BFF))
                             .cursor_pointer()
                             .on_click(cx.listener(|this: &mut Self, _, _, cx| {
-                                this.apply_and_save(cx);
+                                this.apply_and_save(this.conflict_source.is_some(), cx);
                             }))
-                            .child("Apply & Save"),
+                            .child(if self.conflict_source.is_some() {
+                                "Overwrite config"
+                            } else {
+                                "Apply & Save"
+                            }),
                     ),
             )
     }
@@ -477,6 +737,7 @@ impl Render for SettingsView {
                     .track_scroll(&self.scroll_handle)
                     .overflow_y_scroll()
                     .flex_1()
+                    .min_h(px(0.0))
                     .p_6()
                     .child(match self.active_tab {
                         SettingsTab::Appearance => {
@@ -488,7 +749,9 @@ impl Render for SettingsView {
                     }),
             )
             .child(self.render_footer(cx))
-            .children(if self.showing_taskbar_confirm {
+            .children(if self.showing_close_confirm {
+                Some(self.render_close_confirm_dialog(cx))
+            } else if self.showing_taskbar_confirm {
                 Some(self.render_taskbar_confirm_dialog(cx))
             } else if self.showing_app_picker {
                 Some(self.render_app_picker_dialog(cx))
@@ -504,14 +767,14 @@ pub fn open_settings_window(cx: &mut App, config_path: PathBuf) -> Result<()> {
         return Ok(());
     }
 
-    let loaded = Config::load_or_create(&config_path)
+    let (loaded, saved_source) = Config::load_or_create_with_source(&config_path)
         .context("failed to load configuration for settings window")?;
 
     let monitor = win::monitors::MonitorInfo::primary()
         .context("failed to query primary monitor for settings window")?;
 
-    let window_width = px(780.0);
-    let window_height = px(720.0);
+    let window_width = px(780.0).min(monitor.work_area.size.width);
+    let window_height = px(720.0).min(monitor.work_area.size.height);
     let origin_x = monitor.work_area.origin.x + (monitor.work_area.size.width - window_width) / 2.0;
     let origin_y =
         monitor.work_area.origin.y + (monitor.work_area.size.height - window_height) / 2.0;
@@ -519,6 +782,10 @@ pub fn open_settings_window(cx: &mut App, config_path: PathBuf) -> Result<()> {
 
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
+        window_min_size: Some(size(
+            window_width.min(px(480.0)),
+            window_height.min(px(420.0)),
+        )),
         titlebar: Some(TitlebarOptions {
             title: Some(SharedString::from("Dockwind Settings")),
             appears_transparent: false,
@@ -536,8 +803,20 @@ pub fn open_settings_window(cx: &mut App, config_path: PathBuf) -> Result<()> {
 
     let autostart_enabled = win::autostart::is_enabled().unwrap_or(false);
 
-    cx.open_window(options, |_window, cx| {
-        cx.new(|_cx| SettingsView::new(config_path, loaded.config, autostart_enabled))
+    cx.open_window(options, |window, cx| {
+        let view = cx.new(|cx| {
+            let mut view =
+                SettingsView::new(config_path, loaded.config, saved_source, autostart_enabled);
+            let focus = cx.focus_handle();
+            window.focus(&focus);
+            view.focus_handle = Some(focus);
+            view
+        });
+        let settings = view.downgrade();
+        window.on_window_should_close(cx, move |_, cx| {
+            settings.update(cx, SettingsView::can_close).unwrap_or(true)
+        });
+        view
     })
     .context("failed to open GPUI settings window")?;
 
@@ -572,6 +851,73 @@ mod tests {
     use crate::config::PinnedApp;
 
     #[test]
+    fn saving_only_autostart_leaves_external_config_edits_intact() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let path = directory.path().join("config.toml");
+        let source = "[appearance]\nwidth = 800\n";
+        std::fs::write(&path, source).expect("write external config edit");
+        let mut view = SettingsView::new(path.clone(), Config::default(), String::new(), false);
+        view.autostart_draft = true;
+
+        assert!(
+            !view
+                .save_config_draft(false)
+                .expect("skip unchanged config draft")
+        );
+        assert_eq!(std::fs::read_to_string(&path).expect("read config"), source);
+    }
+
+    #[test]
+    fn typing_replaces_selected_text_only_with_allowed_characters() {
+        let mut view = SettingsView::new(
+            "config.toml".into(),
+            Config::default(),
+            String::new(),
+            false,
+        );
+        view.input_buffer = "#112233".into();
+        view.input_selected = true;
+        view.insert_input_text("z", true, 64);
+        assert_eq!(view.input_buffer, "#112233");
+        assert!(view.input_selected);
+
+        view.insert_input_text("#abcdee80", true, 64);
+        assert_eq!(view.input_buffer, "#ABCDEE80");
+        assert!(!view.input_selected);
+
+        view.input_selected = true;
+        view.insert_input_text("New layout", false, 64);
+        assert_eq!(view.input_buffer, "New layout");
+    }
+
+    #[test]
+    fn reloading_a_conflict_keeps_the_draft_until_disk_config_is_valid() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let path = directory.path().join("config.toml");
+        let mut view = SettingsView::new(path.clone(), Config::default(), String::new(), false);
+        view.draft.appearance.width = 700;
+        let Err(ConfigError::ChangedOnDisk { current_source, .. }) = view
+            .saved
+            .save_atomic_preserving(&path, Some(Some("old source")))
+        else {
+            panic!("expected config conflict");
+        };
+        view.conflict_source = Some(current_source);
+        std::fs::write(&path, "invalid = [").expect("write bad config");
+        assert!(view.reload_draft_from_disk().is_err());
+        assert_eq!(view.draft.appearance.width, 700);
+        assert!(view.conflict_source.is_some());
+
+        let source = "[appearance]\nwidth = 640\n";
+        std::fs::write(&path, source).expect("write valid config");
+        view.reload_draft_from_disk().expect("reload disk config");
+        assert_eq!(view.draft.appearance.width, 640);
+        assert_eq!(view.saved_source, source);
+        assert!(!view.has_unsaved_changes());
+        assert!(view.conflict_source.is_none());
+    }
+
+    #[test]
     fn hotkey_presets_are_valid() {
         for preset in HOTKEY_PRESETS {
             assert!(
@@ -585,7 +931,7 @@ mod tests {
     fn settings_view_detects_changes() {
         let path = PathBuf::from("config.toml");
         let config = Config::default();
-        let mut view = SettingsView::new(path, config, false);
+        let mut view = SettingsView::new(path, config, String::new(), false);
         assert!(!view.has_unsaved_changes());
 
         view.draft.appearance.width += 20;
@@ -602,7 +948,7 @@ mod tests {
     fn settings_view_tab_switching() {
         let path = PathBuf::from("config.toml");
         let config = Config::default();
-        let mut view = SettingsView::new(path, config, false);
+        let mut view = SettingsView::new(path, config, String::new(), false);
         assert_eq!(view.active_tab, SettingsTab::Appearance);
 
         view.active_tab = SettingsTab::Clock;
@@ -613,7 +959,7 @@ mod tests {
     fn settings_view_delete_confirm_state() {
         let path = PathBuf::from("config.toml");
         let config = Config::default();
-        let mut view = SettingsView::new(path, config, false);
+        let mut view = SettingsView::new(path, config, String::new(), false);
         assert!(view.delete_confirm_index.is_none());
 
         view.delete_confirm_index = Some(2);
@@ -641,7 +987,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        let mut view = SettingsView::new(path, config, false);
+        let mut view = SettingsView::new(path, config, String::new(), false);
         assert_eq!(view.draft.pinned.len(), 2);
 
         view.draft.pinned.swap(0, 1);
@@ -657,7 +1003,7 @@ mod tests {
     fn settings_view_taskbar_confirm_state() {
         let path = PathBuf::from("config.toml");
         let config = Config::default();
-        let mut view = SettingsView::new(path, config, false);
+        let mut view = SettingsView::new(path, config, String::new(), false);
         assert!(!view.showing_taskbar_confirm);
         assert!(!view.draft.behavior.hide_native_taskbar);
 
@@ -674,7 +1020,7 @@ mod tests {
     fn settings_view_active_input_state() {
         let path = PathBuf::from("config.toml");
         let config = Config::default();
-        let mut view = SettingsView::new(path, config, false);
+        let mut view = SettingsView::new(path, config, String::new(), false);
         assert!(view.active_input.is_none());
         assert!(view.input_buffer.is_empty());
 
@@ -685,10 +1031,23 @@ mod tests {
     }
 
     #[test]
+    fn background_hex_input_preserves_alpha() {
+        let mut view = SettingsView::new(
+            PathBuf::from("config.toml"),
+            Config::default(),
+            String::new(),
+            false,
+        );
+        view.input_buffer = "#14263A80".to_string();
+        view.live_update_input(ActiveInput::BackgroundHex);
+        assert_eq!(view.draft.appearance.background, "#14263A80");
+    }
+
+    #[test]
     fn settings_view_app_picker_state() {
         let path = PathBuf::from("config.toml");
         let config = Config::default();
-        let mut view = SettingsView::new(path, config, false);
+        let mut view = SettingsView::new(path, config, String::new(), false);
         assert!(!view.showing_app_picker);
         assert!(view.app_picker_search.is_empty());
         assert_eq!(view.app_picker_filter, None);

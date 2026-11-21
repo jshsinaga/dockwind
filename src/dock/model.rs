@@ -36,27 +36,22 @@ pub fn merge(
     running: &[WindowInfo],
     show_running_apps: bool,
 ) -> Vec<DockItem> {
-    let mut pinned_keys = HashSet::new();
-    let mut items = Vec::new();
+    let mut windows_by_app: BTreeMap<String, Vec<&WindowInfo>> = BTreeMap::new();
+    for window in running {
+        windows_by_app
+            .entry(normalize_path(&window.exe_path))
+            .or_default()
+            .push(window);
+    }
+
+    let mut pinned_keys = HashSet::with_capacity(pinned.len());
+    let mut items = Vec::with_capacity(pinned.len());
 
     for app in pinned {
         let key = normalize_path(Path::new(&app.path));
-        pinned_keys.insert(key.clone());
-        let windows = running
-            .iter()
-            .filter(|window| normalize_path(&window.exe_path) == key)
-            .collect::<Vec<_>>();
-        let active = windows
-            .iter()
-            .find(|window| window.is_foreground)
-            .map(|window| window.hwnd);
-        let target = active.or_else(|| {
-            windows
-                .iter()
-                .find(|window| !window.is_minimized)
-                .or_else(|| windows.first())
-                .map(|window| window.hwnd)
-        });
+        let windows = windows_by_app.get(&key).map_or(&[][..], Vec::as_slice);
+        let (target, is_active) = window_target(windows);
+        pinned_keys.insert(key);
 
         items.push(DockItem {
             key: PathBuf::from(&app.path),
@@ -66,7 +61,7 @@ pub fn merge(
             active_window: target,
             is_pinned: true,
             is_running: !windows.is_empty(),
-            is_active: active.is_some(),
+            is_active,
         });
     }
 
@@ -74,31 +69,12 @@ pub fn merge(
         return items;
     }
 
-    let mut remaining: BTreeMap<String, (PathBuf, Vec<&WindowInfo>)> = BTreeMap::new();
-    for window in running {
-        let key = normalize_path(&window.exe_path);
+    for (key, windows) in windows_by_app {
         if pinned_keys.contains(&key) {
             continue;
         }
-        remaining
-            .entry(key)
-            .or_insert_with(|| (window.exe_path.clone(), Vec::new()))
-            .1
-            .push(window);
-    }
-
-    for (_, (path, windows)) in remaining {
-        let active = windows
-            .iter()
-            .find(|window| window.is_foreground)
-            .map(|window| window.hwnd);
-        let target = active.or_else(|| {
-            windows
-                .iter()
-                .find(|window| !window.is_minimized)
-                .or_else(|| windows.first())
-                .map(|window| window.hwnd)
-        });
+        let path = &windows[0].exe_path;
+        let (target, is_active) = window_target(&windows);
         let name = windows
             .iter()
             .find_map(|window| window.display_name.as_deref())
@@ -112,18 +88,30 @@ pub fn merge(
             .unwrap_or_else(|| path.to_string_lossy().to_string());
 
         items.push(DockItem {
-            key: path,
+            key: path.clone(),
             name,
             args: Vec::new(),
             windows: windows.iter().map(|window| window.hwnd).collect(),
             active_window: target,
             is_pinned: false,
             is_running: true,
-            is_active: active.is_some(),
+            is_active,
         });
     }
 
     items
+}
+
+fn window_target(windows: &[&WindowInfo]) -> (Option<isize>, bool) {
+    if let Some(foreground) = windows.iter().find(|window| window.is_foreground) {
+        return (Some(foreground.hwnd), true);
+    }
+    let target = windows
+        .iter()
+        .find(|window| !window.is_minimized)
+        .or_else(|| windows.first())
+        .map(|window| window.hwnd);
+    (target, false)
 }
 
 fn normalize_path(path: &Path) -> String {
@@ -160,7 +148,7 @@ mod tests {
             pinned("Explorer", r"C:\Windows\explorer.exe"),
         ];
         let running = vec![
-            window(1, r"C:\Windows\System32\notepad.exe", true),
+            window(1, "C:/Windows/System32/notepad.exe", true),
             window(2, r"C:\Windows\System32\cmd.exe", false),
         ];
         let items = merge(&pinned, &running, true);
@@ -199,6 +187,22 @@ mod tests {
 
         assert_eq!(items.len(), 1);
         assert!(items[0].is_running);
+    }
+
+    #[test]
+    fn duplicate_pinned_paths_keep_both_entries_and_share_the_window_group() {
+        let pinned = [
+            pinned("Editor", "C:/Apps/Editor.exe"),
+            pinned("Editor profile", "c:/apps/editor.exe"),
+        ];
+        let mut minimized = window(1, "C:/Apps/Editor.exe", false);
+        minimized.is_minimized = true;
+        let running = [minimized, window(2, "C:/Apps/Editor.exe", false)];
+
+        let items = merge(&pinned, &running, true);
+        assert_eq!(items.len(), 2);
+        assert!(items.iter().all(|item| item.target_window() == Some(2)));
+        assert!(items.iter().all(|item| item.windows == [1, 2]));
     }
 
     #[test]

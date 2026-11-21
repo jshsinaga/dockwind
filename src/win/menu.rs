@@ -6,9 +6,9 @@ use windows::{
     Win32::{
         Foundation::{HWND, POINT},
         UI::WindowsAndMessaging::{
-            AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, GetForegroundWindow,
-            MF_SEPARATOR, MF_STRING, SetForegroundWindow, TPM_LEFTALIGN, TPM_RETURNCMD,
-            TPM_RIGHTBUTTON, TPM_TOPALIGN, TrackPopupMenu,
+            AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, GetForegroundWindow, HMENU,
+            MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING, SetForegroundWindow, TPM_LEFTALIGN,
+            TPM_RETURNCMD, TPM_RIGHTBUTTON, TPM_TOPALIGN, TrackPopupMenu,
         },
     },
     core::{HSTRING, PCWSTR},
@@ -20,16 +20,23 @@ const CMD_RELOAD: usize = 1;
 const CMD_AUTOSTART: usize = 2;
 const CMD_RESTORE_QUIT: usize = 3;
 const CMD_SETTINGS: usize = 4;
+const CMD_NEXT_LAYOUT: usize = 5;
+const FIRST_LAYOUT_COMMAND: usize = 100;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MenuAction {
     OpenSettings,
+    UsePinnedLayout(String),
     ReloadConfig,
     ToggleAutostart,
     RestoreAndQuit,
 }
 
-pub fn show(hwnd: isize) -> Result<Option<MenuAction>> {
+pub fn show(
+    hwnd: isize,
+    layouts: &[(String, bool)],
+    next_layout: Option<&str>,
+) -> Result<Option<MenuAction>> {
     let autostart_enabled = autostart::is_enabled().unwrap_or_else(|error| {
         warn!(%error, "failed to query autostart state");
         false
@@ -65,6 +72,10 @@ pub fn show(hwnd: isize) -> Result<Option<MenuAction>> {
                 &HSTRING::from("Restore taskbar & Quit"),
             )
             .context("AppendMenuW(Restore taskbar & Quit) failed")?;
+        }
+
+        if !layouts.is_empty() {
+            append_layouts(menu, layouts, next_layout.is_some())?;
         }
 
         let mut cursor = POINT::default();
@@ -103,11 +114,15 @@ pub fn show(hwnd: isize) -> Result<Option<MenuAction>> {
         }
 
         Ok(match command.0 as usize {
+            CMD_NEXT_LAYOUT => next_layout.map(|name| MenuAction::UsePinnedLayout(name.to_owned())),
             CMD_SETTINGS => Some(MenuAction::OpenSettings),
             CMD_RELOAD => Some(MenuAction::ReloadConfig),
             CMD_AUTOSTART => Some(MenuAction::ToggleAutostart),
             CMD_RESTORE_QUIT => Some(MenuAction::RestoreAndQuit),
-            _ => None,
+            id => id
+                .checked_sub(FIRST_LAYOUT_COMMAND)
+                .and_then(|index| layouts.get(index))
+                .map(|(name, _)| MenuAction::UsePinnedLayout(name.clone())),
         })
     })();
 
@@ -116,4 +131,48 @@ pub fn show(hwnd: isize) -> Result<Option<MenuAction>> {
         warn!(%error, "failed to destroy the dock popup menu");
     }
     result
+}
+
+fn append_layouts(menu: HMENU, layouts: &[(String, bool)], can_cycle: bool) -> Result<()> {
+    // SAFETY: the APIs take live menu handles and copy each HSTRING label.
+    // On success the parent owns the submenu. On failure it is destroyed below.
+    unsafe {
+        let submenu = CreatePopupMenu().context("CreatePopupMenu(layouts) failed")?;
+        let result = (|| -> Result<()> {
+            if can_cycle {
+                AppendMenuW(
+                    submenu,
+                    MF_STRING,
+                    CMD_NEXT_LAYOUT,
+                    &HSTRING::from("Next layout"),
+                )
+                .context("AppendMenuW(Next layout) failed")?;
+                AppendMenuW(submenu, MF_SEPARATOR, 0, PCWSTR::null())
+                    .context("AppendMenuW(layout separator) failed")?;
+            }
+            for (index, (name, current)) in layouts.iter().enumerate() {
+                let mut flags = MF_STRING;
+                if *current {
+                    flags |= MF_CHECKED;
+                }
+                let label = HSTRING::from(name.replace('&', "&&"));
+                AppendMenuW(submenu, flags, FIRST_LAYOUT_COMMAND + index, &label)
+                    .context("AppendMenuW(layout) failed")?;
+            }
+            AppendMenuW(
+                menu,
+                MF_POPUP,
+                submenu.0 as usize,
+                &HSTRING::from("Pinned app layouts"),
+            )
+            .context("AppendMenuW(layout submenu) failed")?;
+            Ok(())
+        })();
+        if result.is_err()
+            && let Err(error) = DestroyMenu(submenu)
+        {
+            warn!(%error, "failed to destroy the layouts submenu");
+        }
+        result
+    }
 }

@@ -4,7 +4,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
-use notify::Watcher;
+use notify::event::{AccessKind, AccessMode};
+use notify::{EventKind, Watcher};
 use tracing::{debug, error, info, warn};
 
 use super::model::Config;
@@ -57,10 +58,7 @@ impl Drop for ConfigWatcher {
 ///
 /// The path is made absolute without canonicalization, so relative paths match
 /// the absolute paths reported by `notify` and a missing file can still be created.
-pub fn watch(
-    path: &Path,
-    initial: Config,
-) -> Result<(ConfigWatcher, UnboundedReceiver<Config>), ConfigError> {
+pub fn watch(path: &Path) -> Result<(ConfigWatcher, UnboundedReceiver<Config>), ConfigError> {
     let watch_path = std::path::absolute(path).map_err(|source| ConfigError::Resolve {
         path: path.to_path_buf(),
         source,
@@ -82,7 +80,7 @@ pub fn watch(
         .name("config-watch".to_string())
         .spawn(move || {
             let _watcher = watcher;
-            run(watch_path, initial, receiver, config_sender);
+            run(watch_path, receiver, config_sender);
         })?;
 
     Ok((
@@ -94,12 +92,7 @@ pub fn watch(
     ))
 }
 
-fn run(
-    path: PathBuf,
-    mut last_valid: Config,
-    receiver: Receiver<WatchMessage>,
-    config_sender: UnboundedSender<Config>,
-) {
+fn run(path: PathBuf, receiver: Receiver<WatchMessage>, config_sender: UnboundedSender<Config>) {
     while let Ok(message) = receiver.recv() {
         let event = match message {
             WatchMessage::Shutdown => return,
@@ -107,7 +100,7 @@ fn run(
         };
 
         match event {
-            Ok(event) if event_targets_config(&event, &path) => {}
+            Ok(event) if event_may_change_config(&event, &path) => {}
             Ok(_) => continue,
             Err(event_error) => {
                 warn!(%event_error, "config watcher event failed");
@@ -138,38 +131,44 @@ fn run(
             }
         }
 
-        if !publish(&path, &mut last_valid, &config_sender) {
+        if !publish(&path, &config_sender) {
             return;
         }
     }
 }
 
-fn event_targets_config(event: &notify::Event, path: &Path) -> bool {
-    event.paths.iter().any(|event_path| event_path == path)
+fn event_may_change_config(event: &notify::Event, path: &Path) -> bool {
+    let may_change_contents = match event.kind {
+        EventKind::Access(kind) => kind == AccessKind::Close(AccessMode::Write),
+        _ => true,
+    };
+    may_change_contents && event.paths.iter().any(|event_path| event_path == path)
 }
 
 fn next_deadline(deadline: Instant, now: Instant, event: &notify::Event, path: &Path) -> Instant {
-    if event_targets_config(event, path) {
+    if event_may_change_config(event, path) {
         now + DEBOUNCE
     } else {
         deadline
     }
 }
 
-fn publish(path: &Path, last_valid: &mut Config, sender: &UnboundedSender<Config>) -> bool {
+fn publish(path: &Path, sender: &UnboundedSender<Config>) -> bool {
     match Config::load_existing(path) {
         Ok(loaded) => {
             for warning in &loaded.warnings {
                 warn!("{warning}");
             }
-            *last_valid = loaded.config;
-            info!(config = ?*last_valid, "config reloaded");
-            sender.unbounded_send(last_valid.clone()).is_ok()
+            info!(
+                pinned_apps = loaded.config.pinned.len(),
+                saved_layouts = loaded.config.pinned_layouts.len(),
+                "config reloaded"
+            );
+            sender.unbounded_send(loaded.config).is_ok()
         }
         Err(load_error) => {
             error!(
                 %load_error,
-                config = ?last_valid,
                 "config reload failed; keeping the last valid config"
             );
             true
@@ -261,6 +260,24 @@ mod tests {
     }
 
     #[test]
+    fn watcher_ignores_reads_and_accepts_close_after_write() {
+        let path = Path::new("config.toml");
+        let now = Instant::now();
+        let deadline = now + DEBOUNCE;
+        let read = notify::Event::new(EventKind::Access(AccessKind::Close(AccessMode::Read)))
+            .add_path(path.to_path_buf());
+        let write = notify::Event::new(EventKind::Access(AccessKind::Close(AccessMode::Write)))
+            .add_path(path.to_path_buf());
+
+        assert!(!event_may_change_config(&read, path));
+        assert_eq!(
+            next_deadline(deadline, now + Duration::from_millis(10), &read, path),
+            deadline
+        );
+        assert!(event_may_change_config(&write, path));
+    }
+
+    #[test]
     fn malformed_reload_keeps_the_last_valid_config_and_sends_nothing() {
         let directory = tempfile::tempdir().expect("tempdir");
         let path = directory.path().join("config.toml");
@@ -269,9 +286,7 @@ mod tests {
         fs::write(&path, toml::to_string_pretty(&config).expect("serialize")).expect("write");
         let (sender, mut receiver) = unbounded();
 
-        let mut last_valid = Config::default();
-        assert!(publish(&path, &mut last_valid, &sender));
-        assert_eq!(last_valid.appearance.background, "#112233");
+        assert!(publish(&path, &sender));
         assert_eq!(
             receiver
                 .try_recv()
@@ -282,8 +297,7 @@ mod tests {
         );
 
         fs::write(&path, "not valid toml = [").expect("write malformed");
-        assert!(publish(&path, &mut last_valid, &sender));
-        assert_eq!(last_valid.appearance.background, "#112233");
+        assert!(publish(&path, &sender));
         assert_eq!(
             receiver.try_recv(),
             Err(TryRecvError::Empty),
@@ -296,7 +310,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         let path = directory.path().join("config.toml");
         Config::load_or_create(&path).expect("create default");
-        let (mut watcher, mut receiver) = watch(&path, Config::default()).expect("watch config");
+        let (mut watcher, mut receiver) = watch(&path).expect("watch config");
 
         replace(&path, "#112233");
         assert_eq!(
@@ -318,8 +332,7 @@ mod tests {
     fn watcher_starts_before_the_config_file_exists() {
         let directory = tempfile::tempdir().expect("tempdir");
         let path = directory.path().join("config.toml");
-        let (mut watcher, mut receiver) =
-            watch(&path, Config::default()).expect("watch missing config");
+        let (mut watcher, mut receiver) = watch(&path).expect("watch missing config");
 
         replace(&path, "#ABCDEF");
 
@@ -334,8 +347,7 @@ mod tests {
         let path = directory.path().join("config.toml");
         Config::load_or_create(&path).expect("create default");
         let relative = path.strip_prefix(&current).expect("path below current dir");
-        let (mut watcher, mut receiver) =
-            watch(relative, Config::default()).expect("watch relative path");
+        let (mut watcher, mut receiver) = watch(relative).expect("watch relative path");
 
         replace(&path, "#778899");
         assert_eq!(
@@ -352,7 +364,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         let path = directory.path().join("config.toml");
         Config::load_or_create(&path).expect("create default");
-        let (mut watcher, mut receiver) = watch(&path, Config::default()).expect("watch config");
+        let (mut watcher, mut receiver) = watch(&path).expect("watch config");
 
         fs::write(directory.path().join("other.toml"), "unrelated = true")
             .expect("write unrelated file");
@@ -375,7 +387,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         let path = directory.path().join("config.toml");
         Config::load_or_create(&path).expect("create default");
-        let (mut watcher, mut receiver) = watch(&path, Config::default()).expect("watch config");
+        let (mut watcher, mut receiver) = watch(&path).expect("watch config");
 
         for index in 0..20 {
             let background = if index == 19 { "#444444" } else { "#111111" };
@@ -433,7 +445,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         let path = directory.path().join("config.toml");
         Config::load_or_create(&path).expect("create default");
-        let (mut watcher, mut receiver) = watch(&path, Config::default()).expect("watch config");
+        let (mut watcher, mut receiver) = watch(&path).expect("watch config");
 
         let stop = Arc::new(AtomicBool::new(false));
         let writes = Arc::new(AtomicUsize::new(0));
@@ -488,7 +500,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         let path = directory.path().join("config.toml");
         Config::load_or_create(&path).expect("create default");
-        let (mut watcher, receiver) = watch(&path, Config::default()).expect("watch config");
+        let (mut watcher, receiver) = watch(&path).expect("watch config");
         drop(receiver);
 
         replace(&path, "#0A0B0C");

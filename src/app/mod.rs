@@ -5,8 +5,8 @@ use std::time::Duration;
 
 pub mod runtime;
 
-use futures::StreamExt;
-use futures::channel::mpsc::UnboundedReceiver;
+use futures::channel::mpsc::{Receiver, Sender, UnboundedReceiver, channel};
+use futures::{FutureExt, StreamExt};
 use gpui::{Context, Timer};
 use tracing::{debug, error, info, warn};
 
@@ -21,6 +21,8 @@ use crate::win::tray::TrayEvent;
 pub struct AppController {
     config: Config,
     items: Vec<DockItem>,
+    windows: Vec<dock::WindowInfo>,
+    refresh_window_list: Sender<()>,
     config_path: PathBuf,
     taskbar: Rc<RefCell<TaskbarRuntime>>,
 }
@@ -35,27 +37,20 @@ impl AppController {
         config: Config,
         config_path: PathBuf,
         mut config_updates: UnboundedReceiver<Config>,
-        mut window_events: UnboundedReceiver<()>,
+        window_events: Receiver<()>,
         hotkey_events: Option<UnboundedReceiver<()>>,
         tray_events: Option<UnboundedReceiver<TrayEvent>>,
         taskbar: Rc<RefCell<TaskbarRuntime>>,
     ) -> Self {
-        let mut this = Self {
+        let (refresh_window_list, refresh_requests) = channel(1);
+        let this = Self {
+            items: dock::merge(&config.pinned, &[], config.behavior.show_running_apps),
             config,
-            items: Vec::new(),
+            windows: Vec::new(),
+            refresh_window_list,
             config_path,
             taskbar,
         };
-        this.refresh();
-
-        cx.spawn(async move |this, cx| {
-            Timer::after(Duration::from_millis(0)).await;
-            let _ = this.update(cx, |this, cx| {
-                this.refresh();
-                cx.notify();
-            });
-        })
-        .detach();
 
         cx.spawn(async move |this, cx| {
             while let Some(config) = config_updates.next().await {
@@ -70,35 +65,47 @@ impl AppController {
         .detach();
 
         cx.spawn(async move |this, cx| {
-            while window_events.next().await.is_some() {
-                Timer::after(Duration::from_millis(50)).await;
-                while window_events.try_recv().is_ok() {}
+            let mut refresh_signals = futures::stream::select(window_events, refresh_requests);
+            loop {
+                let started = std::time::Instant::now();
+                let result = cx
+                    .background_executor()
+                    .spawn(async { win::windows_enum::list_app_windows() })
+                    .await;
                 if this
-                    .update(cx, |this, cx| {
-                        if this.refresh() {
-                            cx.notify();
+                    .update(cx, |this, cx| match result {
+                        Ok(windows) => {
+                            this.windows = windows;
+                            if this.rebuild_items() {
+                                debug!(
+                                    items = this.items.len(),
+                                    elapsed_ms = started.elapsed().as_millis(),
+                                    "app list refreshed"
+                                );
+                                cx.notify();
+                            }
                         }
+                        Err(error) => error!(%error, "failed to enumerate app windows"),
                     })
                     .is_err()
                 {
                     break;
                 }
-            }
-        })
-        .detach();
 
-        cx.spawn(async move |this, cx| {
-            loop {
-                Timer::after(Duration::from_millis(250)).await;
-                if this
-                    .update(cx, |this, cx| {
-                        if this.refresh() {
-                            cx.notify();
+                futures::select! {
+                    signal = refresh_signals.next().fuse() => {
+                        if signal.is_none() {
+                            break;
                         }
-                    })
-                    .is_err()
-                {
-                    break;
+                        Timer::after(Duration::from_millis(50)).await;
+                        // Each of the two bounded channels holds at most two notifications.
+                        for _ in 0..4 {
+                            if !matches!(refresh_signals.next().now_or_never(), Some(Some(()))) {
+                                break;
+                            }
+                        }
+                    }
+                    _ = FutureExt::fuse(Timer::after(Duration::from_millis(250))) => {}
                 }
             }
         })
@@ -177,7 +184,17 @@ impl AppController {
         }
     }
 
+    pub fn use_pinned_layout(&mut self, name: &str, cx: &mut Context<Self>) {
+        match Config::use_pinned_layout(&self.config_path, name) {
+            Ok(loaded) => self.apply_config(loaded.config, cx),
+            Err(error) => warn!(%error, layout = name, "failed to switch pinned app layout"),
+        }
+    }
+
     fn apply_config(&mut self, config: Config, cx: &mut Context<Self>) {
+        if self.config == config {
+            return;
+        }
         info!(
             background = %config.appearance.background,
             corner_radius = config.appearance.corner_radius,
@@ -185,6 +202,8 @@ impl AppController {
         );
         let taskbar_changed =
             self.config.behavior.hide_native_taskbar != config.behavior.hide_native_taskbar;
+        let app_list_changed = self.config.pinned != config.pinned
+            || self.config.behavior.show_running_apps != config.behavior.show_running_apps;
         self.config = config;
 
         if taskbar_changed {
@@ -200,40 +219,35 @@ impl AppController {
             }
         }
 
-        self.refresh();
+        if app_list_changed {
+            self.rebuild_items();
+        }
         cx.notify();
     }
 
-    fn refresh(&mut self) -> bool {
-        let started = std::time::Instant::now();
-        match win::windows_enum::list_app_windows() {
-            Ok(windows) => {
-                let new_items = dock::merge(
-                    &self.config.pinned,
-                    &windows,
-                    self.config.behavior.show_running_apps,
-                );
-                if new_items != self.items {
-                    self.items = new_items;
-                    debug!(
-                        items = self.items.len(),
-                        elapsed_ms = started.elapsed().as_millis(),
-                        "app list refreshed"
-                    );
-                    true
-                } else {
-                    false
-                }
-            }
-            Err(error) => {
-                error!(%error, "failed to enumerate app windows");
-                false
-            }
+    fn rebuild_items(&mut self) -> bool {
+        let items = dock::merge(
+            &self.config.pinned,
+            &self.windows,
+            self.config.behavior.show_running_apps,
+        );
+        if items == self.items {
+            return false;
         }
+        self.items = items;
+        true
     }
 
-    pub fn activate_or_launch(&mut self, index: usize, cx: &mut Context<Self>) {
-        let Some(item) = self.items.get(index) else {
+    fn current_item(&self, rendered: &DockItem) -> Option<&DockItem> {
+        self.items.iter().find(|item| {
+            item.key == rendered.key
+                && item.is_pinned == rendered.is_pinned
+                && item.args == rendered.args
+        })
+    }
+
+    pub fn activate_or_launch(&mut self, rendered: &DockItem) {
+        let Some(item) = self.current_item(rendered) else {
             return;
         };
 
@@ -250,13 +264,12 @@ impl AppController {
             }
         }
 
-        self.refresh();
-        cx.notify();
+        let _ = self.refresh_window_list.try_send(());
     }
 
-    /// Middle-click launches a pinned app again instead of activating its window.
-    pub fn launch_second_instance(&mut self, index: usize) {
-        let Some(item) = self.items.get(index) else {
+    /// Launches another instance of a pinned app using its saved arguments.
+    pub fn launch_second_instance(&mut self, rendered: &DockItem) {
+        let Some(item) = self.current_item(rendered) else {
             return;
         };
         if !item.is_pinned {
@@ -267,7 +280,7 @@ impl AppController {
         if let Err(error) = win::launch::launch(&path, &item.args) {
             warn!(%error, app = %item.name, "failed to launch a second instance");
         }
-        self.refresh();
+        let _ = self.refresh_window_list.try_send(());
     }
 
     pub fn toggle_autostart(&mut self) {
@@ -311,6 +324,8 @@ mod tests {
         let controller = AppController {
             config: config.clone(),
             items,
+            windows: Vec::new(),
+            refresh_window_list: channel(1).0,
             config_path: PathBuf::from("config.toml"),
             taskbar: Rc::new(RefCell::new(TaskbarRuntime::default())),
         };
@@ -319,16 +334,49 @@ mod tests {
     }
 
     #[test]
-    fn refresh_returns_false_when_items_are_unchanged() {
+    fn click_resolves_the_same_app_after_items_are_reordered() {
+        let mut config = Config::default();
+        config.pinned = vec![
+            crate::config::PinnedApp {
+                name: "Editor profile".to_string(),
+                path: "editor.exe".to_string(),
+                args: vec!["--profile".to_string(), "work".to_string()],
+            },
+            crate::config::PinnedApp {
+                name: "Editor".to_string(),
+                path: "editor.exe".to_string(),
+                args: Vec::new(),
+            },
+        ];
+        let rendered = dock::merge(&config.pinned, &[], true);
+        let mut items = rendered.clone();
+        items.reverse();
+        let mut controller = AppController {
+            config,
+            items,
+            windows: Vec::new(),
+            refresh_window_list: channel(1).0,
+            config_path: PathBuf::from("config.toml"),
+            taskbar: Rc::new(RefCell::new(TaskbarRuntime::default())),
+        };
+
+        assert_eq!(controller.current_item(&rendered[0]), Some(&rendered[0]));
+        controller.items.pop();
+        assert!(controller.current_item(&rendered[0]).is_none());
+    }
+
+    #[test]
+    fn rebuild_returns_false_when_items_are_unchanged() {
         let config = Config::default();
         let mut controller = AppController {
             config,
             items: Vec::new(),
+            windows: Vec::new(),
+            refresh_window_list: channel(1).0,
             config_path: PathBuf::from("config.toml"),
             taskbar: Rc::new(RefCell::new(TaskbarRuntime::default())),
         };
-        let _ = controller.refresh();
-        let changed = controller.refresh();
+        let changed = controller.rebuild_items();
         assert!(!changed);
     }
 }

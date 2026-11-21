@@ -1,12 +1,224 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use gpui::{Context, FontWeight, IntoElement, SharedString, div, img, prelude::*, px, rgba};
 
-use super::{ActiveInput, DraggedPinnedApp, SettingsView};
+use super::{ActiveInput, DraggedPinnedApp, SettingsView, controls::render_text_input};
 use crate::config::PinnedApp;
 use crate::win;
 
 impl SettingsView {
+    pub(super) fn browse_for_app(&mut self, cx: &mut Context<Self>) {
+        if self.native_picker_open {
+            return;
+        }
+        self.native_picker_open = true;
+        self.showing_app_picker = false;
+        self.active_input = None;
+        let receiver = win::dialogs::pick_file_async();
+
+        cx.spawn(async move |this, cx| {
+            let result = receiver.await;
+            let _ = this.update(cx, |this, cx| {
+                this.native_picker_open = false;
+                match result {
+                    Ok(Ok(Some(path))) => this.add_pinned_app(pinned_app_from_path(&path)),
+                    Ok(Ok(None)) => {}
+                    Ok(Err(error)) => {
+                        this.status_message = Some((
+                            format!("Could not open the app picker: {error:#}").into(),
+                            true,
+                        ));
+                    }
+                    Err(_) => {
+                        this.status_message =
+                            Some(("The file picker closed unexpectedly.".into(), true));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    pub(super) fn add_pinned_app(&mut self, app: PinnedApp) {
+        self.finish_pinned_edit();
+        self.draft.pinned.push(app);
+        self.selected_pinned_index = Some(self.draft.pinned.len() - 1);
+        self.showing_app_picker = false;
+        self.active_input = None;
+        self.status_message = None;
+    }
+
+    pub(super) fn finish_pinned_edit(&mut self) {
+        self.new_pin_argument.clear();
+        if matches!(
+            self.active_input,
+            Some(
+                ActiveInput::PinnedAppName(_)
+                    | ActiveInput::PinnedAppArgument(_, _)
+                    | ActiveInput::NewPinnedAppArgument(_)
+            )
+        ) {
+            self.active_input = None;
+            self.input_selected = false;
+        }
+    }
+
+    pub(super) fn add_pin_argument(&mut self, index: usize) {
+        if !self.new_pin_argument.is_empty()
+            && let Some(app) = self.draft.pinned.get_mut(index)
+        {
+            app.args.push(std::mem::take(&mut self.new_pin_argument));
+            self.input_buffer.clear();
+            self.input_selected = false;
+            self.status_message = None;
+        }
+    }
+
+    fn move_pin_argument(&mut self, pin: usize, from: usize, to: usize) -> bool {
+        let Some(app) = self.draft.pinned.get_mut(pin) else {
+            return false;
+        };
+        if from == to || from >= app.args.len() || to >= app.args.len() {
+            return false;
+        }
+        app.args.swap(from, to);
+        if let Some(ActiveInput::PinnedAppArgument(active_pin, active_argument)) =
+            &mut self.active_input
+            && *active_pin == pin
+        {
+            if *active_argument == from {
+                *active_argument = to;
+            } else if *active_argument == to {
+                *active_argument = from;
+            }
+        }
+        self.status_message = None;
+        true
+    }
+
+    fn render_pin_arguments(
+        &self,
+        index: usize,
+        app: &PinnedApp,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div()
+            .p_3()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgba(0xCDD6F4FF))
+                    .child("Launch arguments"),
+            )
+            .children(app.args.iter().enumerate().map(|(argument_index, value)| {
+                div()
+                    .id(("pin-argument", argument_index))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().flex_1().min_w(px(0.0)).child(render_text_input(
+                        "argument-value",
+                        ActiveInput::PinnedAppArgument(index, argument_index),
+                        value,
+                        "Empty argument",
+                        self,
+                        cx,
+                    )))
+                    .children(
+                        [
+                            ("move-argument-up", "↑", argument_index.checked_sub(1)),
+                            (
+                                "move-argument-down",
+                                "↓",
+                                (argument_index + 1 < app.args.len()).then_some(argument_index + 1),
+                            ),
+                        ]
+                        .into_iter()
+                        .map(|(id, label, target)| {
+                            let button = div()
+                                .id(id)
+                                .px_2()
+                                .py_1()
+                                .rounded_md()
+                                .text_xs()
+                                .child(label);
+                            if let Some(target) = target {
+                                button
+                                    .text_color(rgba(0xCDD6F4FF))
+                                    .hover(|style| style.bg(rgba(0x313244FF)))
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if this.move_pin_argument(index, argument_index, target) {
+                                            cx.notify();
+                                        }
+                                    }))
+                            } else {
+                                button.text_color(rgba(0x6C7086FF))
+                            }
+                        }),
+                    )
+                    .child(
+                        div()
+                            .id("remove-argument")
+                            .px_3()
+                            .py_1()
+                            .rounded_md()
+                            .text_xs()
+                            .text_color(rgba(0xF38BA8FF))
+                            .hover(|style| style.bg(rgba(0x313244FF)))
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.finish_pinned_edit();
+                                if let Some(app) = this.draft.pinned.get_mut(index)
+                                    && argument_index < app.args.len()
+                                {
+                                    app.args.remove(argument_index);
+                                    this.status_message = None;
+                                    cx.notify();
+                                }
+                            }))
+                            .child("Remove"),
+                    )
+            }))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().flex_1().min_w(px(0.0)).child(render_text_input(
+                        "new-pin-argument",
+                        ActiveInput::NewPinnedAppArgument(index),
+                        &self.new_pin_argument,
+                        "New argument",
+                        self,
+                        cx,
+                    )))
+                    .child(
+                        div()
+                            .id("add-argument")
+                            .px_3()
+                            .py_1()
+                            .rounded_md()
+                            .bg(rgba(0x313244FF))
+                            .hover(|style| style.bg(rgba(0x45475AFF)))
+                            .text_xs()
+                            .text_color(rgba(0xCDD6F4FF))
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.add_pin_argument(index);
+                                cx.notify();
+                            }))
+                            .child("Add argument"),
+                    ),
+            )
+    }
+
     pub(super) fn render_pinned_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let total_count = self.draft.pinned.len();
 
@@ -50,7 +262,7 @@ impl SettingsView {
                         .into_any_element(),
                 };
 
-                div()
+                let row = div()
                     .id(SharedString::from(format!("pinned-app-{index}")))
                     .px_3()
                     .py_2()
@@ -71,7 +283,10 @@ impl SettingsView {
                     .justify_between()
                     .gap_3()
                     .on_click(cx.listener(move |this: &mut Self, _, _, cx| {
-                        this.selected_pinned_index = Some(index);
+                        if this.selected_pinned_index != Some(index) {
+                            this.finish_pinned_edit();
+                            this.selected_pinned_index = Some(index);
+                        }
                         cx.notify();
                     }))
                     .on_drop(cx.listener(
@@ -82,6 +297,7 @@ impl SettingsView {
                                 && to < this.draft.pinned.len()
                                 && from != to
                             {
+                                this.finish_pinned_edit();
                                 let item = this.draft.pinned.remove(from);
                                 this.draft.pinned.insert(to, item);
                                 this.selected_pinned_index = Some(to);
@@ -131,17 +347,29 @@ impl SettingsView {
                                     .flex_col()
                                     .gap_0p5()
                                     .flex_1()
-                                    .child(
+                                    .min_w(px(0.0))
+                                    .child(if is_selected {
+                                        render_text_input(
+                                            "pinned-app-display-name",
+                                            ActiveInput::PinnedAppName(index),
+                                            &app.name,
+                                            "Display name",
+                                            self,
+                                            cx,
+                                        )
+                                    } else {
                                         div()
                                             .text_sm()
                                             .font_weight(FontWeight::MEDIUM)
                                             .text_color(rgba(0xCDD6F4FF))
-                                            .child(app.name.clone()),
-                                    )
+                                            .child(app.name.clone())
+                                            .into_any_element()
+                                    })
                                     .child(
                                         div()
                                             .text_xs()
                                             .text_color(rgba(0x6C7086FF))
+                                            .truncate()
                                             .child(app.path.clone()),
                                     ),
                             ),
@@ -169,6 +397,8 @@ impl SettingsView {
                                     .when(index == 0, |s| s.text_color(rgba(0x6C708640)))
                                     .on_click(cx.listener(move |this: &mut Self, _, _, cx| {
                                         if index > 0 && index < this.draft.pinned.len() {
+                                            cx.stop_propagation();
+                                            this.finish_pinned_edit();
                                             this.draft.pinned.swap(index, index - 1);
                                             this.selected_pinned_index = Some(index - 1);
                                             this.status_message = None;
@@ -197,6 +427,8 @@ impl SettingsView {
                                     })
                                     .on_click(cx.listener(move |this: &mut Self, _, _, cx| {
                                         if index + 1 < this.draft.pinned.len() {
+                                            cx.stop_propagation();
+                                            this.finish_pinned_edit();
                                             this.draft.pinned.swap(index, index + 1);
                                             this.selected_pinned_index = Some(index + 1);
                                             this.status_message = None;
@@ -226,6 +458,13 @@ impl SettingsView {
                                     .child("X"),
                             ),
                     )
+                    .into_any_element();
+
+                div()
+                    .child(row)
+                    .when(is_selected, |section| {
+                        section.child(self.render_pin_arguments(index, app, cx))
+                    })
                     .into_any_element()
             })
             .collect();
@@ -276,17 +515,7 @@ impl SettingsView {
                                     .text_color(rgba(0x11111BFF))
                                     .cursor_pointer()
                                     .on_click(cx.listener(|this: &mut Self, _, _, cx| {
-                                        if this.installed_apps.is_none() {
-                                            this.installed_apps =
-                                                Some(win::dialogs::scan_installed_apps());
-                                        }
-                                        this.showing_app_picker = true;
-                                        this.app_picker_search.clear();
-                                        this.app_picker_filter = None;
-                                        this.active_input = Some(ActiveInput::AppPickerSearch);
-                                        this.input_buffer.clear();
-                                        this.status_message = None;
-                                        cx.notify();
+                                        this.open_app_picker(cx);
                                     }))
                                     .child("+ Add Application..."),
                             )
@@ -302,38 +531,8 @@ impl SettingsView {
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(rgba(0xCDD6F4FF))
                                     .cursor_pointer()
-                                    .on_click(cx.listener(|_this: &mut Self, _, _, cx| {
-                                        let receiver = win::dialogs::pick_file_async();
-                                        cx.spawn(async move |this, cx| {
-                                            if let Ok(Ok(Some(path))) = receiver.await {
-                                                let final_path = win::dialogs::resolve_shortcut(&path)
-                                                    .unwrap_or(path);
-                                                let stem = final_path
-                                                    .file_stem()
-                                                    .and_then(|s| s.to_str())
-                                                    .unwrap_or("App");
-                                                let mut chars = stem.chars();
-                                                let name = match chars.next() {
-                                                    None => "App".to_string(),
-                                                    Some(first) => {
-                                                        first.to_uppercase().collect::<String>()
-                                                            + chars.as_str()
-                                                    }
-                                                };
-                                                let _ = this.update(cx, |this, cx| {
-                                                    this.draft.pinned.push(PinnedApp {
-                                                        name,
-                                                        path: final_path.to_string_lossy().to_string(),
-                                                        args: Vec::new(),
-                                                    });
-                                                    this.selected_pinned_index =
-                                                        Some(this.draft.pinned.len() - 1);
-                                                    this.status_message = None;
-                                                    cx.notify();
-                                                });
-                                            }
-                                        })
-                                        .detach();
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.browse_for_app(cx);
                                     }))
                                     .child("Browse (.exe)..."),
                             ),
@@ -369,8 +568,107 @@ impl SettingsView {
                 div()
                     .text_xs()
                     .text_color(rgba(0x6C7086FF))
-                    .child("Tip: Drag the :: handle to reorder apps, or use ^ / v buttons. Click X to remove an application."),
+                    .child("Select a row to edit its display name. Drag the handle or use the arrows to reorder it."),
             )
+            .child(self.render_pinned_layouts(cx))
             .into_any_element()
+    }
+}
+
+fn pinned_app_from_path(path: &Path) -> PinnedApp {
+    let stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("App");
+    let mut chars = stem.chars();
+    let name = match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => "App".to_owned(),
+    };
+    PinnedApp {
+        name,
+        path: path.to_string_lossy().into_owned(),
+        args: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reordering_arguments_preserves_order_and_follows_the_active_field() {
+        let mut view = SettingsView::new(
+            "config.toml".into(),
+            crate::config::Config::default(),
+            String::new(),
+            false,
+        );
+        let mut pin = pinned_app_from_path(Path::new("Editor.exe"));
+        pin.args = vec!["--file".into(), "Work notes.txt".into()];
+        view.draft.pinned.push(pin);
+        view.active_input = Some(ActiveInput::PinnedAppArgument(0, 1));
+        view.input_buffer = "Work notes.txt".into();
+
+        assert!(view.move_pin_argument(0, 1, 0));
+        assert_eq!(view.draft.pinned[0].args, ["Work notes.txt", "--file"]);
+        assert_eq!(
+            view.active_input,
+            Some(ActiveInput::PinnedAppArgument(0, 0))
+        );
+        assert_eq!(view.input_buffer, "Work notes.txt");
+        assert!(!view.move_pin_argument(0, 0, 2));
+    }
+
+    #[test]
+    fn pin_arguments_keep_spaces_and_update_the_selected_entry() {
+        let mut view = SettingsView::new(
+            "config.toml".into(),
+            crate::config::Config::default(),
+            String::new(),
+            false,
+        );
+        let pin = pinned_app_from_path(Path::new("Editor.exe"));
+        view.draft.pinned = vec![pin.clone(), pin];
+        view.new_pin_argument = "C:/Work files/project.txt".into();
+        view.add_pin_argument(1);
+        assert_eq!(view.draft.pinned[1].args, ["C:/Work files/project.txt"]);
+        assert!(view.draft.pinned[0].args.is_empty());
+
+        view.input_buffer = "new value".into();
+        view.live_update_input(ActiveInput::PinnedAppArgument(1, 0));
+        assert_eq!(view.draft.pinned[1].args, ["new value"]);
+    }
+
+    #[test]
+    fn editing_a_pin_names_only_that_entry_and_keeps_its_arguments() {
+        let mut view = SettingsView::new(
+            "config.toml".into(),
+            crate::config::Config::default(),
+            String::new(),
+            false,
+        );
+        let original = PinnedApp {
+            name: "Editor".into(),
+            path: "editor.exe".into(),
+            args: vec!["--work".into()],
+        };
+        view.draft.pinned = vec![original.clone(), original.clone()];
+        view.input_buffer = "  Work editor  ".into();
+        view.live_update_input(ActiveInput::PinnedAppName(1));
+
+        assert_eq!(view.draft.pinned[0], original);
+        assert_eq!(view.draft.pinned[1].name, "Work editor");
+        assert_eq!(view.draft.pinned[1].path, original.path);
+        assert_eq!(view.draft.pinned[1].args, original.args);
+    }
+
+    #[test]
+    fn browsing_uses_the_executable_stem_and_keeps_the_full_path() {
+        let path = Path::new("Tools/my.editor.exe");
+        let app = pinned_app_from_path(path);
+        assert_eq!(app.name, "My.editor");
+        assert_eq!(app.path, "Tools/my.editor.exe");
+        assert!(app.args.is_empty());
     }
 }

@@ -136,7 +136,10 @@ over `padding` when specified.
 
 `width_mode = "auto"` automatically calculates dock width based on item count, icon
 size, spacing, padding, and clock element width. `width_mode = "manual"` uses the
-fixed `width` value.
+fixed `width` value. Both modes are capped at the display's available width.
+App items scroll horizontally when the row exceeds the available space beside
+the clock. Center alignment with `alignment_anchor = "dock"` balances the clock's
+space when the items fit within the centered region.
 
 `indicator_style = "dot"` renders a circular status indicator under running/active apps;
 `indicator_style = "line"` renders a rounded pill line indicator.
@@ -219,7 +222,9 @@ shows a restart notice.
 | `alignment` | enum | `right` | `right`, `center`, or `left` | Live |
 | `vertical_align` | enum | `center` | `center`, `top`, or `bottom` | Live |
 
-Invalid time or date formats are replaced with defaults and logged. The clock
+Settings rejects invalid time or date formats and keeps the draft open.
+When loading invalid formats from a manually edited file, Dockwind uses the
+default formats and logs a warning. The clock
 uses the process locale. `locale` is accepted for compatibility but is unused.
 `line_gap` sets the spacing in pixels between the time and date lines; negative
 values allow the lines to sit closer together or overlap while preserving symmetric
@@ -236,13 +241,35 @@ typography. `alignment` controls horizontal text alignment (`right`, `center`, `
 | `path` | string | Yes | Executable or launchable path. Matching is case-insensitive |
 | `args` | array of strings | No, defaults to empty | Quoted and passed to `ShellExecuteW` |
 
-Pinned apps keep their file order. Running windows from the same executable are
+Pinned apps keep their file order. In Settings, select a pinned app row to
+edit its display name and launch arguments. Add one value per argument field,
+and use the arrows to change the order the app receives them.
+Enter spaces as part of the value, and Dockwind handles Windows quoting when
+launching the app. Running windows from the same executable are
 merged into the pinned item. A missing `name` or `path` field is a parse failure.
 An empty path string is not validated at load time. The launch action reports the
 error when clicked.
 
 The settings window can add, remove, and reorder pinned apps. It uses the file
 name as the display name and writes an empty argument list.
+
+### 3.5 Named pinned app layouts
+
+In Settings, open Pinned Apps to save the current draft app list as a named
+layout. Load copies that layout into the draft. Update replaces a saved layout
+with the current draft app list. Rename changes its name and keeps its saved
+apps. Duplicate copies a layout and gives the copy a unique name.
+Apply & Save commits both the layouts and the
+current pinned apps and updates the running dock. Right-click the dock and
+choose a saved layout under Pinned app layouts to switch immediately. The menu
+marks layouts whose pins match the current list. Next layout cycles through
+distinct lists in name order and wraps to the first. With an unsaved list on
+the dock, Next layout loads the first saved list.
+
+Each named layout has the same entries and order as `[[pinned]]`. Layouts can
+be empty. They are stored in `pinned_layouts`, for example
+`[[pinned_layouts."Work"]]` for an app in the Work layout. Existing configs
+can keep using `[[pinned]]` by itself.
 
 ## 4. Validation Rules
 
@@ -333,7 +360,8 @@ GPUI dock window. The reason is recorded in `docs/decisions.md`.
 ### 6.1 One Writer
 
 - The settings window is single-instance within a process.
-- The dock does not write the config file.
+- Switching layouts from the dock menu atomically updates the pinned list in
+  the latest config file. Settings detects this as an external change.
 - The watcher reads a settings save like any other external edit.
 - `dockwind --settings` opens a separate process when the dock is running. The
   running dock reloads the file through the watcher.
@@ -342,9 +370,11 @@ GPUI dock window. The reason is recorded in `docs/decisions.md`.
 
 - Controls hold the draft.
 - Apply validates, saves, and updates the controls with sanitized values.
-- Close discards unsaved edits and closes the window.
+- Closing Settings with unsaved edits offers Keep editing, Discard, and
+  Save & Close. A failed save keeps Settings open.
 - Validation failures show a message box and do not write the file.
-- Autostart is applied immediately. It is not a config field.
+- Apply saves the autostart preference in Windows. If only autostart changes,
+  the config file stays untouched.
 
 ### 6.3 Atomic Replacement
 
@@ -359,7 +389,9 @@ Do not write in place. A crash during an in-place write can leave a corrupt file
 ### 6.4 External Edits and Conflicts
 
 The settings window records the file contents when it opens. Before Apply it reads
-the file again. If the contents changed, it asks before overwriting. If the file
+the file again. If the contents changed, choose Discard draft & reload to load
+the latest valid file, or Overwrite config to save the draft. If the disk file
+changes again before confirmation, Settings prompts again. If the file
 was deleted, it asks before recreating it. A failed save leaves the existing file
 intact and reports the error.
 

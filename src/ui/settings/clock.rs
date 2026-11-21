@@ -1,19 +1,17 @@
-use chrono::Local;
+use std::fmt::Write as _;
+
+use chrono::{DateTime, Local};
 use gpui::{Context, FontWeight, IntoElement, SharedString, div, prelude::*, px, rgba};
 
 use super::controls::*;
 use super::{ActiveInput, SettingsView};
-use crate::config::{ClockAlignment, VerticalAlign, parse_rgba_hex};
+use crate::config::{Clock, ClockAlignment, VerticalAlign, parse_rgba_hex, valid_strftime};
 
 impl SettingsView {
     pub(super) fn render_clock_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let now = Local::now();
-        let time_display = now.format(&self.draft.clock.time_format).to_string();
-        let date_display = if self.draft.clock.date_format.is_empty() {
-            String::new()
-        } else {
-            now.format(&self.draft.clock.date_format).to_string()
-        };
+        let time_display = preview_format(&now, &self.draft.clock.time_format);
+        let date_display = preview_format(&now, &self.draft.clock.date_format);
 
         let mut preview_root = div().h(px(80.0)).flex().flex_col();
         preview_root = match self.draft.clock.alignment {
@@ -37,13 +35,21 @@ impl SettingsView {
 
         let mut preview_time_el = div()
             .text_size(px(self.draft.clock.time_font_size as f32))
-            .text_color(custom_color.unwrap_or_else(|| rgba(0xFFFFFFFF)))
-            .child(time_display);
+            .text_color(if time_display.is_some() {
+                custom_color.unwrap_or_else(|| rgba(0xFFFFFFFF))
+            } else {
+                rgba(0xF38BA8FF)
+            })
+            .child(time_display.unwrap_or_else(|| "Invalid time format".to_owned()));
 
         let mut preview_date_el = div()
             .text_size(px(self.draft.clock.date_font_size as f32))
-            .text_color(custom_color.unwrap_or_else(|| rgba(0xA6ADC8FF)))
-            .child(date_display);
+            .text_color(if date_display.is_some() {
+                custom_color.unwrap_or_else(|| rgba(0xA6ADC8FF))
+            } else {
+                rgba(0xF38BA8FF)
+            })
+            .child(date_display.unwrap_or_else(|| "Invalid date format".to_owned()));
 
         if self.draft.clock.bold {
             preview_time_el = preview_time_el.font_weight(FontWeight::BOLD);
@@ -161,8 +167,7 @@ impl SettingsView {
                             ActiveInput::ClockTimeFormat,
                             &self.draft.clock.time_format,
                             "%H:%M",
-                            self.active_input,
-                            &self.input_buffer,
+                            self,
                             cx,
                         ),
                     ),
@@ -220,8 +225,7 @@ impl SettingsView {
                             ActiveInput::ClockDateFormat,
                             &self.draft.clock.date_format,
                             "%a, %d %b %Y",
-                            self.active_input,
-                            &self.input_buffer,
+                            self,
                             cx,
                         ),
                     ),
@@ -538,8 +542,7 @@ impl SettingsView {
                             ActiveInput::ClockFontColor,
                             self.draft.clock.font_color.as_deref().unwrap_or(""),
                             "Adaptive Contrast",
-                            self.active_input,
-                            &self.input_buffer,
+                            self,
                             cx,
                         ),
                     ),
@@ -675,5 +678,55 @@ impl SettingsView {
                     ),
                 ],
             ))
+    }
+}
+
+pub(super) fn clock_format_error(clock: &Clock) -> Option<&'static str> {
+    if !valid_strftime(&clock.time_format) {
+        Some("Fix the invalid time format before saving.")
+    } else if !valid_strftime(&clock.date_format) {
+        Some("Fix the invalid date format before saving.")
+    } else {
+        None
+    }
+}
+
+fn preview_format(now: &DateTime<Local>, format: &str) -> Option<String> {
+    let mut preview = String::new();
+    write!(preview, "{}", now.format(format)).ok()?;
+    Some(preview)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn save_validation_identifies_the_invalid_clock_field() {
+        let mut clock = Clock {
+            time_format: "%".into(),
+            ..Clock::default()
+        };
+        assert_eq!(
+            clock_format_error(&clock),
+            Some("Fix the invalid time format before saving.")
+        );
+        clock.time_format = "%H:%M".into();
+        clock.date_format = "%Q".into();
+        assert_eq!(
+            clock_format_error(&clock),
+            Some("Fix the invalid date format before saving.")
+        );
+        clock.date_format.clear();
+        assert_eq!(clock_format_error(&clock), None);
+    }
+
+    #[test]
+    fn clock_preview_handles_incomplete_and_invalid_draft_formats() {
+        let now = Local::now();
+        assert_eq!(preview_format(&now, "%"), None);
+        assert_eq!(preview_format(&now, "%Q"), None);
+        assert_eq!(preview_format(&now, "%%"), Some("%".into()));
+        assert_eq!(preview_format(&now, ""), Some(String::new()));
     }
 }

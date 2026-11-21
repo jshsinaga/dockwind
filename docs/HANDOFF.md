@@ -188,6 +188,73 @@ Read this before changing taskbar or worker code.
 
 ## Evidence
 
+### 2026-11-18 dock and Settings improvements
+
+The Linux cloud workspace passed formatting, diff checks, and 70 tests in a
+temporary harness using GPUI and stubs for Windows APIs. Clippy passed for the
+harness. The Windows-target check stopped in `ring` because MSVC's `lib.exe` was
+unavailable. The Windows quality gate and GUI checks are pending.
+
+On Windows, run `scripts/check.ps1`, then verify these paths:
+
+- Reveal and dismiss the dock after idle time at both screen edges. Check slide,
+  fade, and stable tile positions with light and dark appearances. Turn off
+  Windows animation effects and repeat to verify the dock skips the transition
+  while retaining its show and hide delays. With animations enabled, return
+  the pointer to the dock area mid-hide and check that the transition reverses.
+- Open and close apps rapidly while the dock is visible. Check that placeholders
+  give way to app icons and that clicks still target the tile under the pointer.
+  Check an app whose executable has no icon but whose running window does.
+  Pin the same executable twice with different arguments and confirm each
+  tile has independent hover and press feedback. In Settings, select one pin,
+  edit its display name, reorder it, and verify the other pin and both argument
+  lists remain intact. Add, edit, reorder, and remove launch arguments for one pin.
+  Launch it with an argument containing spaces and check that the application
+  receives a single argument. Shift+click and middle-click a running pin to
+  check that they pass that pin's arguments when launching another instance.
+- Pin more apps than fit on a narrow work area. Scroll to both ends and check that
+  the clock remains visible, including with a long custom date format.
+- Open Settings on a small display. Search and scroll the installed-app picker,
+  paste an RGBA background color, and save with Ctrl+S. With a directory
+  junction inside a Start Menu Programs folder, confirm the picker opens and
+  shows apps from regular subfolders. Browse from Pinned Apps and from the
+  installed-app picker. Check that cancel leaves the draft alone and selecting
+  a shortcut adds its executable when Windows can resolve it. Open Choose Color
+  while the hex field is active, select a color, and check that Apply & Save
+  uses the chosen color and preserves alpha. In the clock preview, type a
+  standalone percent sign, then complete a valid format. Check that the
+  preview recovers without closing Settings. Use Ctrl+A in a clock, color,
+  layout-name, and app-search field. Confirm typing replaces the selection.
+  Copy and cut a selection, then paste it back into the field. Hide the clock, wait across a
+  minute boundary, then show it again and check that the displayed time is current. Browse into another directory
+  and verify existing relative-path pins still resolve afterward. Externally edit the
+  TOML file while Settings has a draft and check the overwrite prompt.
+
+App overflow controls passed the Linux GPUI harness (73 tests) and Clippy.
+On Windows, narrow the dock with the clock enabled, click both chevrons to the
+ends and check that the corresponding chevron dims, then widen it until the
+controls disappear. Repeat with the clock hidden
+and verify wheel input still scrolls the strip.
+
+Named pinned app layouts need a Windows Settings smoke check. Create a Work
+layout, change the pinned draft, and load Work. Apply, restart Dockwind, and
+reopen Settings to confirm the pin order and saved layout remain available.
+Duplicate the layout, rename the copy, and confirm the saved app order and
+arguments are preserved when loading either layout.
+Switch layouts from the dock menu, exercise Next layout, verify the checked layout, then try
+saving an older Settings draft and confirm it detects the disk change.
+Choose Discard draft & reload and check that Settings shows the latest pins.
+Change only Autostart while an external config edit is present and verify
+that applying changes leaves the file untouched.
+Repeat the conflict, then edit the disk file again before choosing Overwrite
+config. Verify that Settings asks again and leaves the newer file intact.
+While scrolled to the end of an overflowing dock, switch layouts and confirm
+the new list starts at its first app.
+With edits pending, check Close and the title-bar close button. Exercise
+Keep editing, Discard, and Save & Close, including an external config conflict.
+With the app picker, taskbar confirmation, and pinned-app delete confirmation
+open, verify that clicks and scrolling do not reach Settings behind them.
+
 ### Historical evidence, baseline `482bd7a`
 
 | Date | Area | Evidence |

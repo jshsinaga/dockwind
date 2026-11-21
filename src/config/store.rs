@@ -33,6 +33,13 @@ pub enum ConfigError {
     Serialize(#[from] toml::ser::Error),
     #[error("failed to parse config {path}: {message}")]
     Parse { path: PathBuf, message: String },
+    #[error("pinned layout {name:?} is no longer available")]
+    UnknownPinnedLayout { name: String },
+    #[error("config changed on disk: {path}")]
+    ChangedOnDisk {
+        path: PathBuf,
+        current_source: ConfigSnapshot,
+    },
     #[error("failed to watch config: {0}")]
     Watch(#[from] notify::Error),
     #[error("failed to start config watcher thread: {0}")]
@@ -47,6 +54,24 @@ pub enum ConfigError {
     WatcherPanicked,
 }
 
+pub struct ConfigSnapshot(Option<String>);
+
+impl ConfigSnapshot {
+    pub fn contents(&self) -> Option<&str> {
+        self.0.as_deref()
+    }
+}
+
+impl std::fmt::Debug for ConfigSnapshot {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(if self.0.is_some() {
+            "ConfigSnapshot(Present)"
+        } else {
+            "ConfigSnapshot(Missing)"
+        })
+    }
+}
+
 pub fn default_path() -> Result<PathBuf, ConfigError> {
     let config_dir = dirs::config_dir().ok_or(ConfigError::NoConfigDir)?;
     Ok(config_dir.join(CONFIG_DIR_NAME).join(CONFIG_FILE_NAME))
@@ -54,33 +79,42 @@ pub fn default_path() -> Result<PathBuf, ConfigError> {
 
 impl Config {
     pub fn load_or_create(path: &Path) -> Result<LoadedConfig, ConfigError> {
-        if !path.exists() {
-            let config = Config::default();
-            write_default(path, &config)?;
-            return Ok(LoadedConfig {
-                config,
-                warnings: Vec::new(),
-            });
-        }
+        Self::load_or_create_with_source(path).map(|(loaded, _)| loaded)
+    }
 
-        match Self::load_existing(path) {
-            Ok(loaded) => Ok(loaded),
-            Err(ConfigError::Parse { message, .. }) => Ok(LoadedConfig {
+    pub fn load_or_create_with_source(path: &Path) -> Result<(LoadedConfig, String), ConfigError> {
+        let source = match read_config_if_present(path)? {
+            Some(source) => source,
+            None => {
+                write_default(path, &Config::default())?;
+                read_config(path)?
+            }
+        };
+        let loaded = match Self::parse_config(path, &source) {
+            Ok(loaded) => loaded,
+            Err(ConfigError::Parse { message, .. }) => LoadedConfig {
                 config: Config::default(),
                 warnings: vec![format!(
                     "config parse failed; using defaults until the file is fixed: {message}"
                 )],
-            }),
-            Err(other) => Err(other),
-        }
+            },
+            Err(other) => return Err(other),
+        };
+        Ok((loaded, source))
     }
 
     pub fn load_existing(path: &Path) -> Result<LoadedConfig, ConfigError> {
-        let contents = fs::read_to_string(path).map_err(|source| ConfigError::Read {
-            path: path.to_path_buf(),
-            source,
-        })?;
-        let config: Config = toml::from_str(&contents).map_err(|error| ConfigError::Parse {
+        Self::load_existing_with_source(path).map(|(loaded, _)| loaded)
+    }
+
+    pub fn load_existing_with_source(path: &Path) -> Result<(LoadedConfig, String), ConfigError> {
+        let source = read_config(path)?;
+        let loaded = Self::parse_config(path, &source)?;
+        Ok((loaded, source))
+    }
+
+    fn parse_config(path: &Path, contents: &str) -> Result<LoadedConfig, ConfigError> {
+        let config: Config = toml::from_str(contents).map_err(|error| ConfigError::Parse {
             path: path.to_path_buf(),
             message: error.to_string(),
         })?;
@@ -90,13 +124,24 @@ impl Config {
     /// Writes a validated config while preserving comments, key ordering, and
     /// unknown keys in an existing valid TOML document. An invalid existing file
     /// is not overwritten.
-    pub fn save_atomic_preserving(&self, path: &Path) -> Result<LoadedConfig, ConfigError> {
-        let loaded = self.clone().sanitize();
-        let contents = if path.exists() {
-            let existing = fs::read_to_string(path).map_err(|source| ConfigError::Read {
+    /// An expected source of `Some(None)` means the file must still be absent.
+    pub fn save_atomic_preserving(
+        &self,
+        path: &Path,
+        expected_source: Option<Option<&str>>,
+    ) -> Result<(LoadedConfig, String), ConfigError> {
+        let existing = read_config_if_present(path)?;
+        if let Some(expected_source) = expected_source
+            && existing.as_deref() != expected_source
+        {
+            return Err(ConfigError::ChangedOnDisk {
                 path: path.to_path_buf(),
-                source,
-            })?;
+                current_source: ConfigSnapshot(existing),
+            });
+        }
+
+        let loaded = self.clone().sanitize();
+        let contents = if let Some(existing) = existing.as_deref() {
             let mut document: DocumentMut =
                 existing
                     .parse::<DocumentMut>()
@@ -113,46 +158,101 @@ impl Config {
                  # Written by the Dockwind settings window. Edit and save to reload.\n\n{body}"
             )
         };
-        write_atomic(path, &contents)?;
+        replace_config(path, &contents, existing.as_deref())?;
+        Ok((loaded, contents))
+    }
+
+    /// Switches only the pinned list, using the layout in the latest on-disk config.
+    pub fn use_pinned_layout(path: &Path, name: &str) -> Result<LoadedConfig, ConfigError> {
+        let source = read_config(path)?;
+        let mut loaded = Self::parse_config(path, &source)?;
+        let apps = loaded.config.pinned_layouts.get(name).ok_or_else(|| {
+            ConfigError::UnknownPinnedLayout {
+                name: name.to_owned(),
+            }
+        })?;
+        if loaded.config.pinned == *apps {
+            return Ok(loaded);
+        }
+
+        let mut document: DocumentMut =
+            source
+                .parse::<DocumentMut>()
+                .map_err(|error| ConfigError::Parse {
+                    path: path.to_path_buf(),
+                    message: error.to_string(),
+                })?;
+        document["pinned"] = pinned_item(apps);
+        replace_config(path, &document.to_string(), Some(&source))?;
+        loaded.config.pinned.clone_from(apps);
         Ok(loaded)
     }
 }
 
-fn write_atomic(path: &Path, contents: &str) -> Result<(), ConfigError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|source| ConfigError::Write {
+fn replace_config(path: &Path, contents: &str, expected: Option<&str>) -> Result<(), ConfigError> {
+    let temporary = stage_config(path, contents)?;
+    let current = read_config_if_present(path)?;
+    if current.as_deref() != expected {
+        return Err(ConfigError::ChangedOnDisk {
             path: path.to_path_buf(),
-            source,
-        })?;
+            current_source: ConfigSnapshot(current),
+        });
     }
+    let result = if expected.is_some() {
+        temporary.persist(path)
+    } else {
+        temporary.persist_noclobber(path)
+    };
+    match result {
+        Ok(_) => Ok(()),
+        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(ConfigError::ChangedOnDisk {
+                path: path.to_path_buf(),
+                current_source: ConfigSnapshot(read_config_if_present(path)?),
+            })
+        }
+        Err(error) => Err(config_write_error(path, error.error)),
+    }
+}
 
-    let temporary = path.with_extension("toml.tmp");
-    let mut file = fs::File::create(&temporary).map_err(|source| ConfigError::Write {
-        path: temporary.clone(),
+fn read_config(path: &Path) -> Result<String, ConfigError> {
+    fs::read_to_string(path).map_err(|source| ConfigError::Read {
+        path: path.to_path_buf(),
         source,
-    })?;
-    let write_result = file
+    })
+}
+
+fn read_config_if_present(path: &Path) -> Result<Option<String>, ConfigError> {
+    match read_config(path) {
+        Ok(source) => Ok(Some(source)),
+        Err(ConfigError::Read { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn config_write_error(path: &Path, source: std::io::Error) -> ConfigError {
+    ConfigError::Write {
+        path: path.to_path_buf(),
+        source,
+    }
+}
+
+fn stage_config(path: &Path, contents: &str) -> Result<tempfile::NamedTempFile, ConfigError> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent).map_err(|error| config_write_error(path, error))?;
+
+    let mut temporary =
+        tempfile::NamedTempFile::new_in(parent).map_err(|error| config_write_error(path, error))?;
+    temporary
         .write_all(contents.as_bytes())
-        .and_then(|()| file.sync_all())
-        .map_err(|source| ConfigError::Write {
-            path: temporary.clone(),
-            source,
-        });
-    drop(file);
-
-    if let Err(error) = write_result {
-        let _ = fs::remove_file(&temporary);
-        return Err(error);
-    }
-
-    if let Err(source) = fs::rename(&temporary, path) {
-        let _ = fs::remove_file(&temporary);
-        return Err(ConfigError::Write {
-            path: path.to_path_buf(),
-            source,
-        });
-    }
-    Ok(())
+        .and_then(|()| temporary.as_file().sync_all())
+        .map_err(|error| config_write_error(temporary.path(), error))?;
+    Ok(temporary)
 }
 
 fn table_mut<'a>(document: &'a mut DocumentMut, key: &str) -> &'a mut Table {
@@ -282,8 +382,25 @@ fn update_document(document: &mut DocumentMut, config: &Config) {
         VerticalAlign::Bottom => "bottom",
     });
 
+    document["pinned"] = pinned_item(&config.pinned);
+
+    if config.pinned_layouts.is_empty() {
+        document.remove("pinned_layouts");
+    } else {
+        let layouts = table_mut(document, "pinned_layouts");
+        layouts.retain(|name, _| config.pinned_layouts.contains_key(name));
+        for (name, apps) in &config.pinned_layouts {
+            layouts[name] = pinned_item(apps);
+        }
+    }
+}
+
+fn pinned_item(apps: &[super::model::PinnedApp]) -> Item {
+    if apps.is_empty() {
+        return value(toml_edit::Array::new());
+    }
     let mut pinned = ArrayOfTables::new();
-    for app in &config.pinned {
+    for app in apps {
         let mut table = Table::new();
         table["name"] = value(app.name.as_str());
         table["path"] = value(app.path.as_str());
@@ -294,26 +411,20 @@ fn update_document(document: &mut DocumentMut, config: &Config) {
         table["args"] = value(args);
         pinned.push(table);
     }
-    document["pinned"] = Item::ArrayOfTables(pinned);
+    Item::ArrayOfTables(pinned)
 }
 
 fn write_default(path: &Path, config: &Config) -> Result<(), ConfigError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|source| ConfigError::Write {
-            path: path.to_path_buf(),
-            source,
-        })?;
-    }
-
     let body = toml::to_string_pretty(config)?;
     let contents = format!(
         "# Dockwind configuration\n\
          # Generated on first run. Edit and save to reload.\n\n{body}"
     );
-    fs::write(path, contents).map_err(|source| ConfigError::Write {
-        path: path.to_path_buf(),
-        source,
-    })
+    match stage_config(path, &contents)?.persist_noclobber(path) {
+        Ok(_) => Ok(()),
+        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(error) => Err(config_write_error(path, error.error)),
+    }
 }
 
 #[cfg(test)]
@@ -359,12 +470,52 @@ mod tests {
         config.appearance.width = 720;
         config.appearance.orientation = crate::config::DockEdge::Top;
 
-        let saved = config.save_atomic_preserving(&path).expect("save config");
+        let (saved, _) = config
+            .save_atomic_preserving(&path, None)
+            .expect("save config");
         assert_eq!(saved.config, config);
-        assert!(!directory.path().join("config.toml.tmp").exists());
+        assert_eq!(
+            fs::read_dir(directory.path())
+                .expect("list config directory")
+                .count(),
+            1
+        );
 
         let loaded = Config::load_existing(&path).expect("reload saved config");
         assert_eq!(loaded.config, config);
+    }
+
+    #[test]
+    fn settings_save_leaves_an_existing_temporary_file_alone() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("config.toml");
+        let other_file = path.with_extension("toml.tmp");
+        fs::write(&other_file, "another writer").expect("write other file");
+
+        Config::default()
+            .save_atomic_preserving(&path, None)
+            .expect("save config");
+        assert_eq!(
+            fs::read_to_string(&other_file).expect("read other file"),
+            "another writer"
+        );
+    }
+
+    #[test]
+    fn default_creation_preserves_a_file_another_writer_created() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("config.toml");
+        fs::write(&path, "[appearance]\nwidth = 700\n").expect("write config");
+
+        write_default(&path, &Config::default()).expect("handle concurrent creation");
+        assert_eq!(
+            Config::load_existing(&path)
+                .expect("read config")
+                .config
+                .appearance
+                .width,
+            700
+        );
     }
 
     #[test]
@@ -389,7 +540,7 @@ value = 7
         let mut config = Config::default();
         config.appearance.width = 700;
         config
-            .save_atomic_preserving(&path)
+            .save_atomic_preserving(&path, None)
             .expect("save preserved");
 
         let text = fs::read_to_string(&path).expect("read saved");
@@ -418,7 +569,7 @@ value = 7
             args: Vec::new(),
         });
         config
-            .save_atomic_preserving(&path)
+            .save_atomic_preserving(&path, None)
             .expect("save preserved");
 
         let text = fs::read_to_string(&path).expect("read saved");
@@ -436,13 +587,153 @@ value = 7
         fs::write(&path, "not valid = [").expect("write invalid");
 
         assert!(matches!(
-            Config::default().save_atomic_preserving(&path),
+            Config::default().save_atomic_preserving(&path, None),
             Err(ConfigError::Parse { .. })
         ));
         assert_eq!(
             fs::read_to_string(&path).expect("read unchanged"),
             "not valid = ["
         );
+    }
+
+    #[test]
+    fn named_layouts_round_trip_with_empty_layouts_and_launch_arguments() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("config.toml");
+        let mut config = Config::default();
+        config
+            .pinned_layouts
+            .insert("Empty".to_string(), Vec::new());
+        config.pinned_layouts.insert(
+            "Work & notes".to_string(),
+            vec![crate::config::PinnedApp {
+                name: "Editor".to_string(),
+                path: "editor.exe".to_string(),
+                args: vec!["--work".to_string()],
+            }],
+        );
+        config
+            .save_atomic_preserving(&path, None)
+            .expect("save layouts");
+        assert_eq!(
+            Config::load_existing(&path).expect("read layouts").config,
+            config
+        );
+
+        config.pinned_layouts.remove("Work & notes");
+        config
+            .save_atomic_preserving(&path, None)
+            .expect("save removal");
+        assert_eq!(
+            Config::load_existing(&path).expect("read layouts").config,
+            config
+        );
+    }
+
+    #[test]
+    fn switching_layout_reads_latest_config_and_changes_only_pinned_apps() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("config.toml");
+        let source = r#"# Keep this specific spelling
+[appearance]
+width=640
+
+[[pinned_layouts.Work]]
+name="Editor"
+path="editor.exe"
+"#;
+        fs::write(&path, source).expect("write latest config");
+        let loaded = Config::use_pinned_layout(&path, "Work").expect("switch layout");
+        let switched = fs::read_to_string(&path).expect("read switched config");
+        assert!(switched.contains(source));
+        assert_eq!(loaded.config.pinned[0].name, "Editor");
+        assert_eq!(
+            Config::load_existing(&path)
+                .expect("read pinned apps")
+                .config,
+            loaded.config
+        );
+
+        assert!(matches!(
+            Config::use_pinned_layout(&path, "Removed"),
+            Err(ConfigError::UnknownPinnedLayout { .. })
+        ));
+        assert_eq!(
+            fs::read_to_string(&path).expect("read unchanged config"),
+            switched
+        );
+    }
+
+    #[test]
+    fn stale_settings_snapshot_protects_external_edits_until_overwrite() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("config.toml");
+        let (loaded, snapshot) = Config::load_or_create_with_source(&path).expect("open settings");
+        let external = "# external edit\n[appearance]\nwidth = 720\n";
+        fs::write(&path, external).expect("edit externally");
+
+        assert!(matches!(
+            loaded
+                .config
+                .save_atomic_preserving(&path, Some(Some(&snapshot))),
+            Err(ConfigError::ChangedOnDisk { .. })
+        ));
+        assert_eq!(fs::read_to_string(&path).expect("read config"), external);
+
+        let (_, saved_source) = loaded
+            .config
+            .save_atomic_preserving(&path, None)
+            .expect("confirm overwrite");
+        assert!(saved_source.contains("# external edit"));
+        assert!(saved_source.contains("width = 560"));
+        assert_eq!(
+            fs::read_to_string(&path).expect("read config"),
+            saved_source
+        );
+    }
+
+    #[test]
+    fn confirming_overwrite_does_not_discard_a_second_external_edit() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("config.toml");
+        let initial = "[appearance]\nwidth = 560\n";
+        let newer = "[appearance]\nwidth = 700\n";
+        let latest = "[appearance]\nwidth = 800\n";
+        fs::write(&path, newer).expect("write external edit");
+
+        let draft = Config::default();
+        let Err(ConfigError::ChangedOnDisk { current_source, .. }) =
+            draft.save_atomic_preserving(&path, Some(Some(initial)))
+        else {
+            panic!("expected first conflict");
+        };
+        assert_eq!(current_source.contents(), Some(newer));
+
+        fs::write(&path, latest).expect("write second edit");
+        assert!(matches!(
+            draft.save_atomic_preserving(&path, Some(current_source.contents())),
+            Err(ConfigError::ChangedOnDisk { .. })
+        ));
+        assert_eq!(
+            fs::read_to_string(&path).expect("read preserved file"),
+            latest
+        );
+    }
+
+    #[test]
+    fn stale_settings_snapshot_protects_external_deletion() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("config.toml");
+        let (loaded, snapshot) = Config::load_or_create_with_source(&path).expect("open settings");
+        fs::remove_file(&path).expect("delete externally");
+
+        assert!(matches!(
+            loaded
+                .config
+                .save_atomic_preserving(&path, Some(Some(&snapshot))),
+            Err(ConfigError::ChangedOnDisk { .. })
+        ));
+        assert!(!path.exists());
     }
 
     #[test]
@@ -453,7 +744,9 @@ value = 7
         config.appearance.width = 10;
         config.appearance.opacity = 5;
 
-        let saved = config.save_atomic_preserving(&path).expect("save config");
+        let (saved, _) = config
+            .save_atomic_preserving(&path, None)
+            .expect("save config");
         assert_eq!(saved.config.appearance.width, 560);
         assert_eq!(saved.config.appearance.opacity, 100);
         assert_eq!(saved.warnings.len(), 2);
@@ -498,7 +791,7 @@ value = 7
         config.clock.vertical_align = VerticalAlign::Bottom;
 
         config
-            .save_atomic_preserving(&path)
+            .save_atomic_preserving(&path, None)
             .expect("save preserved");
 
         let loaded = Config::load_existing(&path).expect("reload saved");

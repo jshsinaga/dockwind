@@ -69,8 +69,9 @@ reservation is not drawn; it only changes the work area.
 - App items take the left and center space.
 - The clock is right-aligned in two lines: time above, date below.
 - Content padding comes from `appearance.padding`, default 8.
-- The app list scrolls horizontally. A large app list stays within the configured
-  width. There is no visible scrollbar affordance yet.
+- The app list scrolls horizontally beside the clock. The dock fits within the
+  display work area in both fixed and automatic width modes. Chevron buttons
+  page through an overflowing list when there is room for the controls.
 - A top-oriented dock mirrors the layout vertically: the hidden state slides up
   and the trigger sits on the top work-area edge.
 
@@ -89,7 +90,7 @@ reservation is not drawn; it only changes the work area.
 | Width and height | 560 and 92 | Configurable and live |
 | Opacity | 100 | Percentage multiplier on the background alpha |
 | Border | 1 px white at 20% alpha | Separates the dock from a light background |
-| Hover | White at 8% alpha | Applies to an app item |
+| Tile feedback | Text color at 8%, 13%, or 20% alpha | Foreground, hover, and press states keep the tile in place |
 
 The text color is derived, not configured. A dark background gets white text and
 a light background gets black text. The choice uses the WCAG relative luminance
@@ -100,16 +101,14 @@ color. The dock has one surface and one hierarchy.
 
 ## App Item
 
-- The icon is loaded from the live window, then the window class, then the
-  executable path.
-- If no icon is available, the item shows the first letter of the app name on a
-  rounded placeholder.
-- The running or active indicator is always present as a 3 px-high bar. It is
-  transparent when the app is pinned but not running.
+- The icon loads in the background from the live window, then the window class,
+  then the executable path. A rounded placeholder with the app's first letter
+  is visible while the icon loads or when no icon is available.
+- The running or active indicator uses the configured line or dot style. Its
+  space remains reserved when a pinned app is idle.
 - Left click activates or restores a running app, or minimizes it when it is
   already foreground. A pinned app that is not running is launched.
-- Hover shows a subtle background. Tooltips, middle-click launch, per-window
-  selection, and scrolling are not implemented.
+- Middle-click or Shift+click opens a second instance of a pinned app.
 - Apps are grouped by executable path. The group uses the most recent
   non-minimized window as its target.
 
@@ -118,21 +117,24 @@ color. The dock has one surface and one hierarchy.
 - Two right-aligned lines.
 - `clock.time_format` controls the time. The default is `%H:%M`.
 - `clock.date_format` controls the date. The default is `%a, %d %b %Y`.
-- The timer aligns to the next minute, or the next second when the time format
-  contains `%S`, `%T`, or `%r`.
+- The timer aligns to the next minute, or the next second when either line
+  displays seconds. Hiding the clock stops the timer.
 - `clock.locale` is accepted but unused. The clock uses the process locale.
 
 ## Auto-Hide
 
 - The trigger is a 2 px strip at the bottom of the monitor work area.
 - Default show delay is 80 ms. Default hide delay is 400 ms. Default animation is
-  180 ms.
+  180 ms. Turning off animation effects in Windows skips the dock transition
+  while retaining its show and hide delays.
 - Progress from 0 to 1 drives vertical offset and opacity.
+- If the pointer returns to the dock area during a hide transition, the dock
+  reverses direction. A fully hidden dock relies on the edge trigger.
 - At progress 0, the window is click-through.
 - An open context menu pins the dock visible.
 - A fullscreen app forces the dock hidden when `hide_in_fullscreen` is true.
-- The dock polls the cursor at 100 ms while hidden and 16 ms while visible or
-  animating. It does not install a low-level mouse hook.
+- The dock polls the cursor every 32 ms while idle and hidden, and every 16 ms
+  while visible or animating. Cursor polling stops when auto-hide is disabled.
 
 ## Backdrop and Corners
 

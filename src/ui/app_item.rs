@@ -1,14 +1,15 @@
 use std::sync::Arc;
 
 use gpui::{
-    App, ClickEvent, MouseButton, MouseDownEvent, Pixels, RenderImage, SharedString, Window, div,
-    img, prelude::*, px, rgba,
+    App, ClickEvent, MouseButton, MouseDownEvent, Pixels, RenderImage, Rgba, SharedString, Window,
+    div, img, prelude::*, px, rgba,
 };
 
 use super::theme::Theme;
 use crate::dock::DockItem;
 
 pub fn render_app_item(
+    index: usize,
     item: &DockItem,
     icon: Option<Arc<RenderImage>>,
     theme: &Theme,
@@ -47,7 +48,7 @@ pub fn render_app_item(
     let indicator_element = match theme.indicator_style {
         crate::config::IndicatorStyle::Line => div()
             .h(px(3.0))
-            .w(px(18.0))
+            .w(px(18.0).min(icon_size))
             .rounded_full()
             .bg(indicator.unwrap_or_else(|| rgba(0x00000000))),
         crate::config::IndicatorStyle::Dot => div()
@@ -56,18 +57,29 @@ pub fn render_app_item(
             .bg(indicator.unwrap_or_else(|| rgba(0x00000000))),
     };
 
+    let tile_tint = |alpha| Rgba {
+        a: alpha,
+        ..theme.text
+    };
+    let resting_alpha = if item.is_active { 0.08 } else { 0.0 };
+
     div()
-        .id(SharedString::from(item.key.to_string_lossy().into_owned()))
-        .relative()
+        .id((
+            SharedString::from(item.key.to_string_lossy().into_owned()),
+            index,
+        ))
         .flex()
         .flex_col()
+        .flex_shrink_0()
         .items_center()
         .justify_center()
         .gap_1()
         .p(px(4.0))
-        .rounded(px(8.0))
+        .rounded(px(10.0_f32.min(f32::from(icon_size) / 3.0)))
+        .bg(tile_tint(resting_alpha))
         .cursor_pointer()
-        .hover(|style| style.bg(rgba(0xFFFFFF18)).top(px(-2.0)))
+        .hover(|style| style.bg(tile_tint(0.13)))
+        .active(|style| style.bg(tile_tint(0.20)))
         .on_click(on_click)
         .on_mouse_down(MouseButton::Middle, on_middle_click)
         .child(icon)
