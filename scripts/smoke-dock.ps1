@@ -79,9 +79,6 @@ public static class DockwindSmoke {
     public static extern bool IsWindowVisible(IntPtr window);
 
     [DllImport("user32.dll")]
-    private static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
-
-    [DllImport("user32.dll")]
     private static extern bool GetGUIThreadInfo(uint thread, ref GuiThreadInfo info);
 
     [DllImport("user32.dll")]
@@ -90,11 +87,6 @@ public static class DockwindSmoke {
     public static void Click() {
         mouse_event(2, 0, 0, 0, UIntPtr.Zero);
         mouse_event(4, 0, 0, 0, UIntPtr.Zero);
-    }
-
-    public static void Key(byte key) {
-        keybd_event(key, 0, 0, UIntPtr.Zero);
-        keybd_event(key, 0, 2, UIntPtr.Zero);
     }
 
     public static uint WindowProcess(IntPtr window) {
@@ -118,6 +110,7 @@ public static class DockwindSmoke {
 }
 '@
 Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 
 $fixtureTitle = 'Dockwind smoke background'
 $fixtureSecondTitle = 'Dockwind smoke second window'
@@ -316,6 +309,20 @@ function Test-TrayButton([IntPtr]$Window) {
     Write-Host '[smoke] The Tray button opened and dismissed the native menu'
 }
 
+function Select-DockMenuItem([string]$Name) {
+    $nameCondition = [Windows.Automation.PropertyCondition]::new(
+        [Windows.Automation.AutomationElement]::NameProperty, $Name)
+    $typeCondition = [Windows.Automation.PropertyCondition]::new(
+        [Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::MenuItem)
+    $condition = [Windows.Automation.AndCondition]::new($nameCondition, $typeCondition)
+    $item = Wait-DockState "the '$Name' menu item" {
+        [Windows.Automation.AutomationElement]::RootElement.FindFirst('Descendants', $condition)
+    }
+    $rect = $item.Current.BoundingRectangle
+    $null = [DockwindSmoke]::SetCursorPos([int]($rect.Left + $rect.Width / 2), [int]($rect.Top + $rect.Height / 2))
+    [DockwindSmoke]::Click()
+}
+
 function Test-WindowPicker([IntPtr]$Window) {
     $first = [DockwindSmoke]::FindByTitle($fixtureTitle)
     $second = [DockwindSmoke]::FindByTitle($fixtureSecondTitle)
@@ -334,13 +341,13 @@ function Test-WindowPicker([IntPtr]$Window) {
     $rect = Get-DockRect $Window
     $null = [DockwindSmoke]::SetCursorPos([int](($rect.Left + $rect.Right) / 2), [int](($rect.Top + $rect.Bottom) / 2))
     $previous = [DockwindSmoke]::GetForegroundWindow()
+    $target = if ($previous -eq $second) { $first } else { $second }
+    $targetTitle = if ($target -eq $first) { $fixtureTitle } else { $fixtureSecondTitle }
     [DockwindSmoke]::Click()
     $null = Wait-DockState 'the window picker for the grouped apps' { [DockwindSmoke]::IsDockMenuOpen($Window) }
-    [DockwindSmoke]::Key(0x23) # End selects the last window, below the foreground one.
-    [DockwindSmoke]::Key(0x0D) # Enter activates the selected window.
+    Select-DockMenuItem $targetTitle
     $null = Wait-DockState 'the selected app window in the foreground' {
-        $foreground = [DockwindSmoke]::GetForegroundWindow()
-        $foreground -ne $previous -and ($foreground -eq $first -or $foreground -eq $second)
+        [DockwindSmoke]::GetForegroundWindow() -eq $target
     }
     Write-Host '[smoke] The window picker switched between two windows from the same app'
 }
@@ -359,8 +366,8 @@ function Test-NativeTrayVisibility([IntPtr]$Window) {
         foreach ($visible in @($true, $false)) {
             Start-Sleep -Milliseconds 300
             Open-TrayMenu $Window
-            [DockwindSmoke]::Key(0x24) # Home selects the native taskbar action.
-            [DockwindSmoke]::Key(0x0D)
+            $label = if ($visible) { 'Show Windows taskbar and tray' } else { 'Hide Windows taskbar and tray' }
+            Select-DockMenuItem $label
             $null = Wait-DockState "native taskbar visibility $visible" {
                 [DockwindSmoke]::IsWindowVisible($taskbar) -eq $visible
             }
