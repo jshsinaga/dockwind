@@ -47,6 +47,11 @@ pub struct WindowFlags {
 }
 
 pub fn list_app_windows() -> Result<Vec<WindowInfo>> {
+    // SAFETY: GetCurrentProcessId has no preconditions and never fails.
+    list_windows_except_process(unsafe { GetCurrentProcessId() })
+}
+
+fn list_windows_except_process(excluded_pid: u32) -> Result<Vec<WindowInfo>> {
     let mut handles = Vec::new();
     // SAFETY: the callback only appends to the vector behind `lparam`, which stays
     // alive for the duration of EnumWindows. A false result means an error because
@@ -61,8 +66,6 @@ pub fn list_app_windows() -> Result<Vec<WindowInfo>> {
     }
     .context("EnumWindows failed")?;
 
-    // SAFETY: both calls have no preconditions. GetCurrentProcessId never fails.
-    let current_pid = unsafe { GetCurrentProcessId() };
     // SAFETY: GetForegroundWindow is read-only and may return null.
     let foreground = unsafe { GetForegroundWindow() };
     let mut result = Vec::new();
@@ -71,7 +74,7 @@ pub fn list_app_windows() -> Result<Vec<WindowInfo>> {
 
     for hwnd in handles {
         let pid = window_process_id(hwnd);
-        if pid == 0 || pid == current_pid {
+        if pid == 0 || pid == excluded_pid {
             continue;
         }
         let title = window_title(hwnd);
@@ -574,5 +577,89 @@ mod tests {
     fn core_window_search_handles_empty_title() {
         assert!(find_core_window_app("").is_none());
         assert!(find_core_window_app("   ").is_none());
+    }
+
+    #[test]
+    fn native_windows_with_distinct_app_ids_are_enumerated_as_separate_apps() {
+        use std::mem::ManuallyDrop;
+        use windows::Win32::System::{Com::StructuredStorage::*, Variant::VT_LPWSTR};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DestroyWindow, SW_SHOWNOACTIVATE, WS_POPUP,
+        };
+        use windows::core::{PCWSTR, w};
+
+        struct TestWindow(HWND);
+
+        impl Drop for TestWindow {
+            fn drop(&mut self) {
+                // SAFETY: the test owns the window and runs on its creator thread.
+                let _ = unsafe { DestroyWindow(self.0) };
+            }
+        }
+
+        fn create(title: PCWSTR, app_id: PCWSTR) -> Result<TestWindow> {
+            // SAFETY: STATIC is a system class. The strings are static and the
+            // window is owned by this test on the current thread.
+            let hwnd = unsafe {
+                CreateWindowExW(
+                    WS_EX_APPWINDOW | WS_EX_NOACTIVATE,
+                    w!("STATIC"),
+                    title,
+                    WS_POPUP,
+                    0,
+                    0,
+                    24,
+                    24,
+                    None,
+                    None,
+                    None,
+                    None,
+                )?
+            };
+            let window = TestWindow(hwnd);
+            let value = PROPVARIANT {
+                Anonymous: PROPVARIANT_0 {
+                    Anonymous: ManuallyDrop::new(PROPVARIANT_0_0 {
+                        vt: VT_LPWSTR,
+                        Anonymous: PROPVARIANT_0_0_0 {
+                            pwszVal: PWSTR(app_id.0.cast_mut()),
+                        },
+                        ..Default::default()
+                    }),
+                },
+            };
+            // SAFETY: COM is initialized by the test. SetValue copies the
+            // borrowed static string and the live HWND belongs to this test.
+            unsafe {
+                SHGetPropertyStoreForWindow::<IPropertyStore>(hwnd)?
+                    .SetValue(&APP_USER_MODEL_ID, &value)?;
+                let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            }
+            Ok(window)
+        }
+
+        let _com = ComApartmentGuard::new();
+        let first = create(w!(""), w!("Dockwind.Test.First")).expect("first taskbar window");
+        let second =
+            create(w!("Dockwind test"), w!("Dockwind.Test.Second")).expect("second taskbar window");
+        let handles = [first.0.0 as isize, second.0.0 as isize];
+        let windows = list_windows_except_process(0)
+            .expect("enumerate test windows")
+            .into_iter()
+            .filter(|window| handles.contains(&window.hwnd))
+            .collect::<Vec<_>>();
+
+        assert_eq!(windows.len(), 2);
+        assert!(
+            windows
+                .iter()
+                .any(|window| window.app_id.as_deref() == Some("Dockwind.Test.First"))
+        );
+        assert!(
+            windows
+                .iter()
+                .any(|window| window.app_id.as_deref() == Some("Dockwind.Test.Second"))
+        );
+        assert_eq!(crate::dock::merge(&[], &windows, true).len(), 2);
     }
 }
