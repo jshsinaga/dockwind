@@ -3,6 +3,32 @@
 All notable changes to Dockwind are recorded here. Versions follow
 `MAJOR.MINOR.PATCH` from `Cargo.toml`.
 
+## 0.5.0 - 2026-11-21
+
+### Added
+
+- Enable icon zoom and hover background independently under Settings >
+  Appearance. Zoom stays within the app tile and keeps the dock height and
+  icon spacing fixed.
+- Click an app with multiple windows to choose a window by title.
+- Open the dock's **Tray** menu to see network, sound, battery, and input
+  language status, adjust output volume, mute sound or the default microphone,
+  and open Windows settings. When Dockwind hides the taskbar, this menu can
+  reveal the native notification area and its hidden icons temporarily.
+
+### Fixed
+
+- Keep eligible windows in the dock when Windows withholds their executable
+  paths. Use Windows app identities to keep distinct apps separate when they
+  share an executable. Follow focus through owned dialogs and refresh when
+  Windows cloaks or reveals a window.
+- Clear icon hover effects when the pointer leaves the dock and restore them
+  when it returns.
+- Start Dockwind from Explorer, Start, or autostart without opening a terminal.
+- Align Mica and Acrylic with the dock frame. Switch blur modes live and clear
+  the native material by selecting **None**. Older Windows builds use their
+  legacy blur and acrylic effects.
+
 ## 0.4.0 - 2026-11-21
 
 ### Added
