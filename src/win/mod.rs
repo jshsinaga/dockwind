@@ -1,5 +1,6 @@
 pub mod appbar;
 pub mod autostart;
+pub mod console;
 pub mod cursor;
 pub mod dialogs;
 pub mod dwm;

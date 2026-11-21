@@ -632,6 +632,22 @@ Invoke-NativeCommand 'cargo' @('clippy', '--all-targets', '--locked', '--', '-D'
 Invoke-NativeCommand 'cargo' @('test', '--locked')
 Invoke-NativeCommand 'cargo' @('build', '--release', '--locked')
 
+# IMAGE_SUBSYSTEM_WINDOWS_GUI prevents Explorer and autostart from creating a console.
+if ($env:OS -eq 'Windows_NT') {
+    $targetRoot = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $repoRoot 'target' }
+    if ($env:CARGO_BUILD_TARGET) {
+        $targetRoot = Join-Path $targetRoot $env:CARGO_BUILD_TARGET
+    }
+    $binary = Join-Path $targetRoot 'release/dockwind.exe'
+    $header = [System.IO.File]::ReadAllBytes($binary)
+    $peOffset = [System.BitConverter]::ToInt32($header, 0x3C)
+    $subsystemOffset = $peOffset + 24 + 68
+    if ([System.BitConverter]::ToUInt16($header, $subsystemOffset) -ne 2) {
+        Stop-Check 'dockwind.exe must use the Windows GUI subsystem'
+    }
+    Write-Host "[check] Windows GUI subsystem OK"
+}
+
 Invoke-LinkParserSelfTest
 
 $markdownFiles = @(Get-ChildItem -LiteralPath $repoRoot -Recurse -File -Filter '*.md' |
