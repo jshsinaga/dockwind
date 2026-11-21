@@ -35,7 +35,10 @@ public static class DockwindSmoke {
     public static extern int DwmFlush();
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    public static extern IntPtr FindWindow(string className, string windowName);
+    private static extern IntPtr FindWindow(string className, string windowName);
+
+    public static IntPtr FindByTitle(string title) => FindWindow(null, title);
+    public static IntPtr FindByClass(string name) => FindWindow(name, null);
 
     [DllImport("user32.dll")]
     public static extern bool GetWindowRect(IntPtr window, out Rect rect);
@@ -91,6 +94,10 @@ public static class DockwindSmoke {
     public static void DismissMenu(IntPtr window) {
         PostMessage(window, 0x001F, IntPtr.Zero, IntPtr.Zero); // WM_CANCELMODE
     }
+
+    public static void CloseWindow(IntPtr window) {
+        PostMessage(window, 0x0010, IntPtr.Zero, IntPtr.Zero); // WM_CLOSE
+    }
 }
 '@
 Add-Type -AssemblyName System.Drawing
@@ -101,6 +108,7 @@ $fixtureSecondTitle = 'Dockwind smoke second window'
 function Start-Fixture {
     Start-Job -ArgumentList $fixtureTitle, $fixtureSecondTitle -ScriptBlock {
         param([string]$Title, [string]$SecondTitle)
+        Write-Output $PID
         Add-Type -AssemblyName System.Windows.Forms
         $form = [Windows.Forms.Form]::new()
         $second = [Windows.Forms.Form]::new()
@@ -292,8 +300,8 @@ function Test-TrayButton([IntPtr]$Window) {
 }
 
 function Test-WindowPicker([IntPtr]$Window) {
-    $first = [DockwindSmoke]::FindWindow($null, $fixtureTitle)
-    $second = [DockwindSmoke]::FindWindow($null, $fixtureSecondTitle)
+    $first = [DockwindSmoke]::FindByTitle($fixtureTitle)
+    $second = [DockwindSmoke]::FindByTitle($fixtureSecondTitle)
     $fixtureProcess = [DockwindSmoke]::WindowProcess($first)
     if ($fixtureProcess -eq 0 -or $fixtureProcess -ne [DockwindSmoke]::WindowProcess($second)) {
         throw 'The two smoke test windows should belong to the same process.'
@@ -321,7 +329,7 @@ function Test-WindowPicker([IntPtr]$Window) {
 }
 
 function Test-NativeTrayVisibility([IntPtr]$Window) {
-    $taskbar = [DockwindSmoke]::FindWindow('Shell_TrayWnd', $null)
+    $taskbar = [DockwindSmoke]::FindByClass('Shell_TrayWnd')
     if ($taskbar -eq [IntPtr]::Zero) {
         Write-Host '[smoke] Explorer taskbar is unavailable on this test desktop'
         return
@@ -357,7 +365,7 @@ try {
     Write-SmokeConfig 'none'
     $fixture = Start-Fixture
     $null = Wait-DockState 'the patterned desktop fixture' {
-        [DockwindSmoke]::FindWindow($null, $fixtureTitle) -ne [IntPtr]::Zero
+        [DockwindSmoke]::FindByTitle($fixtureTitle) -ne [IntPtr]::Zero
     }
     $process = Start-Process -FilePath $Executable -PassThru
     $window = Wait-DockState 'the first dock frame' {
@@ -403,7 +411,7 @@ try {
 }
 catch {
     Write-Host (Read-DockLogs)
-    if ($fixture) { Receive-Job -Job $fixture -ErrorAction Continue }
+    if ($fixture) { Receive-Job -Job $fixture -Keep -ErrorAction Continue }
     throw
 }
 finally {
@@ -414,6 +422,17 @@ finally {
     if ($restoreTaskbar) {
         Start-Process -FilePath $Executable -ArgumentList '--restore-taskbar' -Wait
     }
-    if ($fixture) { Remove-Job -Job $fixture -Force }
+    if ($fixture) {
+        $fixtureWindow = [DockwindSmoke]::FindByTitle($fixtureTitle)
+        if ($fixtureWindow -ne [IntPtr]::Zero) {
+            [DockwindSmoke]::CloseWindow($fixtureWindow)
+        }
+        if (!(Wait-Job -Job $fixture -Timeout 5)) {
+            $fixturePid = Receive-Job -Job $fixture -ErrorAction SilentlyContinue |
+                Where-Object { $_ -is [int] } | Select-Object -First 1
+            if ($fixturePid) { Stop-Process -Id $fixturePid -ErrorAction SilentlyContinue }
+        }
+        Remove-Job -Job $fixture -Force
+    }
     Remove-Item -LiteralPath $configPath -ErrorAction SilentlyContinue
 }
