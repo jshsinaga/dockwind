@@ -167,6 +167,7 @@ the taskbar and work area. It is not enabled while the native taskbar is visible
 - `behavior.show_running_apps = false` hides running-only apps.
 - The settings window can add, remove, and reorder pinned apps.
 - Left-click activates, restores, minimizes, or launches an app.
+- Left-click an app with several windows to choose a window by title.
 
 ## Restoring the Taskbar
 

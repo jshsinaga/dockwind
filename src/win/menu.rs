@@ -107,6 +107,26 @@ pub fn show(
     })
 }
 
+pub fn show_windows(hwnd: isize, windows: &[(isize, String, bool)]) -> Result<Option<isize>> {
+    with_popup_menu(|menu| {
+        for (index, (_, title, active)) in windows.iter().enumerate() {
+            let flags = if *active {
+                MF_STRING | MF_CHECKED
+            } else {
+                MF_STRING
+            };
+            let label = HSTRING::from(title.replace('&', "&&"));
+            // SAFETY: menu is live and the label is copied during the call.
+            unsafe { AppendMenuW(menu, flags, index + 1, &label) }
+                .context("AppendMenuW(window title) failed")?;
+        }
+        Ok(popup_command(hwnd, menu)?
+            .checked_sub(1)
+            .and_then(|index| windows.get(index))
+            .map(|(hwnd, _, _)| *hwnd))
+    })
+}
+
 pub fn show_tray(hwnd: isize, native_taskbar_hidden: Option<bool>) -> Result<Option<TrayAction>> {
     with_popup_menu(|menu| {
         // SAFETY: the menu is live and AppendMenuW copies the labels during each call.

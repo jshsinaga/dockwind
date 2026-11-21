@@ -211,17 +211,14 @@ impl DockView {
             .map(Arc::as_ref)
             .ne(controller.items().iter());
         if items_changed {
-            if self
-                .items
-                .iter()
-                .map(|item| (&item.key, &item.args))
-                .ne(controller
-                    .items()
-                    .iter()
-                    .map(|item| (&item.key, &item.args)))
-            {
-                self.app_hover.clear();
-            }
+            self.app_hover.retain(|index, _| {
+                self.items
+                    .get(*index)
+                    .zip(controller.items().get(*index))
+                    .is_some_and(|(previous, current)| {
+                        previous.key == current.key && previous.args == current.args
+                    })
+            });
             self.items = controller.items().iter().cloned().map(Arc::new).collect();
         }
         let config = (config != &self.applied_config).then(|| config.clone());
@@ -286,7 +283,13 @@ impl DockView {
                 .get(&item.key)
                 .is_none_or(|icon| icon.needs_lookup(hwnd))
             {
-                requests.insert(item.key.clone(), (item.executable_path().is_some(), hwnd));
+                requests.insert(
+                    item.key.clone(),
+                    (
+                        item.executable_path().map(std::path::Path::to_path_buf),
+                        hwnd,
+                    ),
+                );
             }
         }
         if requests.is_empty() {
@@ -297,9 +300,9 @@ impl DockView {
         let load = cx.background_executor().spawn(async move {
             requests
                 .into_iter()
-                .map(|(path, (has_path, hwnd))| {
-                    let icon = win::icons::load_icon(has_path.then_some(path.as_path()), hwnd);
-                    (path, hwnd, icon)
+                .map(|(key, (path, hwnd))| {
+                    let icon = win::icons::load_icon(path.as_deref(), hwnd);
+                    (key, hwnd, icon)
                 })
                 .collect::<Vec<_>>()
         });
@@ -627,65 +630,27 @@ impl DockView {
         };
     }
 
-    fn on_context_menu(&mut self, cx: &mut Context<Self>) {
-        let hwnd = self.geometry.hwnd;
-        let layouts = self
-            .applied_config
-            .pinned_layouts
-            .iter()
-            .map(|(name, apps)| (name.clone(), *apps == self.applied_config.pinned))
-            .collect::<Vec<_>>();
-        let next_layout = self.applied_config.next_pinned_layout().map(str::to_owned);
-        cx.spawn(async move |this, cx| {
-            Timer::after(Duration::from_millis(0)).await;
-            if this
-                .update(cx, |this, cx| {
-                    this.menu_open = true;
-                    cx.notify();
-                })
-                .is_err()
-            {
-                return;
-            }
-
-            let result = win::menu::show(hwnd, &layouts, next_layout.as_deref());
-            let _ = this.update(cx, |this, cx| {
-                this.menu_open = false;
-                this.handle_menu_result(result, cx);
-            });
-        })
-        .detach();
-    }
-
-    fn on_tray_menu(&mut self, cx: &mut Context<Self>) {
+    fn open_menu<T: 'static>(
+        &mut self,
+        cx: &mut Context<Self>,
+        show: impl FnOnce(isize) -> anyhow::Result<Option<T>> + 'static,
+        handle: impl FnOnce(&mut Self, T, &mut Context<Self>) + 'static,
+    ) {
         if self.menu_open {
             return;
         }
         self.menu_open = true;
         cx.notify();
         let hwnd = self.geometry.hwnd;
-        let hidden = self
-            .applied_config
-            .behavior
-            .hide_native_taskbar
-            .then_some(self.native_taskbar_hidden);
         cx.spawn(async move |this, cx| {
             Timer::after(Duration::ZERO).await;
-            let result = win::menu::show_tray(hwnd, hidden);
+            let result = show(hwnd);
             let _ = this.update(cx, |this, cx| {
                 this.menu_open = false;
                 match result {
-                    Ok(Some(TrayAction::ToggleNativeTaskbar)) => {
-                        this.controller
-                            .update(cx, |controller, cx| controller.toggle_taskbar_for_tray(cx));
-                    }
-                    Ok(Some(TrayAction::OpenSettings(uri))) => {
-                        if let Err(error) = win::launch::launch(uri, &[]) {
-                            warn!(%error, uri, "failed to open Windows settings from the dock");
-                        }
-                    }
+                    Ok(Some(action)) => handle(this, action, cx),
                     Ok(None) => {}
-                    Err(error) => warn!(%error, "failed to show the dock tray menu"),
+                    Err(error) => warn!(%error, "failed to show a dock menu"),
                 }
                 cx.notify();
             });
@@ -693,20 +658,67 @@ impl DockView {
         .detach();
     }
 
-    fn handle_menu_result(
-        &mut self,
-        result: anyhow::Result<Option<MenuAction>>,
-        cx: &mut Context<Self>,
-    ) {
-        let action = match result {
-            Ok(Some(action)) => action,
-            Ok(None) => return,
-            Err(error) => {
-                warn!(%error, "failed to show the dock menu");
-                return;
-            }
-        };
+    fn on_context_menu(&mut self, cx: &mut Context<Self>) {
+        let layouts = self
+            .applied_config
+            .pinned_layouts
+            .iter()
+            .map(|(name, apps)| (name.clone(), *apps == self.applied_config.pinned))
+            .collect::<Vec<_>>();
+        let next_layout = self.applied_config.next_pinned_layout().map(str::to_owned);
+        self.open_menu(
+            cx,
+            move |hwnd| win::menu::show(hwnd, &layouts, next_layout.as_deref()),
+            Self::handle_menu_action,
+        );
+    }
 
+    fn on_tray_menu(&mut self, cx: &mut Context<Self>) {
+        let hidden = self
+            .applied_config
+            .behavior
+            .hide_native_taskbar
+            .then_some(self.native_taskbar_hidden);
+        self.open_menu(
+            cx,
+            move |hwnd| win::menu::show_tray(hwnd, hidden),
+            |this, action, cx| match action {
+                TrayAction::ToggleNativeTaskbar => {
+                    this.controller
+                        .update(cx, |controller, cx| controller.toggle_taskbar_for_tray(cx));
+                }
+                TrayAction::OpenSettings(uri) => {
+                    if let Err(error) = win::launch::launch(uri, &[]) {
+                        warn!(%error, uri, "failed to open Windows settings from the dock");
+                    }
+                }
+            },
+        );
+    }
+
+    fn on_app_click(&mut self, item: Arc<DockItem>, event: &ClickEvent, cx: &mut Context<Self>) {
+        if item.is_pinned && event.modifiers().shift {
+            self.controller
+                .update(cx, |controller, _| controller.launch_second_instance(&item));
+            return;
+        }
+        let windows = self.controller.read(cx).window_choices(&item);
+        if windows.is_empty() {
+            self.controller
+                .update(cx, |controller, _| controller.activate_or_launch(&item));
+            return;
+        }
+        self.open_menu(
+            cx,
+            move |hwnd| win::menu::show_windows(hwnd, &windows),
+            move |this, hwnd, cx| {
+                this.controller
+                    .update(cx, |controller, _| controller.select_window(&item, hwnd));
+            },
+        );
+    }
+
+    fn handle_menu_action(&mut self, action: MenuAction, cx: &mut Context<Self>) {
         match action {
             MenuAction::UsePinnedLayout(name) => {
                 self.controller
@@ -949,13 +961,7 @@ impl Render for DockView {
             let clicked = Arc::clone(item);
             let middle_clicked = Arc::clone(item);
             let on_click = cx.listener(move |this, event: &ClickEvent, _, cx| {
-                this.controller.update(cx, |controller, _| {
-                    if clicked.is_pinned && event.modifiers().shift {
-                        controller.launch_second_instance(&clicked);
-                    } else {
-                        controller.activate_or_launch(&clicked);
-                    }
-                });
+                this.on_app_click(Arc::clone(&clicked), event, cx);
             });
             let on_middle = cx.listener(move |this, _: &MouseDownEvent, _, cx| {
                 this.controller.update(cx, |controller, _| {

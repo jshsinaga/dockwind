@@ -283,13 +283,43 @@ impl AppController {
             {
                 warn!(%error, app = %item.name, "failed to activate app");
             }
-        } else if item.is_pinned {
-            let path = item.key.to_string_lossy();
-            if let Err(error) = win::launch::launch(&path, &item.args) {
-                warn!(%error, app = %item.name, "failed to launch app");
-            }
+        } else if let Some(path) = item.executable_path().filter(|_| item.is_pinned)
+            && let Err(error) = win::launch::launch(&path.to_string_lossy(), &item.args)
+        {
+            warn!(%error, app = %item.name, "failed to launch app");
         }
 
+        let _ = self.refresh_window_list.try_send(());
+    }
+
+    pub fn window_choices(&self, rendered: &DockItem) -> Vec<(isize, String, bool)> {
+        let Some(item) = self
+            .current_item(rendered)
+            .filter(|item| item.windows.len() > 1)
+        else {
+            return Vec::new();
+        };
+        self.windows
+            .iter()
+            .filter(|window| item.windows.contains(&window.hwnd))
+            .map(|window| {
+                let title = if window.title.trim().is_empty() {
+                    item.name.clone()
+                } else {
+                    window.title.replace(['\t', '\r', '\n'], " ")
+                };
+                (window.hwnd, title, window.is_foreground)
+            })
+            .collect()
+    }
+
+    pub fn select_window(&mut self, rendered: &DockItem, hwnd: isize) {
+        if let Some(item) = self.current_item(rendered)
+            && item.windows.contains(&hwnd)
+            && let Err(error) = win::windows_enum::activate(hwnd)
+        {
+            warn!(%error, app = %item.name, "failed to activate the selected window");
+        }
         let _ = self.refresh_window_list.try_send(());
     }
 
@@ -298,12 +328,11 @@ impl AppController {
         let Some(item) = self.current_item(rendered) else {
             return;
         };
-        if !item.is_pinned {
+        let Some(path) = item.executable_path().filter(|_| item.is_pinned) else {
             return;
-        }
+        };
 
-        let path = item.key.to_string_lossy();
-        if let Err(error) = win::launch::launch(&path, &item.args) {
+        if let Err(error) = win::launch::launch(&path.to_string_lossy(), &item.args) {
             warn!(%error, app = %item.name, "failed to launch a second instance");
         }
         let _ = self.refresh_window_list.try_send(());

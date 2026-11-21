@@ -5,12 +5,17 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, bail, ensure};
 use tracing::debug;
 use windows::Win32::{
-    Foundation::{CloseHandle, HWND, LPARAM, SetLastError, WIN32_ERROR},
+    Foundation::{CloseHandle, HWND, LPARAM, PROPERTYKEY, SetLastError, WIN32_ERROR},
     Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute},
+    System::Com::{
+        CoTaskMemFree,
+        StructuredStorage::{PropVariantClear, PropVariantToStringAlloc},
+    },
     System::Threading::{
         AttachThreadInput, GetCurrentProcessId, GetCurrentThreadId, OpenProcess,
         PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
     },
+    UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow},
     UI::WindowsAndMessaging::{
         EnumChildWindows, EnumWindows, GW_OWNER, GWL_EXSTYLE, GetClassNameW, GetForegroundWindow,
         GetLastActivePopup, GetWindow, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW,
@@ -18,10 +23,16 @@ use windows::Win32::{
         SetForegroundWindow, ShowWindow, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
     },
 };
-use windows::core::BOOL;
 use windows::core::PWSTR;
+use windows::core::{BOOL, GUID};
 
 use crate::dock::WindowInfo;
+use crate::win::dialogs::ComApartmentGuard;
+
+const APP_USER_MODEL_ID: PROPERTYKEY = PROPERTYKEY {
+    fmtid: GUID::from_u128(0x9f4c2855_9f79_4b39_a8d0_e1d42de1d5f3),
+    pid: 5,
+};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WindowFlags {
@@ -56,6 +67,7 @@ pub fn list_app_windows() -> Result<Vec<WindowInfo>> {
     let foreground = unsafe { GetForegroundWindow() };
     let mut result = Vec::new();
     let mut process_paths = HashMap::new();
+    let _com = ComApartmentGuard::new();
 
     for hwnd in handles {
         let pid = window_process_id(hwnd);
@@ -77,14 +89,15 @@ pub fn list_app_windows() -> Result<Vec<WindowInfo>> {
                     None
                 }
             });
-        let (exe_path, display_name) = match exe_path.as_deref() {
+        let app_id = window_app_id(hwnd);
+        let (exe_path, display_name, shared_host) = match exe_path.as_deref() {
             Some(path) if is_application_frame_host(path) => {
                 match frame_host_app(hwnd, pid, &title) {
-                    Some((path, name)) => (Some(path), Some(name)),
-                    None => (Some(path.to_path_buf()), Some(title.clone())),
+                    Some((path, name)) => (Some(path), Some(name), false),
+                    None => (None, Some(title.clone()), true),
                 }
             }
-            path => (path.map(Path::to_path_buf), None),
+            path => (path.map(Path::to_path_buf), None, false),
         };
 
         result.push(WindowInfo {
@@ -92,6 +105,8 @@ pub fn list_app_windows() -> Result<Vec<WindowInfo>> {
             title,
             exe_path,
             process_id: pid,
+            app_id,
+            shared_host,
             display_name,
             // SAFETY: `hwnd` came from EnumWindows in this call and may have closed
             // since; IsIconic reports false for an invalid handle, which is harmless.
@@ -114,6 +129,33 @@ pub fn list_app_windows() -> Result<Vec<WindowInfo>> {
     }
 
     Ok(result)
+}
+
+fn window_app_id(hwnd: HWND) -> Option<String> {
+    // SAFETY: hwnd was enumerated by Windows and COM is initialized on this
+    // thread. The store and property are owned for these calls only.
+    let mut property = unsafe {
+        SHGetPropertyStoreForWindow::<IPropertyStore>(hwnd)
+            .and_then(|store| store.GetValue(&APP_USER_MODEL_ID))
+    }
+    .ok()?;
+    // SAFETY: the conversion accepts an initialized PROPVARIANT. Its output,
+    // when present, is an independent null-terminated COM allocation.
+    let text = unsafe { PropVariantToStringAlloc(&property) };
+    // SAFETY: GetValue initialized the variant; no references into it remain.
+    if let Err(error) = unsafe { PropVariantClear(&mut property) } {
+        debug!(%error, "failed to clear a window property");
+    }
+    let text = text.ok()?;
+    if text.is_null() {
+        return None;
+    }
+    // SAFETY: text is the null-terminated allocation returned by propsys.
+    let value = unsafe { text.to_string() }.ok();
+    // SAFETY: the string was allocated with the COM allocator and the Rust
+    // conversion copied it before this free.
+    unsafe { CoTaskMemFree(Some(text.0.cast())) };
+    value.filter(|id| !id.trim().is_empty())
 }
 
 fn is_application_frame_host(path: &Path) -> bool {
@@ -248,6 +290,14 @@ pub fn is_taskbar_worthy(flags: &WindowFlags) -> bool {
 }
 
 pub fn activate_or_minimize(hwnd: isize) -> Result<()> {
+    focus_window(hwnd, true)
+}
+
+pub fn activate(hwnd: isize) -> Result<()> {
+    focus_window(hwnd, false)
+}
+
+fn focus_window(hwnd: isize, minimize_if_active: bool) -> Result<()> {
     let hwnd = HWND(hwnd as *mut c_void);
     if hwnd.0.is_null() {
         bail!("cannot activate an empty window handle");
@@ -263,7 +313,7 @@ pub fn activate_or_minimize(hwnd: isize) -> Result<()> {
         let foreground_popup = foreground.0 == popup.0
             && !popup.0.is_null()
             && GetWindowLongPtrW(popup, GWL_EXSTYLE) as u32 & WS_EX_APPWINDOW.0 == 0;
-        if foreground.0 == hwnd.0 || foreground_popup {
+        if minimize_if_active && (foreground.0 == hwnd.0 || foreground_popup) {
             let _ = ShowWindow(hwnd, SW_MINIMIZE);
             ensure!(
                 IsIconic(hwnd).as_bool(),
